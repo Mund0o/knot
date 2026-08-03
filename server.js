@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
@@ -96,7 +97,7 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-const httpServer = http.createServer((req, res) => {
+function requestHandler(req, res) {
   try {
     const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
     if (urlPath === '/' || urlPath === '/index.html') {
@@ -141,9 +142,34 @@ const httpServer = http.createServer((req, res) => {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('Error');
   }
-});
+}
 
-const wss = new WebSocket.Server({ server: httpServer, host: '0.0.0.0' });
+// Public deployments must provide a certificate so clients can use wss://.
+// Plain HTTP is retained only for a loopback development server.
+const tlsKey = process.env.PAIR_TLS_KEY;
+const tlsCert = process.env.PAIR_TLS_CERT;
+const tlsEnabled = !!(tlsKey && tlsCert);
+const httpServer = tlsEnabled
+  ? https.createServer({ key: fs.readFileSync(tlsKey), cert: fs.readFileSync(tlsCert) }, requestHandler)
+  : http.createServer(requestHandler);
+
+// The relay only carries setup/control data and bounded file frames. TLS belongs
+// at a reverse proxy; Pair clients require wss:// for non-local signaling.
+const wss = new WebSocket.Server({ server: httpServer, host: '0.0.0.0', maxPayload: 2 * 1024 * 1024, perMessageDeflate: false });
+const MAX_ROOM_PEERS = 2;
+const MAX_SOCKET_BYTES_PER_SECOND = 512 * 1024 * 1024;
+
+function validRoom(value) {
+  const parts = String(value).split(':');
+  const [base, suffix] = parts;
+  return parts.length <= 2 && /^[A-Z0-9_-]{16,64}$/.test(base) && (suffix === undefined || suffix.toLowerCase() === 'stream');
+}
+function withinRate(socket, bytes) {
+  const now = Date.now();
+  if (!socket._rateAt || now - socket._rateAt >= 1000) { socket._rateAt = now; socket._rateBytes = 0; }
+  socket._rateBytes = (socket._rateBytes || 0) + bytes;
+  return socket._rateBytes <= MAX_SOCKET_BYTES_PER_SECOND;
+}
 
 function leave(socket) {
   if (!socket.room) return;
@@ -167,9 +193,10 @@ setInterval(() => {
 
 wss.on('connection', socket => {
   socket.on('message', (raw, isBinary) => {
+    if (!withinRate(socket, raw.length || 0)) { try { socket.close(1008, 'rate limit'); } catch {} return; }
     // Binary frames are file-stream chunks; relay them verbatim to the peer.
     if (isBinary) {
-      if (!socket.room) return;
+      if (!socket.room || !socket.room.toLowerCase().endsWith(':stream')) return;
       for (const peer of rooms.get(socket.room) || []) {
         if (peer !== socket && peer.readyState === WebSocket.OPEN) peer.send(raw);
       }
@@ -179,9 +206,10 @@ wss.on('connection', socket => {
     try { message = JSON.parse(raw.toString()); } catch { return; }
     if (message.type === 'join' && typeof message.room === 'string') {
       leave(socket);
-      const room = message.room.trim().toUpperCase().slice(0, 32);
+      const room = message.room.trim().toUpperCase();
+      if (!validRoom(room)) { socket.send(JSON.stringify({ type: 'error', message: 'Room code must be 16–64 letters, numbers, _ or -.' })); return; }
       const peers = rooms.get(room) || [];
-      if (peers.length >= 2) { socket.send(JSON.stringify({ type: 'full' })); return; }
+      if (peers.length >= MAX_ROOM_PEERS) { socket.send(JSON.stringify({ type: 'full' })); return; }
       socket.room = room;
       peers.push(socket);
       rooms.set(room, peers);
@@ -189,7 +217,7 @@ wss.on('connection', socket => {
       if (peers.length === 2) peers.forEach(peer => peer.send(JSON.stringify({ type: 'peer-ready' })));
       return;
     }
-    if (socket.room) {
+    if (socket.room && message.type === 'signal') {
       // Relay signaling + any other JSON control messages to the peer.
       for (const peer of rooms.get(socket.room) || []) {
         if (peer !== socket && peer.readyState === WebSocket.OPEN) peer.send(JSON.stringify(message));
@@ -212,6 +240,6 @@ httpServer.on('error', err => {
 });
 
 httpServer.listen(port, '0.0.0.0', () => {
-  console.log(`Pair server listening on http://0.0.0.0:${port} (signaling + update feed)`);
+  console.log(`Pair server listening on ${tlsEnabled ? 'https' : 'http'}://0.0.0.0:${port} (signaling + update feed)`);
 });
-console.log(`Pair signaling server listening on ws://0.0.0.0:${port}`);
+console.log(`Pair signaling server listening on ${tlsEnabled ? 'wss' : 'ws'}://0.0.0.0:${port}`);

@@ -1,25 +1,34 @@
 const path = require('path');
-const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, screen } = require('electron');
+const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer } = require('electron');
 
 let mainWin = null;
 let pendingSourceId = null;
 let pendingSources = [];
 
-ipcMain.handle('pair:getSources', async () => {
+function isPairRenderer(event) { return event.senderFrame?.url?.startsWith('file://') === true; }
+ipcMain.handle('pair:getSources', async event => {
+  if (!isPairRenderer(event)) return [];
   pendingSources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } });
   return pendingSources.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
-ipcMain.on('pair:setPendingSource', (_e, id) => { pendingSourceId = id; });
+ipcMain.on('pair:setPendingSource', (event, id) => { if (isPairRenderer(event) && typeof id === 'string') pendingSourceId = id; });
 
 // Enable hardware-accelerated video encode/decode for smoother screen sharing.
 app.commandLine.appendSwitch('enable-accelerated-video-encode');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
-app.commandLine.appendSwitch('enable-features', 'VaapiVideoDecoder,VaapiVideoEncoder,VaapiIgnoreDriverChecks,Vulkan,DefaultANGLEVulkan,VulkanFromANGLE');
+// Electron's Vulkan ANGLE path conflicts with native Wayland. Keep VA-API video
+// acceleration there, and use Vulkan only on non-Wayland Linux sessions.
+const videoFeatures = ['VaapiVideoDecoder', 'VaapiVideoEncoder', 'VaapiIgnoreDriverChecks'];
+if (process.env.XDG_SESSION_TYPE !== 'wayland') videoFeatures.push('Vulkan', 'DefaultANGLEVulkan', 'VulkanFromANGLE');
+else { app.commandLine.appendSwitch('disable-features', 'Vulkan,DefaultANGLEVulkan,VulkanFromANGLE'); app.commandLine.appendSwitch('disable-vulkan'); }
+app.commandLine.appendSwitch('enable-features', videoFeatures.join(','));
 app.commandLine.appendSwitch('force-gpu-rasterization');
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
 const fs = require('fs');
-require('./server.js');
+// Pair is serverless by default. `server.js` remains available through
+// `npm run signal` for people who deliberately operate their own signaling
+// service, but the desktop app must not silently start a localhost server.
 
 // --- Incoming-file disk streaming (single active write stream) ---
 // The renderer is sandboxed, so all fs access happens here. `write` resolves
@@ -128,7 +137,7 @@ function readSettings() {
   try { return JSON.parse(fs.readFileSync(sp(), 'utf8')); } catch { return {}; }
 }
 function writeSettings(obj) {
-  try { fs.writeFileSync(sp(), JSON.stringify(obj), 'utf8'); } catch {}
+  try { fs.writeFileSync(sp(), JSON.stringify(obj), { encoding: 'utf8', mode: 0o600 }); fs.chmodSync(sp(), 0o600); } catch {}
 }
 ipcMain.handle('pair:getSetting', (_e, key) => (readSettings())[key]);
 ipcMain.handle('pair:setSetting', (_e, key, value) => {
@@ -137,15 +146,10 @@ ipcMain.handle('pair:setSetting', (_e, key, value) => {
   writeSettings(s);
 });
 
-// Auto-update: start the check loop and listen for the renderer's request to
-// install a downloaded Windows update.
+// Linux update notifier. Downloads are never launched by the application.
 const { startAutoUpdater, performInstall } = require('./updater');
 ipcMain.on('pair:installUpdate', () => performInstall());
-// The renderer tells us the update feed (same host it uses for signaling). This
-// lets auto-update work for a remote peer without manual config: they set the
-// signaling server once, and updates use that same host. Start (or restart) the
-// check loop with that feed as soon as we receive it.
-ipcMain.on('pair:setFeed', (_e, url) => { if (typeof url === 'string') startAutoUpdater(url.replace(/^ws:/,'http:')); });
+// The update feed is never accepted from renderer or signaling input.
 ipcMain.on('pair:toggleFullscreen', () => { if (mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });
 
 function createWindow() {
@@ -170,7 +174,7 @@ function createWindow() {
 app.whenReady().then(() => {
   // Needed for the browser File System Access API used to stream large downloads.
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(permission === 'media' || permission === 'notifications' || permission === 'clipboard-read' || permission === 'clipboard-sanitized-write');
+    callback(permission === 'media');
   });
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
@@ -178,12 +182,9 @@ app.whenReady().then(() => {
     const useId = pendingSourceId;
     pendingSourceId = null;
     const src = useId ? pendingSources.find(s => s.id === useId) : null;
-    if (!src) {
-      const pd = screen.getPrimaryDisplay();
-      callback({ video: pendingSources.find(s => s.display_id === String(pd.id)) || pendingSources.find(s => s.name === 'Entire Screen') || pendingSources[0], audio: request.audioRequested ? 'loopback' : undefined });
-    } else {
+    if (src) {
       callback({ video: src, audio: request.audioRequested ? 'loopback' : undefined });
-    }
+    } else callback({ video: undefined, audio: undefined });
   });
   createWindow();
   startAutoUpdater();

@@ -20,39 +20,44 @@
         <div class="connection"><i id="statusDot"></i><span id="statusText">Not connected</span></div>
       </header>
 
-      <section class="pair-card card">
-        <div class="section-heading"><div><p class="eyebrow">01 / CONNECT</p><h2>Start a private room</h2></div><span class="lock">E2EE</span></div>
-        <p class="muted">Use the room code below. The host starts the room; the friend joins it. Your chat and files stay peer to peer.</p>
-        <div class="auto-pair primary-pair">
-          <div class="auto-title"><div><p class="eyebrow">RECOMMENDED</p><h3>Room-code pairing</h3></div><span class="status-note">NO COPY / PASTE</span></div>
+      <details id="connectCard" class="pair-card card connect-drawer">
+        <summary><span>Connect a friend</span><small>Pairing</small></summary>
+        <div class="section-heading"><div><p class="eyebrow">01 / CONNECT</p><h2>Connect directly</h2></div><span class="lock">E2EE</span></div>
+        <p class="muted">No account or server is needed. Exchange the two pairing codes with your friend; chat, calls, and files then travel peer to peer.</p>
+        <div class="primary-pair manual-direct">
+          <div class="auto-title"><div><p class="eyebrow">RECOMMENDED</p><h3>Direct pairing</h3></div><span class="status-note">NO SERVER</span></div>
+          <div class="pair-grid"><div><label for="signalOut">Your pairing code</label><textarea id="signalOut" readonly placeholder="Create an offer or answer…"></textarea><div class="button-row"><button id="createOffer" class="primary">Create invite</button><button id="createAnswer">Create reply</button></div></div><div><label for="signalIn">Friend’s pairing code</label><textarea id="signalIn" placeholder="Paste your friend’s code…"></textarea><button id="applySignal" class="wide">Apply reply</button></div></div><button id="copySignal" class="text-button">Copy pairing code</button>
+          <p id="pairHint" class="pair-hint">Create an invite, send it to your friend, then apply their reply.</p>
+        </div>
+        <details class="manual-pair">
+          <summary>Optional: use your own signaling server</summary>
+          <p class="hint">Only use this when you deliberately run a signaling service. It can make initial pairing easier, but it is not required for direct pairing.</p>
+          <div class="auto-pair">
           <div class="auto-grid">
-            <div class="auto-field"><label for="signalServer">Signaling address</label><input id="signalServer" value="ws://localhost:8787" aria-label="Signaling server address" /></div>
-            <div class="auto-field"><label for="roomCode">Room code</label><input id="roomCode" value="PAIR" aria-label="Room code" /></div>
+            <div class="auto-field"><label for="signalServer">Signaling address</label><input id="signalServer" value="" placeholder="wss://your-server.example" aria-label="Signaling server address" /></div>
+            <div class="auto-field"><label for="roomCode">Room code</label><input id="roomCode" value="" placeholder="16+ character secret" aria-label="Room code" /></div>
             <button id="hostRoom" class="primary">Host room</button><button id="joinRoom">Join room</button><button id="leaveRoom" hidden>Leave room</button>
           </div>
-          <p class="hint">On your PC use <code>ws://localhost:8787</code>. Your friend uses <code>ws://YOUR_PUBLIC_IP:8787</code>. Both use the same room code. These settings are saved on this device.</p>
-          <p id="pairHint" class="pair-hint">Ready to connect.</p>
-        </div>
-        <details class="manual-pair"><summary>Advanced: manual signal pairing</summary><p class="hint">This is the original fallback. It requires copying large WebRTC signals between devices and is usually unnecessary.</p><div class="pair-grid"><div><label for="signalOut">Your signal</label><textarea id="signalOut" readonly placeholder="Create an offer or answer…"></textarea><div class="button-row"><button id="createOffer">Create offer</button><button id="createAnswer">Create answer</button></div></div><div><label for="signalIn">Friend’s signal</label><textarea id="signalIn" placeholder="Paste your friend’s signal…"></textarea><button id="applySignal" class="wide">Apply signal</button></div></div><button id="copySignal" class="text-button">Copy generated signal</button></details>
-      </section>
+          </div>
+        </details>
+      </details>
 
-      <section class="voice card">
+      <section id="voicePanel" class="voice card">
         <div class="section-heading"><div><p class="eyebrow">02 / CALL</p><h2>Voice</h2></div><span id="callTimer" class="call-timer"></span></div>
         <div class="voice-body">
-          <div class="voice-participants">
-            <div class="voice-participant" id="participantYou"><i class="indicator"></i><span>You</span></div>
-            <div class="voice-participant" id="participantFriend"><i class="indicator"></i><span>Friend</span></div>
+          <div class="voice-participants" aria-label="Call participants">
+            <div class="voice-participant" id="participantYou"><button id="profileBtn" class="avatar profile-avatar" type="button" title="Change your profile photo"><span class="avatar-letter">Y</span><i class="indicator"></i></button><span>You</span><button id="profileAdjust" class="profile-adjust" type="button" hidden>Adjust photo</button></div>
+            <div class="voice-participant" id="participantFriend"><span id="friendAvatar" class="avatar"><span class="avatar-letter">F</span><i class="indicator"></i></span><span>Friend</span></div>
           </div>
           <div class="voice-controls">
-            <button id="callBtn" class="primary" disabled>🎙 Start voice</button>
-            <button id="muteBtn" hidden>🔇 Mute mic</button>
-            <input id="volumeSlider" type="range" min="0" max="100" value="50" class="volume-slider" hidden aria-label="Volume" />
+            <button id="callBtn" class="primary" disabled title="Start voice call">Start call</button>
+            <button id="muteBtn" hidden title="Mute microphone">Mute</button>
+            <label class="sr-only" for="volumeSlider">Friend volume</label><input id="volumeSlider" type="range" min="0" max="100" value="50" class="volume-slider" hidden aria-label="Friend volume" /><output id="volumeValue" class="volume-value" hidden>50%</output>
             <span id="callStatus" class="call-status">Voice off</span>
-          </div>
-          <div class="screen-section">
+            <span class="call-toolbar-divider" aria-hidden="true"></span>
             <div class="screen-controls">
-              <button id="screenBtn" disabled>🖥 Share Screen</button>
-              <select id="screenPreset" class="preset-select" disabled>
+              <button id="screenBtn" disabled title="Share screen">Share screen</button>
+              <select id="screenPreset" class="preset-select" disabled aria-label="Screen share quality">
                 <option value="1080p30">1080p 30fps</option>
                 <option value="1080p60">1080p 60fps</option>
                 <option value="720p60">720p 60fps</option>
@@ -64,6 +69,15 @@
               </select>
               <span id="screenStatus" class="screen-status">Not sharing</span>
             </div>
+          </div>
+          <div id="profileEditor" class="profile-editor" hidden>
+            <strong>Profile photo</strong>
+            <label for="profileZoom">Zoom</label><input id="profileZoom" type="range" min="40" max="180" value="100" />
+            <label for="profileX">Left / right</label><input id="profileX" type="range" min="0" max="100" value="50" />
+            <label for="profileY">Up / down</label><input id="profileY" type="range" min="0" max="100" value="50" />
+            <button id="profileDone" type="button">Done</button>
+          </div>
+          <div class="screen-section">
             <div class="screen-videos">
               <video id="screenPreview" class="screen-preview" muted playsinline hidden></video>
               <video id="remoteScreen" class="remote-screen" playsinline hidden></video>
@@ -81,7 +95,7 @@
           <audio id="remoteAudio" autoplay></audio>
         </div>
       </section>
-      <div hidden><input id="fileInput" type="file" multiple /><div id="transfers"></div></div>
+      <div hidden><input id="fileInput" type="file" multiple /><input id="profileInput" type="file" accept="image/*" /><div id="transfers"></div></div>
       <footer><span>WebRTC data channel · AES-GCM payload encryption</span><span id="fingerprint">Keys generated on connect</span></footer>
     </main>
     <script src="app.js"></script>

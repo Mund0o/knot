@@ -36,11 +36,9 @@ contextBridge.exposeInMainWorld('pairEnv', {
     ipcRenderer.on('update-available', listener);
     return () => ipcRenderer.removeListener('update-available', listener);
   },
-  // Windows: relaunch the downloaded installer and quit.
+  // Linux builds never auto-install updates; retained only for UI compatibility.
   restartForUpdate: () => ipcRenderer.send('pair:installUpdate'),
-  // Tell main the update feed URL (same host as the signaling server). Lets
-  // auto-update work for a remote peer without separate manual config.
-  setFeed: url => ipcRenderer.send('pair:setFeed', url)
+  setFeed: () => {}
 });
 
 // Native WASAPI loopback capture with echo cancellation bridge.

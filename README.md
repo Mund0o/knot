@@ -6,18 +6,18 @@ Pair is a two-person, no-account P2P chat prototype. It uses WebRTC data channel
 
 Install Node.js 20 or newer, then from this folder run:
 
-```powershell
+```bash
 npm install
 npm start
 ```
 
-To build a Windows installer:
+To build the Linux package:
 
 ```powershell
 npm run dist
 ```
 
-The installer will be created in the `dist` folder.
+The tarball will be created in the `dist` folder.
 
 ## Run in a browser (optional)
 
@@ -29,21 +29,29 @@ py -m http.server 5173
 
 Open `http://localhost:5173` in two browser windows. For a real friend-to-friend connection, the prototype uses manual offer/answer exchange and `iceServers: []`, so it works when the peers can connect directly but may fail across NATs. Adding a TURN server is the next networking step, but the TURN server would relay encrypted bytes and still could not read the content.
 
-## Pairing flow
+## Direct pairing (default — no server)
 
-1. Person A clicks **Create offer**, copies **Your signal** to Person B.
-2. Person B pastes it into **Friend's signal**, clicks **Create answer**, and sends the generated answer back.
-3. Person A pastes the answer and clicks **Apply signal**.
+1. Person A clicks **Create invite** and sends the pairing code to Person B.
+2. Person B pastes it, clicks **Create reply**, and sends the generated code back.
+3. Person A pastes the reply and clicks **Apply reply**.
+
+This uses no Pair server. It can connect directly when the two networks permit
+WebRTC peer-to-peer traffic. Some NAT/firewall combinations cannot accept a
+direct connection; those require a TURN relay supplied by the people using it.
+
+## Optional self-hosted signaling
 
 ## Host signaling from your own PC
 
-The installed Pair app now starts the signaling server automatically on port `8787`. You do not need Node.js or a separate terminal. For development, you can also run it manually:
+Pair no longer starts a signaling server automatically. Direct pairing above is
+the normal connection path. If you deliberately want room-code signaling for a
+network you control, run it manually:
 
-```powershell
+```bash
 npm run signal
 ```
 
-Forward TCP port `8787` from your router to this PC. The host uses `ws://localhost:8787`; your friend uses `ws://YOUR_PUBLIC_IP:8787`. Both enter the same room code. The host clicks **Host room** and the friend clicks **Join room**. This service only forwards WebRTC setup messages and stores no chat or file data.
+For localhost testing use `ws://localhost:8787`. For a remote peer, put this server behind a TLS reverse proxy (or supply `PAIR_TLS_KEY` and `PAIR_TLS_CERT` paths) and use `wss://YOUR_DOMAIN:8787`. Both people must use the same room code of at least 16 characters. This service only forwards WebRTC setup messages and stores no chat or file data.
 
 If Windows Firewall asks whether Node.js can accept connections, allow it on the intended network. If your ISP uses CGNAT, port forwarding will not work; you would need a public VPS or a VPN overlay.
 
@@ -76,6 +84,6 @@ TURN only relays already-encrypted WebRTC bytes (DTLS-SRTP); it cannot read any 
 
 ## Large files
 
-Files are sliced into chunks, encrypted independently, and streamed with a large in-flight window (up to ~16 MB buffered) and a concurrent decrypt pool so the SCTP link stays saturated. The whole file is never loaded into memory during sending. Receiving very large files requires a Chromium browser with the File System Access API (or the Pair app's disk streaming); otherwise the fallback collects chunks in memory and is suitable only for smaller files. The 120 GB limit is enforced client-side.
+Files are sliced into chunks, encrypted independently, and streamed with a 128 MB in-flight window plus concurrent encrypt/decrypt work so a single direct wired peer can keep a fast SCTP link saturated. The whole file is never loaded into memory during sending. Receiving very large files requires a Chromium browser with the File System Access API (or the Pair app's disk streaming); otherwise the fallback collects chunks in memory and is suitable only for smaller files. The 200 GiB limit is enforced on both send and receive.
 
 This is an MVP, not a production security audit. Before relying on it for sensitive data, add authenticated device identity/fingerprint verification, replay protection, a robust signaling UX, TURN support, and audited cryptographic protocol implementations.

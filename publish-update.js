@@ -15,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const ROOT = __dirname;
 const SRC = path.join(ROOT, 'dist');
@@ -35,13 +36,10 @@ if (!fs.existsSync(SRC)) {
 // build electron-builder actually produced.
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const version = pkg.version;
-const product = (pkg.build && pkg.build.productName) || pkg.productName || 'Pair';
 const safeVersion = version.replace(/[^0-9.]/g, '');
 // Public release-asset base URL (no auth needed for public releases).
 const releaseBase = `https://github.com/${GITHUB_REPO}/releases/download/v${version}`;
 
-const winExe = `Pair Setup ${version}.exe`;
-const winBlockmap = `Pair Setup ${version}.exe.blockmap`;
 const linuxTar = `pair-p2p-${safeVersion}.tar.gz`;
 // GitHub release assets normalize spaces to dots in the download URL.
 const ghName = f => f.replace(/ /g, '.');
@@ -63,32 +61,30 @@ for (const f of fs.readdirSync(OUT)) {
   try { fs.unlinkSync(path.join(OUT, f)); } catch {}
 }
 
-const gotExe = copyIf(winExe);
-const gotBlock = copyIf(winBlockmap);
 const gotTar = copyIf(linuxTar);
 
-if (!gotExe || !gotTar) {
-  console.error('Missing build artifacts in dist/:');
-  console.error('  expected:', winExe, 'and', linuxTar);
+if (!gotTar) {
+  console.error('Missing Linux build artifact in dist/:');
+  console.error('  expected:', linuxTar);
   console.error('  Build with: npm run dist');
   process.exit(1);
 }
+const linuxSha256 = crypto.createHash('sha256').update(fs.readFileSync(path.join(SRC, linuxTar))).digest('hex');
 
 const manifest = {
   version,
   notes: process.env.PAIR_NOTES || 'Update available.',
-  winUrl: `${releaseBase}/${ghName(winExe)}`,
-  winBlockmapUrl: gotBlock ? `${releaseBase}/${ghName(winBlockmap)}` : undefined,
-  linuxUrl: `${releaseBase}/${ghName(linuxTar)}`
+  linuxUrl: `${releaseBase}/${ghName(linuxTar)}`,
+  linuxSha256
 };
 
 fs.writeFileSync(path.join(OUT, 'latest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
 console.log('Published update feed:');
 console.log('  version:', version);
-console.log('  winUrl :', manifest.winUrl);
 console.log('  linux  :', manifest.linuxUrl);
+console.log('  sha256 :', manifest.linuxSha256);
 console.log('  notes  :', manifest.notes);
 console.log('\nInstallers are hosted as GitHub release assets:');
 console.log('  ' + releaseBase);
-console.log('Publish them with: gh release create v' + version + ' ' + winExe + ' ' + linuxTar + ' --title "Pair ' + version + '"');
+console.log('Publish it with: gh release create v' + version + ' ' + linuxTar + ' --title "Pair ' + version + '"');
