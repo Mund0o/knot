@@ -59,7 +59,7 @@ function isNewer(local, remote) {
 
 function request(url, maxBytes, onResponse) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, response => {
+    const req = https.get(url, { headers: { 'User-Agent': 'Pair-Updater/1.1.2', Accept: 'application/vnd.github+json' } }, response => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
         return resolve({ redirect: new URL(response.headers.location, url).href });
