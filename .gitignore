@@ -10,6 +10,7 @@ electron-dist/
 *.exe
 *.exe.blockmap
 *.tar.gz
+*.AppImage
 *.zip
 Pair-linux-source.zip
 .DS_Store

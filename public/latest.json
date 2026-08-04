@@ -2,9 +2,9 @@
   "version": "1.0.92",
   "notes": "Update available.",
   "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.92/pair-p2p-1.0.92.tar.gz",
-  "linuxSha256": "17bb3cfc0765a10077c92c9066b3c860561fc18cd2af9fb07a38dbaf4b8099a2",
+  "linuxSha256": "93bc78ecef457bba8452ade329f2c06da35b5a4a22a3530d489b5171803f7a01",
   "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.92/Pair-1.0.92.AppImage",
   "linuxAppImageSha256": "33d59431fc6218ebb9a5ae88e941c078a5475019ad2fcef289f0d2483349c871",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.92/Pair%20Setup%201.0.92.exe",
-  "winSha256": "136ef6b6dbcd39541d613b3e4669a44145b90a62099f923e6e0bbf73a4faccb7"
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.92/Pair.Setup.1.0.92.exe",
+  "winSha256": "85ceb1339bcdc6fac418e8bc08310110485e66622ff9da04516433fdd14d6b16"
 }

@@ -43,7 +43,8 @@ const linuxTar = `pair-p2p-${safeVersion}.tar.gz`;
 const linuxAppImage = `Pair-${safeVersion}.AppImage`;
 const windowsExe = `Pair Setup ${version}.exe`;
 const windowsBlockmap = `${windowsExe}.blockmap`;
-const releaseUrl = file => `${releaseBase}/${encodeURIComponent(file)}`;
+// GitHub's release uploader normalizes spaces in asset names to dots.
+const releaseUrl = file => `${releaseBase}/${encodeURIComponent(file.replace(/ /g, '.'))}`;
 
 fs.mkdirSync(OUT, { recursive: true });
 
