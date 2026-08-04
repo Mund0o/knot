@@ -1,10 +1,37 @@
 const path = require('path');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
+const { execFileSync, spawn } = require('child_process');
 
 let mainWin = null;
 let pendingSourceId = null;
 let pendingSources = [];
+let linuxShareAudio = null;
+function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
+function startLinuxShareAudio() {
+  if (process.platform !== 'linux') return null;
+  if (linuxShareAudio) return linuxShareAudio.label;
+  if (!/PipeWire/i.test(pipewire('pactl', ['info']))) return null;
+  const original = pipewire('pactl', ['get-default-sink']);
+  if (!original) return null;
+  const sink = `pair_share_${process.pid}`;
+  const module = pipewire('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Pair_Share_Audio']);
+  if (!module) return null;
+  // Pair's renderer inherits PULSE_SINK before it is created, so its own voice
+  // playback remains on the real output while other applications use this mix.
+  pipewire('pactl', ['set-default-sink', sink]);
+  const loop = spawn('pw-loopback', ['-n', 'Pair Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: 'ignore', detached: true });
+  loop.unref();
+  linuxShareAudio = { original, sink, module, loop, label: 'Pair Share Audio' };
+  return linuxShareAudio.label;
+}
+function stopLinuxShareAudio() {
+  const state = linuxShareAudio; if (!state) return;
+  linuxShareAudio = null;
+  try { state.loop.kill(); } catch {}
+  pipewire('pactl', ['set-default-sink', state.original]);
+  pipewire('pactl', ['unload-module', state.module]);
+}
 
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
@@ -70,6 +97,8 @@ ipcMain.handle('pair:getSources', async event => {
 });
 ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
 ipcMain.on('pair:setPendingSource', (event, id) => { if (isPairRenderer(event) && typeof id === 'string') pendingSourceId = id; });
+ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio() : null);
+ipcMain.on('pair:stopLinuxShareAudio', event => { if (isPairRenderer(event)) stopLinuxShareAudio(); });
 
 // Leave Chromium's graphics stack at its platform defaults. That avoids
 // pre-warming GPU/video paths while Pair is idle; hardware codecs still engage
@@ -256,6 +285,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Keep Pair itself outside the temporary PipeWire share mix.
+  if (process.platform === 'linux' && /PipeWire/i.test(pipewire('pactl', ['info']))) {
+    const sink = pipewire('pactl', ['get-default-sink']); if (sink) process.env.PULSE_SINK = sink;
+  }
   installLinuxLauncher();
   Menu.setApplicationMenu(null);
   // Needed for the browser File System Access API used to stream large downloads.
@@ -280,6 +313,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', async () => {
+  stopLinuxShareAudio();
   await closeStream();
   stopNativeCapture();
   if (process.platform !== 'darwin') app.quit();

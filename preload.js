@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('pairEnv', {
   getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),
   getSources: () => ipcRenderer.invoke('pair:getSources'),
   setPendingSource: id => ipcRenderer.send('pair:setPendingSource', id),
+  startLinuxShareAudio: () => ipcRenderer.invoke('pair:startLinuxShareAudio'),
+  stopLinuxShareAudio: () => ipcRenderer.send('pair:stopLinuxShareAudio'),
   relaunch: () => ipcRenderer.send('pair:relaunch')
 });
 

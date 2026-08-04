@@ -1078,6 +1078,11 @@ function cleanupNativeScreenCapture(){
   if(screenOutDest){screenOutDest=null}
   if(screenOutCtx){try{screenOutCtx.close()}catch{};screenOutCtx=null}
 }
+async function linuxShareAudioTrack(){
+  const label=await window.pairEnv?.startLinuxShareAudio?.();if(!label)return null;
+  for(let attempt=0;attempt<12;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();const device=devices.find(d=>d.kind==='audioinput'&&d.label.includes(label));if(device){const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});return stream.getAudioTracks()[0]||null}await new Promise(resolve=>setTimeout(resolve,150))}
+  window.pairEnv?.stopLinuxShareAudio?.();return null;
+}
 function startScreenStats(sender){
   if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;
   const sample=async()=>{try{if(!screenActive)return;const reports=await sender.getStats();let out;reports.forEach(r=>{if(r.type==='outbound-rtp'&&(r.kind==='video'||r.mediaType==='video')&&!r.isRemote)out=r});if(!out)return;const now=performance.now();let mbps='…';if(screenStatsLast&&now>screenStatsLast.at){mbps=(((out.bytesSent-screenStatsLast.bytes)*8)/(now-screenStatsLast.at)/1000).toFixed(1)}screenStatsLast={bytes:out.bytesSent,at:now};const fps=Math.round(out.framesPerSecond||0),w=out.frameWidth||0,h=out.frameHeight||0;const status='Sharing'+(w&&h?' · '+w+'×'+h:'')+(fps?' · '+fps+'fps':'')+(mbps!=='…'?' · '+mbps+' Mbps':'');screenStatus.textContent=status;screenBtn.title=status}catch{}};
@@ -1108,7 +1113,7 @@ async function startScreenShare(){
     const v={width:{ideal:width,max:width},height:{ideal:height,max:height},frameRate:{ideal:fps,max:fps}};
     v.cursor=screenCursor;
     const constraints={video:v};
-    constraints.audio=screenAudioOn?{echoCancellation:true,autoGainControl:false,noiseSuppression:false}:false;
+    constraints.audio=screenAudioOn&&window.pairEnv?.platform!=='linux'?{echoCancellation:true,autoGainControl:false,noiseSuppression:false}:false;
     const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
     screenStream=stream;
@@ -1123,7 +1128,7 @@ async function startScreenShare(){
     // Audio cleanup can take a few seconds on Windows. Start the video first,
     // then attach the cleaned audio in a second negotiation so clicking Share
     // never appears to hang while Pair protects the call from echo.
-    const attachShareAudio=async()=>{let audioTrack=stream.getAudioTracks()[0];if(!audioTrack)return;try{const cleanTrack=await setupNativeScreenCapture();if(cleanTrack)audioTrack=cleanTrack}catch(e){console.warn('[AUDIO] canceller exception:',e)}if(gen!==screenGen||!screenActive||!pc||!audioTrack)return;try{screenSenders.push(pc.addTrack(audioTrack,stream));await renegotiate()}catch(e){console.warn('[AUDIO] addTrack failed:',e)}};
+    const attachShareAudio=async()=>{let audioTrack=stream.getAudioTracks()[0];if(window.pairEnv?.platform==='linux')audioTrack=await linuxShareAudioTrack();if(!audioTrack)return;if(window.pairEnv?.platform!=='linux')try{const cleanTrack=await setupNativeScreenCapture();if(cleanTrack)audioTrack=cleanTrack}catch(e){console.warn('[AUDIO] canceller exception:',e)}if(gen!==screenGen||!screenActive||!pc||!audioTrack)return;try{screenSenders.push(pc.addTrack(audioTrack,stream));await renegotiate()}catch(e){console.warn('[AUDIO] addTrack failed:',e)}};
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
@@ -1143,6 +1148,7 @@ async function startScreenShare(){
 async function stopScreenShare(fromEnd){
   if(!screenActive&&!fromEnd)return;
   screenGen++;
+  if(window.pairEnv?.platform==='linux')window.pairEnv.stopLinuxShareAudio?.();
   screenActive=false;
   if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;
   cleanupNativeScreenCapture();
