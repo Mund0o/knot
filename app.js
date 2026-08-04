@@ -1119,20 +1119,10 @@ async function startScreenShare(){
     // Add the video track
     let sender;
     try{sender=pc.addTrack(track,stream);screenSenders=[sender]}catch{stream.getTracks().forEach(t=>t.stop());return}
-    // Audio: try JS echo canceller (subtracts remote voice from screen capture
-    // audio via NLMS adaptive filter in Web Audio). Falls back to raw audio
-    // when there's no active call (no reference voice to cancel).
-    let audioTrack=stream.getAudioTracks()[0];
-    console.log('[AUDIO] raw stream audio tracks:',stream.getAudioTracks().length,'got:',!!audioTrack);
-    if(audioTrack){
-      try{
-        const cleanTrack=await setupNativeScreenCapture();
-        console.log('[AUDIO] cleanTrack from canceller:',!!cleanTrack);
-        if(cleanTrack){audioTrack=cleanTrack;console.log('[AUDIO] using clean track, label:',audioTrack.label)}
-      }catch(e){console.warn('[AUDIO] canceller exception:',e)}
-      console.log('[AUDIO] adding track to PC: kind='+audioTrack.kind+' enabled='+audioTrack.enabled+' readyState='+audioTrack.readyState+' label='+audioTrack.label);
-      try{const audioSender=pc.addTrack(audioTrack,stream);screenSenders.push(audioSender);console.log('[AUDIO] addTrack OK')}catch(e){console.warn('[AUDIO] addTrack failed:',e)}
-    }else console.warn('[AUDIO] no audio track in screen stream');
+    // Audio cleanup can take a few seconds on Windows. Start the video first,
+    // then attach the cleaned audio in a second negotiation so clicking Share
+    // never appears to hang while Pair protects the call from echo.
+    const attachShareAudio=async()=>{let audioTrack=stream.getAudioTracks()[0];if(!audioTrack)return;try{const cleanTrack=await setupNativeScreenCapture();if(cleanTrack)audioTrack=cleanTrack}catch(e){console.warn('[AUDIO] canceller exception:',e)}if(gen!==screenGen||!screenActive||!pc||!audioTrack)return;try{screenSenders.push(pc.addTrack(audioTrack,stream));await renegotiate()}catch(e){console.warn('[AUDIO] addTrack failed:',e)}};
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
@@ -1146,7 +1136,7 @@ async function startScreenShare(){
     try{send({t:'screen-start'})}catch{};
     logCallEvent('You started screen sharing');
     track.onended=()=>{if(screenActive)stopScreenShare()};
-    await renegotiate();if(gen!==screenGen)return;
+    await renegotiate();if(gen!==screenGen)return;void attachShareAudio();
   }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
 }
 async function stopScreenShare(fromEnd){
@@ -1192,10 +1182,10 @@ const localScreenTile=makeScreenTile(screenPreview,'You', 'local'),remoteScreenT
 const screenViewBar=document.createElement('div');screenViewBar.className='screen-view-bar';screenViewBar.innerHTML='<button type="button" data-screen-view="grid" title="Grid view">▦ Grid</button><button type="button" data-screen-view="focus" title="Focus view">▣ Focus</button><button type="button" data-screen-fullscreen title="Fullscreen">⛶ Fullscreen</button>';screenVideos.after(screenViewBar);
 const gridViewButton=screenViewBar.querySelector('[data-screen-view="grid"]'),focusViewButton=screenViewBar.querySelector('[data-screen-view="focus"]'),fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]');
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
-function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden;if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-focus',screenView==='focus'&&hasLocal&&hasRemote);voicePanel.classList.toggle('screen-focus-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;gridViewButton.classList.toggle('active',screenView==='grid');focusViewButton.classList.toggle('active',screenView==='focus');fsBtn.hidden=!screenIsActive();fsBtn.textContent=remoteScreen.classList.contains('fs')?'✕ Exit fullscreen':'⛶ Fullscreen'}
-function toggleRemoteFs(){const is=remoteScreen.classList.toggle('fs');screenPreview.classList.toggle('fs',is&&focusedScreen==='local');document.body.classList.toggle('screen-fullscreen',is);updateScreenLayout()}
+function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden;if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-focus',screenView==='focus'&&hasLocal&&hasRemote);voicePanel.classList.toggle('screen-focus-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;gridViewButton.classList.toggle('active',screenView==='grid');focusViewButton.classList.toggle('active',screenView==='focus');fsBtn.hidden=!screenIsActive();fsBtn.textContent=(remoteScreen.classList.contains('fs')||screenPreview.classList.contains('fs'))?'✕ Exit fullscreen':'⛶ Fullscreen'}
+function toggleRemoteFs(){const target=focusedScreen==='local'?screenPreview:remoteScreen,other=target===screenPreview?remoteScreen:screenPreview;const is=target.classList.toggle('fs');other.classList.remove('fs');document.body.classList.toggle('screen-fullscreen',is);updateScreenLayout()}
 function selectScreen(kind){focusedScreen=kind;if(!remoteScreen.hidden&&!screenPreview.hidden)screenView='focus';updateScreenLayout()}
-screenVideos.addEventListener('click',event=>{if(event.target.closest('.screen-view-bar'))return;const tile=event.target.closest('[data-screen-tile]');if(tile)selectScreen(tile.dataset.screenTile)});
+screenVideos.addEventListener('click',event=>{const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;toggleRemoteFs()});
 screenViewBar.onclick=event=>{const view=event.target.closest('[data-screen-view]')?.dataset.screenView;if(view){screenView=view;updateScreenLayout();return}if(event.target.closest('[data-screen-fullscreen]'))toggleRemoteFs()};
 const screenLayoutObserver=new MutationObserver(updateScreenLayout);screenLayoutObserver.observe(screenPreview,{attributes:true,attributeFilter:['hidden']});screenLayoutObserver.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});updateScreenLayout();
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&remoteScreen.classList.contains('fs'))toggleRemoteFs()});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(remoteScreen.classList.contains('fs')||screenPreview.classList.contains('fs')))toggleRemoteFs()});
