@@ -20,7 +20,8 @@ npm run dist
 The tarball and AppImage will be created in the `dist` folder. The AppImage is
 the recommended Linux format: Pair can replace it and restart itself after an
 update. A tarball installation is also updated in place when its folder is
-writable.
+writable. On its first graphical launch, Pair adds itself to your Linux
+Applications menu; open it from there thereafter with no terminal command.
 
 ## Build a Windows release
 

@@ -1,5 +1,6 @@
 const path = require('path');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell } = require('electron');
+const { installLinuxLauncher } = require('./linux-launcher');
 
 let mainWin = null;
 let pendingSourceId = null;
@@ -249,6 +250,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  installLinuxLauncher();
   Menu.setApplicationMenu(null);
   // Needed for the browser File System Access API used to stream large downloads.
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
