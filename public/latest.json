@@ -1,10 +1,10 @@
 {
-  "version": "1.1.1",
-  "notes": "Fixes stale update checks and shows clear update progress on Windows.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.1/pair-p2p-1.1.1.tar.gz",
-  "linuxSha256": "3033a3915347da611db53109ca5a9305982e9d33512587d1af326f637b927a88",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.1/Pair-1.1.1.AppImage",
-  "linuxAppImageSha256": "b831f1ed5583d1b04698776439945a465406e0cd6dce9efa6dd69e3ceaf0c455",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.1/Pair.Setup.1.1.1.exe",
-  "winSha256": "773f63de0206197180a19011d318dbbe8ba9579bfca2bfe27e8aadd07c171eb1"
+  "version": "1.1.2",
+  "notes": "Fixes the GitHub API 403 in automatic update checks.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.2/pair-p2p-1.1.2.tar.gz",
+  "linuxSha256": "577f85710f51201b896d998784f793c0e4cd76df97c6aab6a79702dd11bd35d9",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.2/Pair-1.1.2.AppImage",
+  "linuxAppImageSha256": "052bc58acd6db7cdb2ea6f471c0daeb75a0274a21340f30654976c2221cbfadb",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.2/Pair.Setup.1.1.2.exe",
+  "winSha256": "b172ac6a7ff3e12dcd94009c84effdde1a390bf0d78cd917c4d27e370cd6ff8b"
 }
