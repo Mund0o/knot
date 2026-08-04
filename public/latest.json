@@ -1,10 +1,10 @@
 {
-  "version": "1.0.93",
+  "version": "1.0.96",
   "notes": "Update available.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.93/pair-p2p-1.0.93.tar.gz",
-  "linuxSha256": "75d49585eb727c50a6e7330efe1c647edc79f5ab8949e14e8465b871acfb78f4",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.93/Pair-1.0.93.AppImage",
-  "linuxAppImageSha256": "63fb25b7e819145808acf40e1b802c66b91fd338af97e25051c72bc58b19e128",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.93/Pair.Setup.1.0.93.exe",
-  "winSha256": "6406b94afd3564df6d0754996f12b02b82af5bbe53718c62c4c37c60b30360ce"
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.96/pair-p2p-1.0.96.tar.gz",
+  "linuxSha256": "9b52f196ba9d2deccdcad78558350ff30573a2bdf94ce61d709782906fd49c62",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.96/Pair-1.0.96.AppImage",
+  "linuxAppImageSha256": "081c19e9d17ca22ad7cf3edbaf072339d582f6e796efe667363ce07777b2748f",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.96/Pair.Setup.1.0.96.exe",
+  "winSha256": "9cd616785307e8b69213869cd627db4be35cc2a75537ca4d43c97ab851c42543"
 }
