@@ -1,8 +1,8 @@
 {
-  "version": "1.2.5",
+  "version": "1.0.91",
   "notes": "Improved call consistency by disabling legacy voice gates and reserving stable high-quality Opus audio.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.2.5/pair-p2p-1.2.5.tar.gz",
-  "linuxSha256": "1a5ec51c15b65c8568bf776c94a4390c48997e0aef58bad376cd8d14f13b4ab1",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.2.5/Pair.Setup.1.2.5.exe",
-  "winSha256": "d21a37ec8e59ad2911230065ab83460904aff2dbc6e89a1ce51e55fe59828f90"
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.91/pair-p2p-1.0.91.tar.gz",
+  "linuxSha256": "a1485ca0b920eedb0f2f1b1757fc7dc151fa4aba2640c175a91b9d63e6d27a24",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.91/Pair.Setup.1.0.91.exe",
+  "winSha256": "832f988fa78d8fc8c684c109ae7c80181902b4185953ddd18f04f7e24cc883e1"
 }
