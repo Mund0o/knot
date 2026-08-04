@@ -3,7 +3,7 @@
     {
       "target_name":"pair-capture",
       "sources":["pair-capture.cc"],
-      "libraries":["-lole32","-loleaut32"],
+      "libraries":["-lole32","-loleaut32","-lmmdevapi"],
       "include_dirs":["../node_modules/node-addon-api"],
       "defines":["NAPI_CPP_EXCEPTIONS"],
       "msvs_settings":{"VCCLCompilerTool":{"ExceptionHandling":1}}
