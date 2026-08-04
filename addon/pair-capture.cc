@@ -134,11 +134,17 @@ private:
     PROPVARIANT prop={};
     prop.vt=VT_BLOB;prop.blob.cbSize=sizeof(params);prop.blob.pBlobData=(BYTE*)&params;
     auto* handler=new ActivationHandler(&state);
+    // Resolve dynamically: older SDK link libraries do not always export this
+    // newer API even though supported Windows releases do. That lets one addon
+    // run on both current and older Windows without a loader failure.
+    HMODULE audioApi=LoadLibraryW(L"mmdevapi.dll");
+    auto activate=audioApi?reinterpret_cast<decltype(&ActivateAudioInterfaceAsync)>(GetProcAddress(audioApi,"ActivateAudioInterfaceAsync")):nullptr;
     IActivateAudioInterfaceAsyncOperation* operation=nullptr;
-    hr=ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,__uuidof(IAudioClient),&prop,handler,&operation);
-    if(FAILED(hr)){handler->Release();CloseHandle(state.event);return hr;}
+    hr=activate?activate(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,__uuidof(IAudioClient),&prop,handler,&operation):HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+    if(FAILED(hr)){if(audioApi)FreeLibrary(audioApi);handler->Release();CloseHandle(state.event);return hr;}
     WaitForSingleObject(state.event,INFINITE);
     if(operation)operation->Release();
+    if(audioApi)FreeLibrary(audioApi);
     handler->Release();CloseHandle(state.event);
     if(FAILED(state.result))return state.result;
     audioClient=state.client;
