@@ -10,12 +10,15 @@ let screenNative=false,screenRefCtx=null,screenRefNode=null,screenOutCtx=null,sc
 // Direct handle to the audio transceiver created in setupPeer, so startCall can
 // always reuse it (never add a second m-line). Nulled on disconnect/teardown.
 let audioTransceiver=null;
+// Keep the interface fully usable while this build is being tested without a
+// second device. Network-only actions stay local and are clearly labelled.
+const LOCAL_TEST_MODE=true;
 // Per-connection sound flags so the chimes don't double/triple: chat+files both
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
-let connectSoundDone=false,friendLeftNotified=false;
+let connectSoundDone=false,friendLeftNotified=false,friendInCall=false,friendPresenceTimer=null,selfInCall=false,selfPresenceTimer=null;
 let screenTransceiver=null,screenActive=false,screenStream=null,screenGen=0,screenSenders=[],screenStatsTimer=null,screenStatsLast=null;
-const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio'),connectCard=$('#connectCard'),profileBtn=$('#profileBtn'),profileInput=$('#profileInput'),profileAdjust=$('#profileAdjust'),profileEditor=$('#profileEditor'),profileZoom=$('#profileZoom'),profileX=$('#profileX'),profileY=$('#profileY'),profileDone=$('#profileDone'),friendAvatar=$('#friendAvatar'),voicePanel=$('#voicePanel');
-let profileAvatar='',profileFrame={zoom:100,x:50,y:50},profileIdentity=makeProfileIdentity();
+const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio'),connectCard=$('#connectCard'),addFriendBtn=$('#addFriend'),panelBackdrop=$('#panelBackdrop'),profileBtn=$('#profileBtn'),profileInput=$('#profileInput'),profileAdjust=$('#profileAdjust'),profileEditor=$('#profileEditor'),profileZoom=$('#profileZoom'),profileX=$('#profileX'),profileY=$('#profileY'),profileDone=$('#profileDone'),friendAvatar=$('#friendAvatar'),voicePanel=$('#voicePanel'),settingsPanel=$('#settingsPanel'),settingsAvatar=$('#settingsAvatar'),settingsChangePhoto=$('#settingsChangePhoto'),settingsAdjustPhoto=$('#settingsAdjustPhoto'),settingsRemovePhoto=$('#settingsRemovePhoto'),displayNameInput=$('#displayName'),yourNameEl=$('#yourName'),friendNameEl=$('#friendName'),inputDevice=$('#inputDevice'),outputDevice=$('#outputDevice'),voiceProcessing=$('#voiceProcessing'),deviceHint=$('#deviceHint'),testMicrophone=$('#testMicrophone'),reduceMotion=$('#reduceMotion'),soundEffects=$('#soundEffects'),shareProfile=$('#shareProfile'),rememberInvite=$('#rememberInvite'),hardwareAcceleration=$('#hardwareAcceleration'),hardwareHint=$('#hardwareHint');
+let profileAvatar='',profileFrame={zoom:100,x:50,y:50},profileIdentity=makeProfileIdentity(),profileName='You',friendName='Friend',inputDeviceId='default',outputDeviceId='default',voiceProcessingEnabled=false,soundEnabled=true,profileSharing=true,rememberInviteCode=true,micTestStream=null,micTestSource=null,micTestGain=null;
 // A 5 MiB source GIF expands to roughly 6.7 MiB as a data URL. This remains
 // below Pair's negotiated data-channel limit while allowing proper animations.
 const MAX_PROFILE_DATA=7*1024*1024;
@@ -25,7 +28,7 @@ const MAX_PROFILE_DATA=7*1024*1024;
 // call lazily creates/resumes the AudioContext so it works after a user gesture
 // and stays quiet until then.
 let audioCtx=null;
-function sfxCtx(){if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)()}catch{return null}}if(audioCtx.state==='suspended'){try{audioCtx.resume()}catch{}}return audioCtx}
+function sfxCtx(){if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();if(outputDeviceId&&typeof audioCtx.setSinkId==='function')audioCtx.setSinkId(outputDeviceId).catch(()=>{})}catch{return null}}if(audioCtx.state==='suspended'){try{audioCtx.resume()}catch{}}return audioCtx}
 // Browsers keep a freshly created AudioContext 'suspended' until a user gesture.
 // The connect chime fires from async channel-open callbacks (outside a gesture),
 // so pre-warm/resume the context on the first interaction anywhere on the page.
@@ -33,13 +36,34 @@ function warmAudio(){const c=sfxCtx();if(c&&c.state==='suspended'){try{c.resume(
 document.addEventListener('pointerdown',warmAudio,{once:true});
 document.addEventListener('keydown',warmAudio,{once:true});
 function tone(ctx,freq,start,dur,type='sine',gain=0.18){const o=ctx.createOscillator(),g=ctx.createGain();o.type=type;o.frequency.setValueAtTime(freq,ctx.currentTime+start);g.gain.setValueAtTime(0,ctx.currentTime+start);g.gain.linearRampToValueAtTime(gain,ctx.currentTime+start+0.02);g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+start+dur);o.connect(g).connect(ctx.destination);o.start(ctx.currentTime+start);o.stop(ctx.currentTime+start+dur+0.02)}
-function setParticipant(el,on){const dot=el.querySelector('.indicator');if(dot)dot.classList.toggle('on',on)}
+function setParticipant(el,on){if(el===participantFriend){setFriendPresence(on,{sound:false});return}if(el===participantYou){setSelfPresence(on);return}const dot=el.querySelector('.indicator');if(dot)dot.classList.toggle('on',on)}
+function setFriendPresence(on,{animate=true,sound=true}={}){
+  const wasPresent=friendInCall;friendInCall=on;const dot=participantFriend.querySelector('.indicator');if(dot)dot.classList.toggle('on',on);
+  if(friendPresenceTimer){clearTimeout(friendPresenceTimer);friendPresenceTimer=null}
+  if(on){
+    participantFriend.classList.remove('is-absent','is-leaving');participantFriend.removeAttribute('aria-hidden');
+    if(animate&&!wasPresent){participantFriend.classList.remove('is-entering');void participantFriend.offsetWidth;participantFriend.classList.add('is-entering');if(sound)playSound('friend-join')}
+    return;
+  }
+  if(!wasPresent){participantFriend.classList.remove('is-entering','is-leaving');participantFriend.classList.add('is-absent');participantFriend.setAttribute('aria-hidden','true');return}
+  participantFriend.classList.remove('is-entering');
+  if(animate){participantFriend.classList.add('is-leaving');friendPresenceTimer=setTimeout(()=>{if(!friendInCall){participantFriend.classList.remove('is-leaving');participantFriend.classList.add('is-absent');participantFriend.setAttribute('aria-hidden','true')}},430)}else{participantFriend.classList.remove('is-leaving');participantFriend.classList.add('is-absent');participantFriend.setAttribute('aria-hidden','true')}
+  if(sound)playSound('friend-leave');
+}
+function setSelfPresence(on){
+  const wasPresent=selfInCall;selfInCall=on;const dot=participantYou.querySelector('.indicator');if(dot)dot.classList.toggle('on',on);
+  if(selfPresenceTimer){clearTimeout(selfPresenceTimer);selfPresenceTimer=null}
+  if(on){participantYou.classList.remove('is-absent','is-leaving');participantYou.removeAttribute('aria-hidden');if(!wasPresent){participantYou.classList.remove('is-entering');void participantYou.offsetWidth;participantYou.classList.add('is-entering')}return}
+  if(!wasPresent){participantYou.classList.remove('is-entering','is-leaving');participantYou.classList.add('is-absent');participantYou.setAttribute('aria-hidden','true');return}
+  participantYou.classList.remove('is-entering');participantYou.classList.add('is-leaving');selfPresenceTimer=setTimeout(()=>{if(!selfInCall){participantYou.classList.remove('is-leaving');participantYou.classList.add('is-absent');participantYou.setAttribute('aria-hidden','true')}},430);
+}
 function logCallEvent(text){const e=document.createElement('div'),time=document.createElement('span');e.className='log-entry';time.className='log-time';time.textContent=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});e.append(time,document.createTextNode(String(text)));voiceLog.append(e)}
 function playSound(kind){
+  if(!soundEnabled)return;
   const ctx=sfxCtx();if(!ctx)return;
   if(kind==='connect'){tone(ctx,659.25,0,0.16,'sine',0.16);tone(ctx,987.77,0.12,0.22,'sine',0.16)}
-  else if(kind==='leave'){tone(ctx,523.25,0,0.18,'sine',0.15);tone(ctx,392.00,0.14,0.30,'sine',0.15)}
-  else if(kind==='ring'){tone(ctx,440,0,0.18,'triangle',0.14);tone(ctx,587.33,0.2,0.18,'triangle',0.14);tone(ctx,440,0.4,0.18,'triangle',0.14)}
+  else if(kind==='leave'){tone(ctx,493.88,0,0.10,'triangle',0.11);tone(ctx,293.66,0.06,0.22,'sine',0.12)}
+  else if(kind==='ring'){tone(ctx,523.25,0,0.09,'sine',0.12);tone(ctx,783.99,0.065,0.18,'sine',0.15)}
 }
 function setupPermanentAudioSink(){
   try{
@@ -94,7 +118,7 @@ let sendAbort=new Map(),fileSeq=0;
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
 const enc=new TextEncoder(),dec=new TextDecoder();
-function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(connectCard)connectCard.hidden=on;  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{messageInput.disabled=true;messageForm.querySelector('.send').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
+function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(connectCard)connectCard.hidden=on;if(addFriendBtn)addFriendBtn.disabled=on;  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{messageInput.disabled=true;messageForm.querySelector('.send').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
 const MAX_SIGNAL_SIZE=1024*1024,MAX_MESSAGE_SIZE=64*1024,SIGNAL_COMPRESSED_PREFIX='pair1.',SIGNAL_RAW_PREFIX='pair0.';
 function base64UrlEncode(bytes){let binary='';for(let i=0;i<bytes.length;i+=0x8000)binary+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 function base64UrlDecode(value){if(!/^[A-Za-z0-9_-]+$/.test(value))throw new Error('Pairing code is malformed');const binary=atob(value.replace(/-/g,'+').replace(/_/g,'/')+'='.repeat((4-value.length%4)%4));return Uint8Array.from(binary,c=>c.charCodeAt(0))}
@@ -151,9 +175,12 @@ function addMessage(text,mine=false){
   $('.empty')?.remove();
   const el=document.createElement('div');el.className='message '+(mine?'mine':'');
   const isEmoji=/^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\u20E3]+$/u.test(text.trim());
+  const source=mine?profileBtn:friendAvatar,avatar=document.createElement('span'),name=mine?profileName:friendName;
+  avatar.className='avatar message-avatar';avatar.classList.toggle('has-image',source.classList.contains('has-image'));avatar.style.backgroundImage=source.style.backgroundImage;avatar.style.backgroundSize=source.style.backgroundSize;avatar.style.backgroundPositionX=source.style.backgroundPositionX;avatar.style.backgroundPositionY=source.style.backgroundPositionY;avatar.style.setProperty('--avatar-hue',source.style.getPropertyValue('--avatar-hue'));const letter=document.createElement('span');letter.className='avatar-letter';letter.textContent=name.slice(0,1).toUpperCase()||'?';avatar.append(letter);
+  const content=document.createElement('div');content.className='message-content';
+  const header=document.createElement('div');header.className='message-header';const sender=document.createElement('strong');sender.textContent=name;const time=document.createElement('time');time.textContent=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});header.append(sender,time);
   const bubble=document.createElement('div');bubble.className='bubble'+(isEmoji?' emoji-only':'');bubble.innerHTML=renderContent(text);
-  const meta=document.createElement('div');meta.className='meta';meta.textContent=(mine?'You':'Friend')+' · '+new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
-  el.append(bubble,meta);messages.append(el);messages.scrollTop=messages.scrollHeight;
+  content.append(header,bubble);el.append(avatar,content);messages.append(el);messages.scrollTop=messages.scrollHeight;
 }
 // --- Emoji Picker ------------------------------------------------------------
 const EMOJI_CATS=[
@@ -174,15 +201,18 @@ function buildEmojiPicker(){
   const tabs=document.createElement('div');tabs.className='emoji-tabs';
   const body=document.createElement('div');body.className='emoji-body';
   EMOJI_CATS.forEach((cat,i)=>{
-    const tab=document.createElement('button');tab.className='emoji-tab'+(i===0?' active':'');tab.textContent=cat.name[0]+cat.name[1];
+    const tab=document.createElement('button');tab.className='emoji-tab'+(i===0?' active':'');tab.textContent=cat.emojis[0];tab.title=cat.name;tab.setAttribute('aria-label',cat.name);
     tab.onclick=()=>{body.querySelectorAll('.emoji-page').forEach(p=>p.classList.add('hidden'));body.children[i].classList.remove('hidden');tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));tab.classList.add('active')};
     tabs.append(tab);
     const page=document.createElement('div');page.className='emoji-page';page.classList.toggle('hidden',i!==0);
+    const heading=document.createElement('div');heading.className='emoji-category-title';heading.textContent=cat.name;
+    const grid=document.createElement('div');grid.className='emoji-grid';
     cat.emojis.forEach(e=>{
       const btn=document.createElement('button');btn.className='emoji-item';btn.textContent=e;
       btn.onclick=()=>{const inp=messageInput;const s=inp.selectionStart;const v=inp.value;inp.value=v.slice(0,s)+e+v.slice(inp.selectionEnd);inp.selectionStart=inp.selectionEnd=s+e.length;inp.focus();wrap.classList.add('hidden')};
-      page.append(btn);
+      grid.append(btn);
     });
+    page.append(heading,grid);
     body.append(page);
   });
   wrap.append(tabs,body);
@@ -275,7 +305,7 @@ function renderFavs(resultsEl){
     const btn=document.createElement('button');btn.className='gif-result';
     const img=document.createElement('img');img.src=f.thumb;img.loading='lazy';
     btn.append(img);
-    btn.onclick=async()=>{const msg=f.url;if(msg&&sharedKey){send({t:'msg',v:await seal(msg)});addMessage(msg,true);const wrap=resultsEl.parentElement;wrap.classList.add('hidden')};analyticsShared(f.type||f)};
+    btn.onclick=async()=>{const msg=f.url;if(msg&&(sharedKey||LOCAL_TEST_MODE)){if(sharedKey)send({t:'msg',v:await seal(msg)});addMessage(msg,true);const wrap=resultsEl.parentElement;wrap.classList.add('hidden')};analyticsShared(f.type||f)};
     // Context menu to remove
     btn.oncontextmenu=e=>{e.preventDefault();toggleFav(f.id);renderFavs(resultsEl)};
     resultsEl.append(btn);
@@ -317,7 +347,7 @@ function renderItem(item,resultsEl){
   const star=document.createElement('span');star.className='gif-star'+(isFav?' on':'');star.textContent='★';star.title='Favorite';
   star.onclick=e=>{e.stopPropagation();const on=toggleFav(item.id,item.fullUrl,item.thumb,item);star.classList.toggle('on',on)};
   btn.append(star);
-  btn.onclick=async()=>{if(item.fullUrl&&sharedKey){send({t:'msg',v:await seal(item.fullUrl)});addMessage(item.fullUrl,true);const wrap=resultsEl.parentElement;wrap.classList.add('hidden');const si=wrap.querySelector('.gif-search-input');if(si)si.value='';resultsEl.innerHTML=''};analyticsShared(item)};
+  btn.onclick=async()=>{if(item.fullUrl&&(sharedKey||LOCAL_TEST_MODE)){if(sharedKey)send({t:'msg',v:await seal(item.fullUrl)});addMessage(item.fullUrl,true);const wrap=resultsEl.parentElement;wrap.classList.add('hidden');const si=wrap.querySelector('.gif-search-input');if(si)si.value='';resultsEl.innerHTML=''};analyticsShared(item)};
   resultsEl.append(btn);
 }
 // Initialise pickers once sharedKey is set (i.e. after connection).
@@ -355,6 +385,11 @@ function isEncryptedMessage(value){return !!value&&Array.isArray(value.iv)&&valu
 function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>{setStatus('Connected directly',true);announceProfile()};chat.onmessage=async e=>{try{if(typeof e.data!=='string'||e.data.length>MAX_MESSAGE_SIZE*3)return;const o=JSON.parse(e.data);if(o.t==='msg'&&isEncryptedMessage(o.v))addMessage(dec.decode(await open(o.v)));else if(o.t==='profile'){const p=typeof o.v==='string'?{image:o.v}:o.v;if(validProfileIdentity(p?.identity))setAvatarIdentity(friendAvatar,p.identity);if(typeof p?.image==='string'&&p.image.length<=MAX_PROFILE_DATA){setAvatar(friendAvatar,p.image);setAvatarFrame(friendAvatar,p.frame)}}      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
         // call→leave cycle still plays the leave tone instead of going silent.
         friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}else if(o.t==='screen-start'){logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
+// Add name handling once per data channel without disturbing the encrypted
+// message/profile handler above. This also covers the channel received by the
+// answering peer through `ondatachannel`.
+const originalWire=wire,profileNameChannels=new WeakSet();
+wire=function(){if(chat&&!profileNameChannels.has(chat)){chat.addEventListener('message',handleProfileNameMessage);profileNameChannels.add(chat)}return originalWire()}
 // Pick the fast relay socket if available, otherwise the WebRTC data channel.
 function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?streamWs:(files&&files.readyState==='open'?files:null)}
 
@@ -394,7 +429,7 @@ function setupPeer(){
   try{
     const silentCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000});
     const silentDst=silentCtx.createMediaStreamDestination();
-    silentDst.channelCount=1;
+    silentDst.channelCount=2;
     audioTransceiver=pc.addTrack(silentDst.stream.getAudioTracks()[0],silentDst.stream);
     // Keep a reference so we can close the AudioContext on disconnect
     pc._silentAudioCtx=silentCtx;
@@ -404,7 +439,7 @@ function setupPeer(){
   pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{if(e.track.kind==='audio'){console.log('[AUDIO] ontrack audio, screenObj=',!!remoteScreen.srcObject,'streamMatch=',remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject,'streamId=',e.streams[0]?.id,'screenId=',remoteScreen.srcObject?.id);if(remoteScreen.srcObject&&e.streams[0]===remoteScreen.srcObject){logCallEvent('Screen audio received');console.log('[AUDIO] routing to remoteScreen');const scPlay=()=>{const p=remoteScreen.play();if(p&&p.catch)p.catch(()=>{})};scPlay();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{scPlay()},{once:true});document.addEventListener('keydown',()=>{scPlay()},{once:true})};return}logCallEvent('Audio track received from friend');console.log('[AUDIO] routing to remoteAudio');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}const stream=e.streams[0]||new MediaStream([e.track]);if(remoteAudio.srcObject&&remoteAudio.srcObject!==e.streams[0]){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else{remoteAudio.srcObject=stream}remoteAudio.muted=false;remoteAudio.volume=0;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const playNow=()=>{const p=remoteAudio.play();if(p&&p.catch)p.catch(()=>{})};playNow();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{playNow();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{playNow();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=e.streams[0]||new MediaStream([e.track]);remoteScreen.play()}catch{};e.track.onended=()=>{remoteScreen.srcObject=null;remoteScreen.hidden=true;}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;pc?.removeEventListener('icegatheringstatechange',f);clearTimeout(timeout);resolve()};const f=()=>{if(pc?.iceGatheringState==='complete')finish()};const timeout=setTimeout(finish,5000);pc.addEventListener('icegatheringstatechange',f)})}
-function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=510000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=510000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('stereo'))m+='; stereo=0';if(!m.includes('sprop-stereo'))m+='; sprop-stereo=0';return m})}
+function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=256000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=256000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx=0';if(!m.includes('stereo'))m+='; stereo=1';else m=m.replace(/stereo=[01]/,'stereo=1');if(!m.includes('sprop-stereo'))m+='; sprop-stereo=1';else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo=1');return m})}
 // Sender parameters are the primary limiter. This SDP fallback keeps browsers
 // that ignore those parameters from silently collapsing a high-motion share to
 // the old 16 Mbps ceiling.
@@ -418,10 +453,10 @@ function patchVideoSdp(sdp){
   });
 }
 function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
-$('#createOffer').onclick=async()=>{try{if(pc||signaling)disconnectRoom();role='offer';signalIn.value='';setOutgoingCode('');processSignal.textContent='Finish connection';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Invite ready. Copy it, send it to your friend, then paste their reply in step 2.'}catch(e){pairHint.textContent='Could not create invite: '+(e?.message||e)}};
+$('#createOffer').onclick=async()=>{try{if(pc||signaling)disconnectRoom();role='offer';signalIn.value='';ssSet('savedInviteCode',null);setOutgoingCode('');processSignal.textContent='Finish connection';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Invite ready. Copy it, send it to your friend, then paste their reply in step 2.'}catch(e){pairHint.textContent='Could not create invite: '+(e?.message||e)}};
 processSignal.onclick=async()=>{try{const remote=await cleanSignal(signalIn.value);if(role==='offer'){if(remote.type!=='answer')throw new Error('Paste the reply your friend created, not another invite');await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!await derive(pc._kp,remote.pub))throw new Error('Security code was not confirmed');pairHint.textContent='Connecting directly…'}else if(!role){if(remote.type!=='offer')throw new Error('Paste an invite first, then create its reply');role='answer';setOutgoingCode('');setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!await derive(kp,remote.pub))throw new Error('Security code was not confirmed');const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Reply ready. Copy it and send it back to the person who invited you.';processSignal.textContent='Reply ready'}else pairHint.textContent='Your reply is already ready. Copy it and send it back to your friend.'}catch(e){pairHint.textContent='Could not continue pairing: '+(e?.message||e)}};
 copySignal.onclick=()=>copyOutgoingCode().catch(e=>{pairHint.textContent='Could not copy code: '+(e?.message||e)});
-messageForm.onsubmit=async e=>{e.preventDefault();const v=messageInput.value.trim();if(!v||!sharedKey)return;if(enc.encode(v).byteLength>MAX_MESSAGE_SIZE){pairHint.textContent='Messages are limited to 64 KB.';return}send({t:'msg',v:await seal(v)});addMessage(v,true);messageInput.value=''};
+messageForm.onsubmit=async e=>{e.preventDefault();const v=messageInput.value.trim();if(!v)return;if(!sharedKey){if(LOCAL_TEST_MODE){addMessage(v,true);messageInput.value='';return}return}if(enc.encode(v).byteLength>MAX_MESSAGE_SIZE){pairHint.textContent='Messages are limited to 64 KB.';return}send({t:'msg',v:await seal(v)});addMessage(v,true);messageInput.value=''};
 fileInput.onchange=()=>{const files=[...fileInput.files];fileInput.value='';files.forEach(sendFile);};
 function transfer(name,size,dir){
   const el=document.createElement('div');el.className='transfer';el.innerHTML='<div class="transfer-top"><span class="transfer-name"></span><span class="transfer-status"></span></div><div class="bar"><i></i></div><div class="transfer-stats"><span class="transfer-speed"></span><span class="transfer-eta"></span></div><div class="transfer-peer"></div><div class="transfer-btns"><button class="cancel-btn text-button" hidden>Cancel</button><button class="retry-btn primary" hidden>Retry</button></div>';
@@ -434,7 +469,7 @@ function transfer(name,size,dir){
 }function format(n){return n<1e9?(n/1e6).toFixed(1)+' MB':(n/1e9).toFixed(2)+' GB'}function formatSpeed(bps){if(bps<1e3)return(bps).toFixed(0)+' B/s';if(bps<1e6)return(bps/1e3).toFixed(1)+' KB/s';if(bps<1e9)return(bps/1e6).toFixed(1)+' MB/s';return(bps/1e9).toFixed(2)+' GB/s'}function formatEta(sec){if(!isFinite(sec)||sec<0)return'';sec=Math.round(sec);if(sec<60)return sec+'s';const m=Math.floor(sec/60),s=sec%60;if(m<60)return m+'m '+s+'s';const h=Math.floor(m/60);return h+'h '+(m%60)+'m'}function updateStats(el,done,total,startTime){const elapsed=(performance.now()-startTime)/1000;if(elapsed<0.5)return;const speed=done/elapsed;const remaining=(total-done)/speed;el.querySelector('.transfer-speed').textContent=formatSpeed(speed);el.querySelector('.transfer-eta').textContent=formatEta(remaining)}
 // Resolvers for sender-side "peer accepted/rejected" signals, keyed by seq.
 const acceptWait=new Map();
-async function sendFile(file,retryId){try{if(file.size>MAX)return alert('This file is larger than 200 GiB.');if(!fileBus())return alert('Connect first, then send a file.');const el=transfer(file.name,file.size,'out');const cancelBtn=el.querySelector('.cancel-btn'),retryBtn=el.querySelector('.retry-btn');cancelBtn.hidden=false;retryBtn.hidden=true;const seq=retryId||++fileSeq;const ctrl={abort:false};sendAbort.set(seq,ctrl);outTransfers.set(seq,el);cancelBtn.onclick=()=>{const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);aw.reject(new Error('Cancelled'))}ctrl.abort=true;cancelBtn.hidden=true;try{if(files&&files.readyState==='open')files.send(JSON.stringify({t:'cancel',seq}))}catch{}};const meta=await seal(JSON.stringify({name:file.name,size:file.size,type:file.type,seq}));sendQueue=sendQueue.then(async()=>{  const t0=performance.now();try{await safeSend(JSON.stringify({t:'start',v:meta}));
+async function sendFile(file,retryId){try{if(file.size>MAX)return alert('This file is larger than 200 GiB.');if(!fileBus()){if(LOCAL_TEST_MODE){const preview=transfer(file.name,file.size,'out');preview.querySelector('.transfer-status').textContent='Local preview — not sent';preview.querySelector('.bar i').style.width='100%';return}return alert('Connect first, then send a file.')}const el=transfer(file.name,file.size,'out');const cancelBtn=el.querySelector('.cancel-btn'),retryBtn=el.querySelector('.retry-btn');cancelBtn.hidden=false;retryBtn.hidden=true;const seq=retryId||++fileSeq;const ctrl={abort:false};sendAbort.set(seq,ctrl);outTransfers.set(seq,el);cancelBtn.onclick=()=>{const aw=acceptWait.get(seq);if(aw){acceptWait.delete(seq);aw.reject(new Error('Cancelled'))}ctrl.abort=true;cancelBtn.hidden=true;try{if(files&&files.readyState==='open')files.send(JSON.stringify({t:'cancel',seq}))}catch{}};const meta=await seal(JSON.stringify({name:file.name,size:file.size,type:file.type,seq}));sendQueue=sendQueue.then(async()=>{  const t0=performance.now();try{await safeSend(JSON.stringify({t:'start',v:meta}));
   // If the user already cancelled (during safeSend(start) above), bail immediately
   // rather than setting up an accept wait that would hang forever.
   if(ctrl.abort)throw new Error('Cancelled');
@@ -564,29 +599,59 @@ async function processIncoming(t){const POOL=8;const queue=t.writeQueue;let acti
   }finally{clearInterval(watchdog);try{await flushBatch()}catch{}}
 }
 setStatus('Not connected');
+function enableLocalTestControls(){if(!LOCAL_TEST_MODE)return;messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;callBtn.disabled=false;screenBtn.disabled=false;screenPreset.disabled=false;statusText.textContent='Local test mode';pairHint.textContent='Test mode is on — messages stay on this device until you pair with a friend.'}
+enableLocalTestControls();
 
 async function ss(key){if(window.pairSettings){try{return await window.pairSettings.get(key)}catch{}}try{return localStorage.getItem('pair.'+key)}catch{}}
-async function ssSet(key,val){if(window.pairSettings){try{await window.pairSettings.set(key,val);return}catch{}}try{localStorage.setItem('pair.'+key,val)}catch{}}
+async function ssSet(key,val){if(window.pairSettings){try{await window.pairSettings.set(key,val);return}catch{}}try{if(val==null)localStorage.removeItem('pair.'+key);else localStorage.setItem('pair.'+key,val)}catch{}}
+function openSettingsTab(name){document.querySelectorAll('.settings-tab').forEach(tab=>{const active=tab.dataset.settingsTab===name;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active))});document.querySelectorAll('.settings-page').forEach(page=>{const active=page.dataset.settingsPage===name;page.classList.toggle('active',active);page.hidden=!active})}
+document.querySelectorAll('.settings-tab').forEach(tab=>tab.onclick=()=>openSettingsTab(tab.dataset.settingsTab));
+function makeDeviceOption(value,label){const option=document.createElement('option');option.value=value;option.textContent=label;return option}
+async function refreshAudioDevices(){try{const devices=await navigator.mediaDevices.enumerateDevices();const inputs=devices.filter(device=>device.kind==='audioinput'),outputs=devices.filter(device=>device.kind==='audiooutput');inputDevice.replaceChildren(makeDeviceOption('default','System default'));outputDevice.replaceChildren(makeDeviceOption('default','System default'));inputs.forEach((device,index)=>inputDevice.append(makeDeviceOption(device.deviceId,device.label||'Microphone '+(index+1))));outputs.forEach((device,index)=>outputDevice.append(makeDeviceOption(device.deviceId,device.label||'Speaker '+(index+1))));inputDevice.value=[...inputDevice.options].some(option=>option.value===inputDeviceId)?inputDeviceId:'default';outputDevice.value=[...outputDevice.options].some(option=>option.value===outputDeviceId)?outputDeviceId:'default';deviceHint.textContent=(inputs.length||outputs.length)?'Device list updated.':'Connect or allow a microphone to reveal device names.'}catch{deviceHint.textContent='Pair could not read audio devices yet.'}}
+function microphoneConstraints({echoCancellation=voiceProcessingEnabled}={}){const audio={sampleRate:{ideal:48000},sampleSize:{ideal:32},channelCount:{ideal:2},latency:{ideal:.01},echoCancellation,noiseSuppression:false,autoGainControl:false,voiceIsolation:false,googEchoCancellation:echoCancellation,googAutoGainControl:false,googNoiseSuppression:false,googHighpassFilter:false,googTypingNoiseDetection:false,googAudioMirroring:false};if(inputDeviceId&&inputDeviceId!=='default')audio.deviceId={exact:inputDeviceId};return {audio,video:false}}
+async function applyOutputDevice(){try{if(audioCtx&&typeof audioCtx.setSinkId==='function')await audioCtx.setSinkId(outputDeviceId||'default');else if(typeof remoteAudio.setSinkId==='function')await remoteAudio.setSinkId(outputDeviceId||'default');else{deviceHint.textContent='Speaker selection is not supported on this system.';return}deviceHint.textContent='Speaker selection applied.'}catch{deviceHint.textContent='Could not use that speaker. Try the system default.'}}
+function stopMicrophoneTest(){try{micTestSource?.disconnect()}catch{}try{micTestGain?.disconnect()}catch{}if(micTestStream)micTestStream.getTracks().forEach(track=>track.stop());micTestStream=micTestSource=micTestGain=null;testMicrophone.textContent='Test microphone'}
+async function toggleMicrophoneTest(){if(micTestStream){stopMicrophoneTest();deviceHint.textContent='Microphone test stopped.';return}if(localStream){deviceHint.textContent='End the call before testing the microphone.';return}try{const ctx=sfxCtx();if(!ctx)throw new Error('Audio output unavailable');await ctx.resume();micTestStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints({echoCancellation:false}));micTestSource=ctx.createMediaStreamSource(micTestStream);micTestGain=ctx.createGain();micTestGain.gain.value=1;micTestSource.connect(micTestGain).connect(ctx.destination);testMicrophone.textContent='Stop microphone test';deviceHint.textContent='Raw microphone monitor live — echo cancellation is tested during paired calls only.';await refreshAudioDevices()}catch{stopMicrophoneTest();deviceHint.textContent='Could not start the microphone test. Check the selected device and permission.'}}
+inputDevice.onchange=()=>{inputDeviceId=inputDevice.value;ssSet('inputDevice',inputDeviceId);if(micTestStream)stopMicrophoneTest()};outputDevice.onchange=()=>{outputDeviceId=outputDevice.value;ssSet('outputDevice',outputDeviceId);applyOutputDevice()};voiceProcessing.onchange=()=>{voiceProcessingEnabled=voiceProcessing.checked;ssSet('voiceProcessing',voiceProcessingEnabled?'on':'off');if(micTestStream)stopMicrophoneTest();deviceHint.textContent=voiceProcessingEnabled?'Echo cancellation enabled; noise suppression and auto-gain stay off.':'Raw stereo microphone mode enabled for the cleanest sound.'};$('#refreshDevices').onclick=()=>refreshAudioDevices();$('#testSound').onclick=()=>playSound('ring');testMicrophone.onclick=()=>toggleMicrophoneTest();navigator.mediaDevices?.addEventListener?.('devicechange',refreshAudioDevices);
+const THEMES=new Set(['midnight','violet','forest','ember']);
+function applyTheme(theme,persist=true){const selected=THEMES.has(theme)?theme:'midnight';document.documentElement.dataset.theme=selected;document.querySelectorAll('.theme-option').forEach(button=>{const active=button.dataset.theme===selected;button.classList.toggle('selected',active);button.setAttribute('aria-pressed',String(active))});if(persist)ssSet('theme',selected)}
+function syncPanelBackdrop(){panelBackdrop.hidden=!!settingsPanel.hidden&&!connectCard.open}
+function closePanels(){if(micTestStream)stopMicrophoneTest();connectCard.open=false;settingsPanel.hidden=true;document.body.classList.remove('settings-open');syncPanelBackdrop()}
+$('#addFriend').onclick=()=>{settingsPanel.hidden=true;document.body.classList.remove('settings-open');connectCard.open=true;syncPanelBackdrop();setTimeout(()=>signalIn.focus(),0)};
+connectCard.addEventListener('toggle',syncPanelBackdrop);panelBackdrop.onclick=closePanels;
+document.querySelectorAll('.theme-option').forEach(button=>button.onclick=()=>applyTheme(button.dataset.theme));
+(async()=>{applyTheme(await ss('theme'),false)})();
+reduceMotion.onchange=()=>{document.documentElement.dataset.reduceMotion=String(reduceMotion.checked);ssSet('reduceMotion',reduceMotion.checked?'on':'off')};soundEffects.onchange=()=>{soundEnabled=soundEffects.checked;ssSet('soundEffects',soundEnabled?'on':'off')};shareProfile.onchange=()=>{profileSharing=shareProfile.checked;ssSet('shareProfile',profileSharing?'on':'off');announceProfile()};rememberInvite.onchange=()=>{rememberInviteCode=rememberInvite.checked;ssSet('rememberInvite',rememberInviteCode?'on':'off');if(!rememberInviteCode)ssSet('savedInviteCode',null)};$('#clearSavedInvite').onclick=()=>{signalIn.value='';ssSet('savedInviteCode',null);pairHint.textContent='Saved pairing code cleared from this device.'};hardwareAcceleration.onchange=()=>{const enabled=hardwareAcceleration.checked;ssSet('hardwareAcceleration',enabled?'on':'off');hardwareHint.textContent='Restart Pair to '+(enabled?'enable':'disable')+' hardware acceleration.'};$('#restartPair').onclick=()=>{if(window.pairEnv?.relaunch)window.pairEnv.relaunch();else hardwareHint.textContent='Close and reopen Pair to apply this setting.'};
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&(!settingsPanel.hidden||connectCard.open))closePanels()});
 function validProfileData(data){return typeof data==='string'&&data.length<=MAX_PROFILE_DATA&&/^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(data)}
 function setAvatar(el,data){if(!el)return;const safe=validProfileData(data)?data:'';el.classList.toggle('has-image',!!safe);el.style.backgroundImage=safe?'url("'+safe.replace(/"/g,'%22')+'")':'';}
 function normalizeFrame(frame){return {zoom:Math.max(40,Math.min(180,Number(frame?.zoom)||100)),x:Math.max(0,Math.min(100,Number(frame?.x??50))),y:Math.max(0,Math.min(100,Number(frame?.y??50)))}}
 function validProfileIdentity(value){return typeof value==='string'&&/^[a-z0-9]{12,32}$/i.test(value)}
+function normalizeProfileName(value,fallback){if(typeof value!=='string')return fallback;const name=value.replace(/[\u0000-\u001f\u007f]/g,'').replace(/\s+/g,' ').trim().slice(0,32);return name||fallback}
+function renderParticipantNames(){yourNameEl.textContent=profileName;friendNameEl.textContent=friendName;displayNameInput.value=profileName}
+function updateProfileName(value,{persist=true,share=true}={}){profileName=normalizeProfileName(value,'You');renderParticipantNames();if(persist)ssSet('profileName',profileName);if(share)announceProfile()}
+function handleProfileNameMessage(event){try{if(typeof event.data!=='string')return;const message=JSON.parse(event.data);if(message?.t!=='profile-name')return;friendName=normalizeProfileName(message.v,'Friend');renderParticipantNames()}catch{}}
 function makeProfileIdentity(){const bytes=crypto.getRandomValues(new Uint8Array(9));return [...bytes].map(v=>v.toString(36).padStart(2,'0')).join('')}
 function avatarHue(identity){let hash=0;for(const ch of identity)hash=(hash*31+ch.charCodeAt(0))>>>0;return hash%360}
 function setAvatarIdentity(el,identity){if(!el)return;const safe=validProfileIdentity(identity)?identity:'';if(safe)el.style.setProperty('--avatar-hue',String(avatarHue(safe)));else el.style.removeProperty('--avatar-hue');}
 function setAvatarFrame(el,frame){if(!el)return;const f=normalizeFrame(frame);el.style.backgroundSize=f.zoom+'% auto';el.style.backgroundPositionX=f.x+'%';el.style.backgroundPositionY=f.y+'%';}
-function announceProfile(){if(profileIdentity)send({t:'profile',v:{image:profileAvatar,frame:profileFrame,identity:profileIdentity}});}
+function renderProfile(){[profileBtn,settingsAvatar].forEach(el=>{setAvatar(el,profileAvatar);setAvatarFrame(el,profileFrame);setAvatarIdentity(el,profileIdentity)});renderParticipantNames();const hasPhoto=!!profileAvatar;profileAdjust.hidden=!hasPhoto;settingsAdjustPhoto.hidden=!hasPhoto;settingsRemovePhoto.hidden=!hasPhoto;}
+function announceProfile(){if(profileIdentity){send({t:'profile',v:{image:profileSharing?profileAvatar:'',frame:profileFrame,identity:profileIdentity}});send({t:'profile-name',v:profileSharing?profileName:'Friend'})}}
 async function readProfileData(blob){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result));r.onerror=()=>reject(new Error('Could not read image'));r.readAsDataURL(blob)})}
 async function resizeProfile(file){if(file.type==='image/gif'){if(file.size>5*1024*1024)throw new Error('Choose a GIF smaller than 5 MB');const data=await readProfileData(file);if(!validProfileData(data))throw new Error('Choose a valid GIF smaller than 5 MB');return data}const bitmap=await createImageBitmap(file);const size=480,scale=Math.min(size/bitmap.width,size/bitmap.height,1);const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close?.();const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.72));if(!blob)throw new Error('Could not read image');const data=await readProfileData(blob);if(!validProfileData(data))throw new Error('Choose a smaller image');return data;}
-function updateProfileFrame(sendUpdate=false){profileFrame=normalizeFrame({zoom:profileZoom.value,x:profileX.value,y:profileY.value});setAvatarFrame(profileBtn,profileFrame);ssSet('profileFrame',JSON.stringify(profileFrame));if(sendUpdate)announceProfile()}
-profileBtn.onclick=()=>profileInput.click();profileAdjust.onclick=()=>{profileEditor.hidden=!profileEditor.hidden};profileDone.onclick=()=>{profileEditor.hidden=true;updateProfileFrame(true)};[profileZoom,profileX,profileY].forEach(input=>input.oninput=()=>updateProfileFrame(false));[profileZoom,profileX,profileY].forEach(input=>input.onchange=()=>updateProfileFrame(true));profileInput.onchange=async()=>{const file=profileInput.files?.[0];profileInput.value='';if(!file)return;try{profileAvatar=await resizeProfile(file);setAvatar(profileBtn,profileAvatar);setAvatarFrame(profileBtn,profileFrame);profileAdjust.hidden=false;await ssSet('profileAvatar',profileAvatar);announceProfile()}catch(e){alert(e.message||'Could not set profile photo')}};
-(async()=>{const savedServer=await ss('signalServer');const savedRoom=await ss('roomCode');if(savedServer)$('#signalServer').value=savedServer;if(savedRoom)$('#roomCode').value=savedRoom;['signalServer','roomCode'].forEach(id=>$('#'+id).addEventListener('input',()=>ssSet(id==='signalServer'?'signalServer':'roomCode',$('#'+id).value.trim())));const savedVol=await ss('volume');if(savedVol!==null){const v=parseFloat(savedVol);if(v>=0&&v<=1)setCallVolume(Math.round(v*100),false)}const savedFrame=await ss('profileFrame');try{if(savedFrame)profileFrame=normalizeFrame(JSON.parse(savedFrame))}catch{};profileZoom.value=profileFrame.zoom;profileX.value=profileFrame.x;profileY.value=profileFrame.y;const savedAvatar=await ss('profileAvatar');if(validProfileData(savedAvatar)){profileAvatar=savedAvatar;setAvatar(profileBtn,profileAvatar);setAvatarFrame(profileBtn,profileFrame);profileAdjust.hidden=false;announceProfile()}})();
+function updateProfileFrame(sendUpdate=false){profileFrame=normalizeFrame({zoom:profileZoom.value,x:profileX.value,y:profileY.value});renderProfile();ssSet('profileFrame',JSON.stringify(profileFrame));if(sendUpdate)announceProfile()}
+function openSettings(showPhotoEditor=false){connectCard.open=false;settingsPanel.hidden=false;document.body.classList.add('settings-open');syncPanelBackdrop();if(showPhotoEditor){openSettingsTab('profile');profileEditor.hidden=false}}
+$('#openSettings').onclick=()=>openSettings();$('#closeSettings').onclick=closePanels;
+profileBtn.onclick=()=>openSettings(true);profileAdjust.onclick=()=>openSettings(true);settingsChangePhoto.onclick=()=>profileInput.click();settingsAdjustPhoto.onclick=()=>{profileEditor.hidden=!profileEditor.hidden};settingsRemovePhoto.onclick=async()=>{profileAvatar='';renderProfile();profileEditor.hidden=true;await ssSet('profileAvatar',null);await ssSet('profilePhotoMode','none');announceProfile()};profileDone.onclick=()=>{profileEditor.hidden=true;updateProfileFrame(true)};[profileZoom,profileX,profileY].forEach(input=>input.oninput=()=>updateProfileFrame(false));[profileZoom,profileX,profileY].forEach(input=>input.onchange=()=>updateProfileFrame(true));profileInput.onchange=async()=>{const file=profileInput.files?.[0];profileInput.value='';if(!file)return;try{profileAvatar=await resizeProfile(file);renderProfile();await ssSet('profileAvatar',profileAvatar);await ssSet('profilePhotoMode','custom');announceProfile()}catch(e){alert(e.message||'Could not set profile photo')}};
+(async()=>{updateProfileName(await ss('profileName'),{persist:false,share:false})})();displayNameInput.onchange=()=>updateProfileName(displayNameInput.value);
+(async()=>{inputDeviceId=(await ss('inputDevice'))||'default';outputDeviceId=(await ss('outputDevice'))||'default';voiceProcessingEnabled=(await ss('voiceProcessing'))==='on';soundEnabled=(await ss('soundEffects'))!=='off';profileSharing=(await ss('shareProfile'))!=='off';rememberInviteCode=(await ss('rememberInvite'))!=='off';const motion=(await ss('reduceMotion'))==='on';const hardware=(await ss('hardwareAcceleration'))!=='off';if(!rememberInviteCode){signalIn.value='';ssSet('savedInviteCode',null)}voiceProcessing.checked=voiceProcessingEnabled;soundEffects.checked=soundEnabled;shareProfile.checked=profileSharing;rememberInvite.checked=rememberInviteCode;reduceMotion.checked=motion;hardwareAcceleration.checked=hardware;document.documentElement.dataset.reduceMotion=String(motion);hardwareHint.textContent='Hardware acceleration is '+(hardware?'enabled':'disabled')+' for the next start.';await refreshAudioDevices();await applyOutputDevice()})();signalIn.addEventListener('input',()=>{if(!rememberInviteCode)ssSet('savedInviteCode',null)});
+(async()=>{const savedServer=await ss('signalServer');const savedRoom=await ss('roomCode');const savedInvite=await ss('savedInviteCode');if(savedServer)$('#signalServer').value=savedServer;if(savedRoom)$('#roomCode').value=savedRoom;if(typeof savedInvite==='string'&&savedInvite.length<=MAX_SIGNAL_SIZE)signalIn.value=savedInvite;['signalServer','roomCode'].forEach(id=>$('#'+id).addEventListener('input',()=>ssSet(id==='signalServer'?'signalServer':'roomCode',$('#'+id).value.trim())));signalIn.addEventListener('input',()=>ssSet('savedInviteCode',signalIn.value.trim()));const savedVol=await ss('volume');if(savedVol!==null){const v=parseFloat(savedVol);if(v>=0&&v<=1)setCallVolume(Math.round(v*100),false)}const savedFrame=await ss('profileFrame');try{if(savedFrame)profileFrame=normalizeFrame(JSON.parse(savedFrame))}catch{};profileZoom.value=profileFrame.zoom;profileX.value=profileFrame.x;profileY.value=profileFrame.y;const savedAvatar=await ss('profileAvatar');if(validProfileData(savedAvatar)){profileAvatar=savedAvatar;renderProfile();announceProfile()}})();
 // Every installation gets a stable generated look until the owner chooses a
 // photo. The compact identity is only used to derive the avatar color.
-(async()=>{const savedIdentity=await ss('profileIdentity');profileIdentity=validProfileIdentity(savedIdentity)?savedIdentity:makeProfileIdentity();setAvatarIdentity(profileBtn,profileIdentity);if(profileIdentity!==savedIdentity)ssSet('profileIdentity',profileIdentity)})();
+(async()=>{const savedIdentity=await ss('profileIdentity');profileIdentity=validProfileIdentity(savedIdentity)?savedIdentity:makeProfileIdentity();renderProfile();if(profileIdentity!==savedIdentity)ssSet('profileIdentity',profileIdentity)})();
 // On a fresh install, use the person's OS account picture when it is available.
 // This remains local until they pair, and choosing a photo in Pair still wins.
-(async()=>{if(!window.pairEnv?.getSystemAvatar)return;await new Promise(resolve=>setTimeout(resolve,0));if(profileAvatar)return;try{const avatar=await window.pairEnv.getSystemAvatar();if(profileAvatar||!validProfileData(avatar))return;profileAvatar=avatar;setAvatar(profileBtn,profileAvatar);setAvatarFrame(profileBtn,profileFrame);profileAdjust.hidden=false;await ssSet('profileAvatar',profileAvatar);announceProfile()}catch{}})();
+(async()=>{if(!window.pairEnv?.getSystemAvatar)return;await new Promise(resolve=>setTimeout(resolve,0));if(profileAvatar||await ss('profilePhotoMode')==='none')return;try{const avatar=await window.pairEnv.getSystemAvatar();if(profileAvatar||!validProfileData(avatar))return;profileAvatar=avatar;renderProfile();await ssSet('profileAvatar',profileAvatar);await ssSet('profilePhotoMode','system');announceProfile()}catch{}})();
 // Auto-update pulls latest.json directly from GitHub (configured in updater.js),
   // independent of the signaling server. No action needed here.
 
@@ -687,17 +752,27 @@ function clearTransfers(){
 // --- Voice call ---------------------------------------------------------------
 // Start/stop a two-way audio call over the existing peer connection. The audio
 // transceiver was negotiated during setup, so we only attach the mic here.
+async function startLocalTestCall(){
+  callStarting=true;
+  if(micTestStream)stopMicrophoneTest();
+  try{
+    callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
+    localStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints());
+    callActive=true;callStart=Date.now();callBtn.textContent='End call';callBtn.title='End local mic test';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';setParticipant(participantYou,true);playSound('ring');callStatus.textContent='Testing microphone locally';callStatus.className='call-status live';
+    callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);callTimerEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0')},1000);
+  }catch(e){callStatus.textContent='Mic test unavailable';callStatus.className='call-status'}finally{callStarting=false}
+}
 async function startCall(){
   // Guard against re-entry: a second click during getUserMedia or replaceTrack
   // would leak a MediaStream and drive concurrent instances through the state
   // machine. The flag is cleared in the finally block below.
-  if(callActive||!pc||callStarting)return;
+  if(callActive||callStarting)return;if(!pc){if(LOCAL_TEST_MODE)return startLocalTestCall();return}if(micTestStream)stopMicrophoneTest();
   callStarting=true;
   friendLeftNotified=false;
   const gen=callGen;
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
-    localStream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:48000,channelCount:1,echoCancellation:true},video:false});
+    localStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints());
     if(!pc){localStream.getTracks().forEach(t=>t.stop());localStream=null;return}
     const track=localStream.getAudioTracks()[0];
     const allTransceivers=pc.getTransceivers();
@@ -710,7 +785,7 @@ async function startCall(){
     if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
     // Configure Opus for maximum quality — 510 kbps (spec limit), 48 kHz, FEC
-    try{const p=sender.getParameters();if(p&&p.codecs){p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=120;c.ptime=20;if(c.parameters){c.parameters.maxaveragebitrate=510000;c.parameters.maxplaybackrate=48000;c.parameters.useinbandfec=1;c.parameters.stereo=0;c.parameters.spropmaxcapturerate=48000}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
+    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=256000;if(p.codecs)p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=120;c.ptime=20;if(c.parameters){c.parameters.maxaveragebitrate=256000;c.parameters.maxplaybackrate=48000;c.parameters.useinbandfec=1;c.parameters.usedtx=0;c.parameters.cbr=1;c.parameters.stereo=1;c.parameters['sprop-stereo']=1;c.parameters.spropmaxcapturerate=48000}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
     // counter callGen is incremented by every endCall call. If it changed, bail.
@@ -749,7 +824,7 @@ function endCall(silent){
   // permanently killing audio for the session.
   callActive=false;micMuted=false;
   callBtn.textContent='Start call';callBtn.title='Start voice call';muteBtn.hidden=true;volumeSlider.hidden=true;volumeValue.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
-  if(!silent){callBtn.disabled=!pc;try{send({t:'call-end'})}catch{}}
+  if(!silent){callBtn.disabled=!pc&&!LOCAL_TEST_MODE;playSound('leave');try{send({t:'call-end'})}catch{}}
 }
 function toggleMute(){
   if(!localStream)return;
@@ -1054,7 +1129,7 @@ async function stopScreenShare(fromEnd){
   screenBtn.textContent='Share screen';screenBtn.title='Share screen';screenBtn.disabled=!pc;
   if(!fromEnd){screenStatus.textContent='Not sharing';try{send({t:'screen-end'})}catch{};logCallEvent('You stopped screen sharing')}
 }
-screenBtn.onclick=()=>{if(screenActive)stopScreenShare();else startScreenShare()};
+screenBtn.onclick=()=>{if(screenActive)stopScreenShare();else if(!pc&&LOCAL_TEST_MODE){screenStatus.textContent='Pair with a friend to start screen sharing';screenStatus.className='screen-status';}else startScreenShare()};
 screenPreset.onchange=()=>{if(screenActive){stopScreenShare();startScreenShare()}};
 // Screen share audio toggle — on by default, turn off to stop capturing system audio (prevents echo feedback on Windows loopback).
 let screenAudioOn=true;

@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, shell, powerMonitor } = require('electron');
+const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, powerMonitor } = require('electron');
 
 let mainWin = null;
 let pendingSourceId = null;
@@ -8,7 +8,7 @@ let pendingSources = [];
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'profileAvatar', 'profileFrame', 'profileIdentity']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
@@ -74,6 +74,12 @@ ipcMain.on('pair:setPendingSource', (event, id) => { if (isPairRenderer(event) &
 // pre-warming GPU/video paths while Pair is idle; hardware codecs still engage
 // on demand when a call or screen share actually needs them.
 const fs = require('fs');
+// Electron only accepts this before its ready event. Read the tightly scoped
+// local setting early; toggling it in the UI takes effect on restart.
+try {
+  const earlySettings = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
+  if (earlySettings.hardwareAcceleration === 'off') app.disableHardwareAcceleration();
+} catch {}
 // Pair is serverless by default. `server.js` remains available through
 // `npm run signal` for people who deliberately operate their own signaling
 // service, but the desktop app must not silently start a localhost server.
@@ -208,6 +214,7 @@ ipcMain.handle('pair:setSetting', (event, key, value) => {
 // Cross-platform update notifier. Downloads are never launched by the application.
 const { startAutoUpdater, performInstall } = require('./updater');
 ipcMain.on('pair:installUpdate', event => { if (isPairRenderer(event)) performInstall(); });
+ipcMain.on('pair:relaunch', event => { if (isPairRenderer(event)) { app.relaunch(); app.exit(0); } });
 // The update feed is never accepted from renderer or signaling input.
 ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });
 
@@ -219,6 +226,7 @@ function createWindow() {
     minHeight: 680,
     backgroundColor: '#111318',
     title: 'Pair — private P2P chat',
+    autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -227,6 +235,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+  mainWin.setMenuBarVisibility(false);
 
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     try {
@@ -240,6 +249,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   // Needed for the browser File System Access API used to stream large downloads.
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media');

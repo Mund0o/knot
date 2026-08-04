@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('pairEnv', {
   },
   // Updates are always user-initiated downloads; retained for UI compatibility.
   restartForUpdate: () => ipcRenderer.send('pair:installUpdate'),
+  relaunch: () => ipcRenderer.send('pair:relaunch'),
   setFeed: () => {}
 });
 
