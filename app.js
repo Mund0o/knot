@@ -171,7 +171,13 @@ function renderContent(text){
   }).join('');
 }
 function escapeHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-function addMessage(text,mine=false){
+const TEXT_EMOTICONS=[
+  [/:'-?\(/g,'😢'],[/(?:x|X)-?D/g,'😆'],[/(:|=)-?D/g,'😄'],[/(:|=)-?\)/g,'🙂'],[/(:|=)-?\(/g,'🙁'],[/-?;\)/g,'😉'],[/(:|=)-?[pP]/g,'😛'],[/(:|=)-?[oO]/g,'😮'],[/:\//g,'😕'],[/<3/g,'❤️']
+];
+function convertEmoticons(text){return String(text||'').split(/(\s+)/).map(token=>/^https?:\/\//i.test(token)?token:TEXT_EMOTICONS.reduce((value,[pattern,replacement])=>value.replace(pattern,replacement),token)).join('')}
+function chatPayload(text,gif){return JSON.stringify({t:'message',text:String(text||''),gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url}:null})}
+function readChatPayload(value){try{const p=JSON.parse(value);if(p?.t!=='message'||typeof p.text!=='string'||p.text.length>16000)return{text:String(value||''),gif:null};const url=typeof p.gif?.url==='string'&&p.gif.url.length<=4096?safePreviewUrl(p.gif.url):null;return{text:p.text,gif:url?{url,thumb:typeof p.gif.thumb==='string'?p.gif.thumb:url}:null}}catch{return{text:String(value||''),gif:null}}}
+function addMessage(text,mine=false,gif=null){
   $('.empty')?.remove();
   const el=document.createElement('div');el.className='message '+(mine?'mine':'');
   const isEmoji=/^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\u20E3]+$/u.test(text.trim());
@@ -179,8 +185,10 @@ function addMessage(text,mine=false){
   avatar.className='avatar message-avatar';avatar.classList.toggle('has-image',source.classList.contains('has-image'));avatar.style.backgroundImage=source.style.backgroundImage;avatar.style.backgroundSize=source.style.backgroundSize;avatar.style.backgroundPositionX=source.style.backgroundPositionX;avatar.style.backgroundPositionY=source.style.backgroundPositionY;avatar.style.setProperty('--avatar-hue',source.style.getPropertyValue('--avatar-hue'));const letter=document.createElement('span');letter.className='avatar-letter';letter.textContent=name.slice(0,1).toUpperCase()||'?';avatar.append(letter);
   const content=document.createElement('div');content.className='message-content';
   const header=document.createElement('div');header.className='message-header';const sender=document.createElement('strong');sender.textContent=name;const time=document.createElement('time');time.textContent=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});header.append(sender,time);
-  const bubble=document.createElement('div');bubble.className='bubble'+(isEmoji?' emoji-only':'');bubble.innerHTML=renderContent(text);
-  content.append(header,bubble);el.append(avatar,content);messages.append(el);messages.scrollTop=messages.scrollHeight;
+  const bubble=document.createElement('div');bubble.className='bubble'+(isEmoji?' emoji-only':'');bubble.innerHTML=renderContent(text);if(!text)bubble.hidden=true;
+  content.append(header,bubble);
+  if(gif?.url){const attachment=document.createElement('div');attachment.className='gif-attachment-message';const link=document.createElement('a');link.href=gif.url;link.target='_blank';link.rel='noopener noreferrer';const image=document.createElement('img');image.src=gif.url;image.alt='GIF attachment';image.loading='lazy';image.referrerPolicy='no-referrer';link.append(image);attachment.append(link);if(!mine){const id=gif.url;const star=document.createElement('button');star.type='button';star.className='gif-message-favorite'+(getFavs().some(f=>f.id===id)?' on':'');star.textContent=star.classList.contains('on')?'★':'☆';star.title=star.classList.contains('on')?'Remove from favorites':'Save GIF';star.onclick=()=>{const on=toggleFav(id,gif.url,gif.thumb||gif.url,{id,url:gif.url,thumb:gif.thumb||gif.url,type:'gifs'});star.classList.toggle('on',on);star.textContent=on?'★':'☆';star.title=on?'Remove from favorites':'Save GIF'};attachment.append(star)}content.append(attachment)}
+  el.append(avatar,content);messages.append(el);messages.scrollTop=messages.scrollHeight;
 }
 // --- Emoji Picker ------------------------------------------------------------
 const EMOJI_CATS=[
@@ -195,20 +203,21 @@ const EMOJI_CATS=[
   {name:'Symbols',emojis:['❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','💟','☮️','✝️','☪️','🕉','☸️','✡️','🔯','🕎','☯️','☦️','🛐','⛎','♈','♉','♊','♋','♌','♍','♎','♏','♐','♑','♒','♓','🆔','⚛️','🉑','☢️','☣️','📴','📳','🈶','🈚','🈸','🈺','🈷','✴️','🆚','💮','🉐','㊙️','㊗️','🈴','🈵','🈹','🈲','🅰️','🅱️','🆎','🆑','🅾️','🆘','❌','⭕','🛑','⛔','📛','🚫','💢','♨️','🚷','🚯','🚳','🚱','🔞','📵','🚭','❗','❕','❓','❔','‼️','⁉️','🔅','🔆','〽️','⚠️','🚸','🔱','⚜️','🔰','♻️','✅','🈯','💹','❇️','✳️','❎','🌐','💠','Ⓜ️','🌀','💤','🏧','🚾','♿','🅿️','🈳','🈂️','🛂','🛃','🛄','🛅','🛜','🚹','🚺','🚼','⚧','🚻','🚮','🎦','📶','🈁','🔣','🔤','🆡','🆢','🆣','🆤','🆥','🆦','🆧','🆨','🆩','🆪','🆫','🆬','🀄','🃏','🎴','🆒','🆓','🆕','🆖','🆗','🆙']},
   {name:'Flags',emojis:['🏳️','🏴','🏁','🚩','🎌','🏴‍☠️','🇺🇳','🇦🇫','🇦🇱','🇩🇿','🇦🇸','🇦🇩','🇦🇴','🇦🇮','🇦🇶','🇦🇬','🇦🇷','🇦🇲','🇦🇼','🇦🇺','🇦🇹','🇦🇿','🇧🇸','🇧🇭','🇧🇩','🇧🇧','🇧🇾','🇧🇪','🇧🇿','🇧🇯','🇧🇲','🇧🇹','🇧🇴','🇧🇦','🇧🇼','🇧🇷','🇧🇳','🇧🇬','🇧🇫','🇧🇮','🇨🇻','🇰🇭','🇨🇲','🇨🇦','🇨🇫','🇹🇩','🇨🇱','🇨🇳','🇨🇴','🇰🇲','🇨🇩','🇨🇬','🇨🇷','🇨🇮','🇭🇷','🇨🇺','🇨🇾','🇨🇿','🇩🇰','🇩🇯','🇩🇲','🇩🇴','🇪🇨','🇪🇬','🇸🇻','🇬🇶','🇪🇷','🇪🇪','🇸🇿','🇪🇹','🇫🇯','🇫🇮','🇫🇷','🇬🇦','🇬🇲','🇬🇪','🇩🇪','🇬🇭','🇬🇷','🇬🇩','🇬🇹','🇬🇳','🇬🇼','🇬🇾','🇭🇹','🇭🇳','🇭🇺','🇮🇸','🇮🇳','🇮🇩','🇮🇷','🇮🇶','🇮🇪','🇮🇱','🇮🇹','🇯🇲','🇯🇵','🇯🇴','🇰🇿','🇰🇪','🇰🇮','🇰🇼','🇰🇬','🇱🇦','🇱🇻','🇱🇧','🇱🇸','🇱🇷','🇱🇾','🇱🇮','🇱🇹','🇱🇺','🇲🇬','🇲🇼','🇲🇾','🇲🇻','🇲🇱','🇲🇹','🇲🇭','🇲🇷','🇲🇺','🇲🇽','🇫🇲','🇲🇩','🇲🇨','🇲🇳','🇲🇪','🇲🇦','🇲🇿','🇲🇲','🇳🇦','🇳🇷','🇳🇵','🇳🇱','🇳🇿','🇳🇮','🇳🇪','🇳🇬','🇰🇵','🇲🇰','🇳🇴','🇴🇲','🇵🇰','🇵🇼','🇵🇸','🇵🇦','🇵🇬','🇵🇾','🇵🇪','🇵🇭','🇵🇱','🇵🇹','🇶🇦','🇷🇴','🇷🇺','🇷🇼','🇰🇳','🇱🇨','🇻🇨','🇼🇸','🇸🇲','🇸🇹','🇸🇦','🇸🇳','🇷🇸','🇸🇨','🇸🇱','🇸🇬','🇸🇰','🇸🇮','🇸🇧','🇸🇴','🇿🇦','🇰🇷','🇸🇸','🇪🇸','🇱🇰','🇸🇩','🇸🇷','🇸🇪','🇨🇭','🇸🇾','🇹🇼','🇹🇯','🇹🇿','🇹🇭','🇹🇱','🇹🇬','🇹🇴','🇹🇹','🇹🇳','🇹🇷','🇹🇲','🇹🇻','🇺🇬','🇺🇦','🇦🇪','🇬🇧','🇺🇸','🇺🇾','🇺🇿','🇻🇺','🇻🇦','🇻🇪','🇻🇳','🇾🇪','🇿🇲','🇿🇼']}
 ];
-let emojiPicker=null,emojiBtn=null,gifPicker=null,gifBtn=null;
+let emojiPicker=null,emojiBtn=null,gifPicker=null,gifBtn=null,pendingGif=null,gifAttachment=null;
+function setPendingGif(item){pendingGif=item?.url?{url:item.url,thumb:item.thumb||item.url,analytics:item.analytics||null}:null;if(!gifAttachment)return;gifAttachment.hidden=!pendingGif;if(!pendingGif)return;gifAttachment.querySelector('img').src=pendingGif.thumb;gifAttachment.querySelector('.gif-attachment-name').textContent='1 GIF attached';messageInput.focus()}
 function buildEmojiPicker(){
   const wrap=document.createElement('div');wrap.className='emoji-picker';wrap.classList.add('hidden');
   const tabs=document.createElement('div');tabs.className='emoji-tabs';
   const body=document.createElement('div');body.className='emoji-body';
   EMOJI_CATS.forEach((cat,i)=>{
-    const tab=document.createElement('button');tab.className='emoji-tab'+(i===0?' active':'');tab.textContent=cat.emojis[0];tab.title=cat.name;tab.setAttribute('aria-label',cat.name);
+    const tab=document.createElement('button');tab.type='button';tab.className='emoji-tab'+(i===0?' active':'');tab.textContent=cat.emojis[0];tab.title=cat.name;tab.setAttribute('aria-label',cat.name);
     tab.onclick=()=>{body.querySelectorAll('.emoji-page').forEach(p=>p.classList.add('hidden'));body.children[i].classList.remove('hidden');tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));tab.classList.add('active')};
     tabs.append(tab);
     const page=document.createElement('div');page.className='emoji-page';page.classList.toggle('hidden',i!==0);
     const heading=document.createElement('div');heading.className='emoji-category-title';heading.textContent=cat.name;
     const grid=document.createElement('div');grid.className='emoji-grid';
     cat.emojis.forEach(e=>{
-      const btn=document.createElement('button');btn.className='emoji-item';btn.textContent=e;
+      const btn=document.createElement('button');btn.type='button';btn.className='emoji-item';btn.textContent=e;
       btn.onclick=()=>{const inp=messageInput;const s=inp.selectionStart;const v=inp.value;inp.value=v.slice(0,s)+e+v.slice(inp.selectionEnd);inp.selectionStart=inp.selectionEnd=s+e.length;inp.focus();wrap.classList.add('hidden')};
       grid.append(btn);
     });
@@ -223,9 +232,9 @@ function buildEmojiPicker(){
 function buildGifPicker(){
   const wrap=document.createElement('div');wrap.className='gif-picker';wrap.classList.add('hidden');
   const tabs=document.createElement('div');tabs.className='gif-picker-tabs';
-  const gifTab=document.createElement('button');gifTab.className='gif-picker-tab active';gifTab.textContent='GIFs';
-  const stiTab=document.createElement('button');stiTab.className='gif-picker-tab';stiTab.textContent='Stickers';
-  const favTab=document.createElement('button');favTab.className='gif-picker-tab';favTab.textContent='Favs';
+  const gifTab=document.createElement('button');gifTab.type='button';gifTab.className='gif-picker-tab active';gifTab.textContent='GIFs';
+  const stiTab=document.createElement('button');stiTab.type='button';stiTab.className='gif-picker-tab';stiTab.textContent='Stickers';
+  const favTab=document.createElement('button');favTab.type='button';favTab.className='gif-picker-tab';favTab.textContent='Favs';
   tabs.append(gifTab,stiTab,favTab);
   const searchRow=document.createElement('div');searchRow.className='gif-search-row';
   const inp=document.createElement('input');inp.className='gif-search-input';inp.placeholder='Search…';
@@ -302,11 +311,11 @@ function renderFavs(resultsEl){
   resultsEl.innerHTML='';const favs=getFavs();
   if(!favs.length){resultsEl.innerHTML='<span class="gif-hint">No favorites yet</span>';return}
   favs.forEach(f=>{
-    const btn=document.createElement('button');btn.className='gif-result';
+    const btn=document.createElement('button');btn.type='button';btn.className='gif-result';
     const img=document.createElement('img');img.src=f.thumb;img.loading='lazy';
     btn.append(img);
-    btn.onclick=async()=>{const msg=f.url;if(msg&&(sharedKey||LOCAL_TEST_MODE)){if(sharedKey)send({t:'msg',v:await seal(msg)});addMessage(msg,true);const wrap=resultsEl.parentElement;wrap.classList.add('hidden')};analyticsShared(f.type||f)};
-    // Context menu to remove
+    btn.onclick=()=>{if(f.url){setPendingGif({url:f.url,thumb:f.thumb,analytics:f.type||f});resultsEl.parentElement.classList.add('hidden')}};
+    const star=document.createElement('span');star.className='gif-star on';star.textContent='★';star.title='Remove from favorites';star.setAttribute('role','button');star.tabIndex=0;const remove=e=>{e.preventDefault();e.stopPropagation();toggleFav(f.id);renderFavs(resultsEl)};star.onclick=remove;star.onkeydown=e=>{if(e.key==='Enter'||e.key===' ')remove(e)};btn.append(star);
     btn.oncontextmenu=e=>{e.preventDefault();toggleFav(f.id);renderFavs(resultsEl)};
     resultsEl.append(btn);
   });
@@ -338,16 +347,16 @@ function loadMerged(query,resultsEl,type,offset,append){
 
 function renderItem(item,resultsEl){
   if(!item.thumb||!item.fullUrl)return;
-  const btn=document.createElement('button');btn.className='gif-result';
+  const btn=document.createElement('button');btn.type='button';btn.className='gif-result';
   const img=document.createElement('img');img.src=item.thumb;img.loading='lazy';
     // Remove inline aspectRatio — CSS `width:100%;height:auto` preserves natural ratio
     // if(item.thumbW&&item.thumbH){img.style.aspectRatio=item.thumbW+'/'+item.thumbH}
   btn.append(img);
   const isFav=getFavs().some(f=>f.id===item.id);
-  const star=document.createElement('span');star.className='gif-star'+(isFav?' on':'');star.textContent='★';star.title='Favorite';
-  star.onclick=e=>{e.stopPropagation();const on=toggleFav(item.id,item.fullUrl,item.thumb,item);star.classList.toggle('on',on)};
+  const star=document.createElement('span');star.className='gif-star'+(isFav?' on':'');star.textContent=isFav?'★':'☆';star.title=isFav?'Remove favorite':'Add to favorites';star.setAttribute('role','button');star.tabIndex=0;
+  const toggleStar=e=>{e.preventDefault();e.stopPropagation();const on=toggleFav(item.id,item.fullUrl,item.thumb,item);star.classList.toggle('on',on);star.textContent=on?'★':'☆';star.title=on?'Remove favorite':'Add to favorites'};star.onclick=toggleStar;star.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){toggleStar(e)}};
   btn.append(star);
-  btn.onclick=async()=>{if(item.fullUrl&&(sharedKey||LOCAL_TEST_MODE)){if(sharedKey)send({t:'msg',v:await seal(item.fullUrl)});addMessage(item.fullUrl,true);const wrap=resultsEl.parentElement;wrap.classList.add('hidden');const si=wrap.querySelector('.gif-search-input');if(si)si.value='';resultsEl.innerHTML=''};analyticsShared(item)};
+  btn.onclick=()=>{if(item.fullUrl){setPendingGif({url:item.fullUrl,thumb:item.thumb,analytics:item});const wrap=resultsEl.parentElement;wrap.classList.add('hidden');const si=wrap.querySelector('.gif-search-input');if(si)si.value='';resultsEl.innerHTML=''}};
   resultsEl.append(btn);
 }
 // Initialise pickers once sharedKey is set (i.e. after connection).
@@ -356,6 +365,9 @@ function renderItem(item,resultsEl){
   const composer=messageForm;
   const existingBtns=composer.querySelectorAll('button');
   const sendBtn=existingBtns[0];
+  gifAttachment=document.createElement('div');gifAttachment.className='gif-attachment';gifAttachment.hidden=true;gifAttachment.innerHTML='<img alt="GIF attachment" /><span class="gif-attachment-name"></span><button type="button" class="gif-attachment-remove" aria-label="Remove GIF attachment">×</button>';
+  gifAttachment.querySelector('.gif-attachment-remove').onclick=()=>setPendingGif(null);
+  composer.prepend(gifAttachment);
   // Plus button
   const plusWrap=document.createElement('div');plusWrap.style.cssText='position:relative;display:inline-flex';
   const plusBtn=document.createElement('button');plusBtn.type='button';plusBtn.className='composer-btn plus-btn';plusBtn.textContent='+';plusBtn.title='Attach';
@@ -382,7 +394,7 @@ function renderItem(item,resultsEl){
   messageInput.disabled=orig;
 })();
 function isEncryptedMessage(value){return !!value&&Array.isArray(value.iv)&&value.iv.length===12&&Array.isArray(value.data)&&value.data.length>0&&value.data.length<=MAX_MESSAGE_SIZE+32&&value.iv.every(Number.isInteger)&&value.data.every(Number.isInteger)}
-function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>{setStatus('Connected directly',true);announceProfile()};chat.onmessage=async e=>{try{if(typeof e.data!=='string'||e.data.length>MAX_MESSAGE_SIZE*3)return;const o=JSON.parse(e.data);if(o.t==='msg'&&isEncryptedMessage(o.v))addMessage(dec.decode(await open(o.v)));else if(o.t==='profile'){const p=typeof o.v==='string'?{image:o.v}:o.v;if(validProfileIdentity(p?.identity))setAvatarIdentity(friendAvatar,p.identity);if(typeof p?.image==='string'&&p.image.length<=MAX_PROFILE_DATA){setAvatar(friendAvatar,p.image);setAvatarFrame(friendAvatar,p.frame)}}      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
+function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>{setStatus('Connected directly',true);announceProfile()};chat.onmessage=async e=>{try{if(typeof e.data!=='string'||e.data.length>MAX_MESSAGE_SIZE*3)return;const o=JSON.parse(e.data);if(o.t==='msg'&&isEncryptedMessage(o.v)){const message=readChatPayload(dec.decode(await open(o.v)));addMessage(message.text,false,message.gif)}else if(o.t==='profile'){const p=typeof o.v==='string'?{image:o.v}:o.v;if(validProfileIdentity(p?.identity))setAvatarIdentity(friendAvatar,p.identity);if(typeof p?.image==='string'&&p.image.length<=MAX_PROFILE_DATA){setAvatar(friendAvatar,p.image);setAvatarFrame(friendAvatar,p.frame)}}      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
         // call→leave cycle still plays the leave tone instead of going silent.
         friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}else if(o.t==='screen-start'){logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Add name handling once per data channel without disturbing the encrypted
@@ -456,7 +468,7 @@ function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
 $('#createOffer').onclick=async()=>{try{if(pc||signaling)disconnectRoom();role='offer';signalIn.value='';ssSet('savedInviteCode',null);setOutgoingCode('');processSignal.textContent='Finish connection';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Invite ready. Copy it, send it to your friend, then paste their reply in step 2.'}catch(e){pairHint.textContent='Could not create invite: '+(e?.message||e)}};
 processSignal.onclick=async()=>{try{const remote=await cleanSignal(signalIn.value);if(role==='offer'){if(remote.type!=='answer')throw new Error('Paste the reply your friend created, not another invite');await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!await derive(pc._kp,remote.pub))throw new Error('Security code was not confirmed');pairHint.textContent='Connecting directly…'}else if(!role){if(remote.type!=='offer')throw new Error('Paste an invite first, then create its reply');role='answer';setOutgoingCode('');setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!await derive(kp,remote.pub))throw new Error('Security code was not confirmed');const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Reply ready. Copy it and send it back to the person who invited you.';processSignal.textContent='Reply ready'}else pairHint.textContent='Your reply is already ready. Copy it and send it back to your friend.'}catch(e){pairHint.textContent='Could not continue pairing: '+(e?.message||e)}};
 copySignal.onclick=()=>copyOutgoingCode().catch(e=>{pairHint.textContent='Could not copy code: '+(e?.message||e)});
-messageForm.onsubmit=async e=>{e.preventDefault();const v=messageInput.value.trim();if(!v)return;if(!sharedKey){if(LOCAL_TEST_MODE){addMessage(v,true);messageInput.value='';return}return}if(enc.encode(v).byteLength>MAX_MESSAGE_SIZE){pairHint.textContent='Messages are limited to 64 KB.';return}send({t:'msg',v:await seal(v)});addMessage(v,true);messageInput.value=''};
+messageForm.onsubmit=async e=>{e.preventDefault();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE){pairHint.textContent='Messages are limited to 64 KB.';return}if(!sharedKey){if(LOCAL_TEST_MODE){addMessage(text,true,gif);messageInput.value='';setPendingGif(null);return}return}send({t:'msg',v:await seal(payload)});addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics)};
 fileInput.onchange=()=>{const files=[...fileInput.files];fileInput.value='';files.forEach(sendFile);};
 function transfer(name,size,dir){
   const el=document.createElement('div');el.className='transfer';el.innerHTML='<div class="transfer-top"><span class="transfer-name"></span><span class="transfer-status"></span></div><div class="bar"><i></i></div><div class="transfer-stats"><span class="transfer-speed"></span><span class="transfer-eta"></span></div><div class="transfer-peer"></div><div class="transfer-btns"><button class="cancel-btn text-button" hidden>Cancel</button><button class="retry-btn primary" hidden>Retry</button></div>';
@@ -604,7 +616,19 @@ enableLocalTestControls();
 
 async function ss(key){if(window.pairSettings){try{return await window.pairSettings.get(key)}catch{}}try{return localStorage.getItem('pair.'+key)}catch{}}
 async function ssSet(key,val){if(window.pairSettings){try{await window.pairSettings.set(key,val);return}catch{}}try{if(val==null)localStorage.removeItem('pair.'+key);else localStorage.setItem('pair.'+key,val)}catch{}}
+let screenCursor='always',screenContentHint='motion',screenBitrateMbps=20,screenCodec='auto',shareResolution=1080,shareFrameRate=30;
 function openSettingsTab(name){document.querySelectorAll('.settings-tab').forEach(tab=>{const active=tab.dataset.settingsTab===name;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active))});document.querySelectorAll('.settings-page').forEach(page=>{const active=page.dataset.settingsPage===name;page.classList.toggle('active',active);page.hidden=!active})}
+function addScreenShareSettings(){
+  const tab=document.createElement('button');tab.type='button';tab.className='settings-tab';tab.dataset.settingsTab='screen';tab.setAttribute('role','tab');tab.setAttribute('aria-selected','false');tab.textContent='Screen sharing';
+  const page=document.createElement('section');page.className='settings-section settings-page';page.dataset.settingsPage='screen';page.setAttribute('role','tabpanel');page.hidden=true;
+  page.innerHTML='<div><h3>Screen sharing</h3><p>Set your preferred capture behavior before starting a share. Changes apply to your next share.</p></div><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">20 Mbps</output></span><input id="screenBitrateSetting" type="range" min="2" max="120" value="20" step="1" /></label><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic (recommended)</option><option value="H264">H.264</option><option value="H265">H.265 / HEVC</option><option value="VP9">VP9</option><option value="AV1">AV1</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — games and video</option><option value="detail">Detail — text and documents</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Codec support depends on both devices. Automatic is the most compatible choice.</p>';
+  document.querySelector('.settings-tabs').append(tab);document.querySelector('.settings-pages').append(page);tab.onclick=()=>openSettingsTab('screen');
+  const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),codec=$('#screenCodecSetting'),contentHint=$('#screenContentHintSetting'),cursor=$('#screenCursorSetting');
+  const updateBitrate=()=>{screenBitrateMbps=Math.max(2,Math.min(120,Number(bitrate.value)||20));bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';ssSet('screenBitrate',String(screenBitrateMbps))};
+  bitrate.oninput=updateBitrate;codec.onchange=()=>{screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};
+  return async()=>{const b=Number(await ss('screenBitrate'));screenBitrateMbps=Number.isFinite(b)&&b>=2&&b<=120?b:20;bitrate.value=String(screenBitrateMbps);bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';const v=await ss('screenCodec');screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(v)?v:'auto';codec.value=screenCodec;const c=await ss('screenCursor');screenCursor=['always','motion','never'].includes(c)?c:'always';cursor.value=screenCursor;const h=await ss('screenContentHint');screenContentHint=h==='detail'?'detail':'motion';contentHint.value=screenContentHint};
+}
+const restoreScreenShareSettings=addScreenShareSettings();
 document.querySelectorAll('.settings-tab').forEach(tab=>tab.onclick=()=>openSettingsTab(tab.dataset.settingsTab));
 function makeDeviceOption(value,label){const option=document.createElement('option');option.value=value;option.textContent=label;return option}
 async function refreshAudioDevices(){try{const devices=await navigator.mediaDevices.enumerateDevices();const inputs=devices.filter(device=>device.kind==='audioinput'),outputs=devices.filter(device=>device.kind==='audiooutput');inputDevice.replaceChildren(makeDeviceOption('default','System default'));outputDevice.replaceChildren(makeDeviceOption('default','System default'));inputs.forEach((device,index)=>inputDevice.append(makeDeviceOption(device.deviceId,device.label||'Microphone '+(index+1))));outputs.forEach((device,index)=>outputDevice.append(makeDeviceOption(device.deviceId,device.label||'Speaker '+(index+1))));inputDevice.value=[...inputDevice.options].some(option=>option.value===inputDeviceId)?inputDeviceId:'default';outputDevice.value=[...outputDevice.options].some(option=>option.value===outputDeviceId)?outputDeviceId:'default';deviceHint.textContent=(inputs.length||outputs.length)?'Device list updated.':'Connect or allow a microphone to reveal device names.'}catch{deviceHint.textContent='Pair could not read audio devices yet.'}}
@@ -644,7 +668,7 @@ function openSettings(showPhotoEditor=false){connectCard.open=false;settingsPane
 $('#openSettings').onclick=()=>openSettings();$('#closeSettings').onclick=closePanels;
 profileBtn.onclick=()=>openSettings(true);profileAdjust.onclick=()=>openSettings(true);settingsChangePhoto.onclick=()=>profileInput.click();settingsAdjustPhoto.onclick=()=>{profileEditor.hidden=!profileEditor.hidden};settingsRemovePhoto.onclick=async()=>{profileAvatar='';renderProfile();profileEditor.hidden=true;await ssSet('profileAvatar',null);await ssSet('profilePhotoMode','none');announceProfile()};profileDone.onclick=()=>{profileEditor.hidden=true;updateProfileFrame(true)};[profileZoom,profileX,profileY].forEach(input=>input.oninput=()=>updateProfileFrame(false));[profileZoom,profileX,profileY].forEach(input=>input.onchange=()=>updateProfileFrame(true));profileInput.onchange=async()=>{const file=profileInput.files?.[0];profileInput.value='';if(!file)return;try{profileAvatar=await resizeProfile(file);renderProfile();await ssSet('profileAvatar',profileAvatar);await ssSet('profilePhotoMode','custom');announceProfile()}catch(e){alert(e.message||'Could not set profile photo')}};
 (async()=>{updateProfileName(await ss('profileName'),{persist:false,share:false})})();displayNameInput.onchange=()=>updateProfileName(displayNameInput.value);
-(async()=>{inputDeviceId=(await ss('inputDevice'))||'default';outputDeviceId=(await ss('outputDevice'))||'default';voiceProcessingEnabled=(await ss('voiceProcessing'))==='on';soundEnabled=(await ss('soundEffects'))!=='off';profileSharing=(await ss('shareProfile'))!=='off';rememberInviteCode=(await ss('rememberInvite'))!=='off';const motion=(await ss('reduceMotion'))==='on';const hardware=(await ss('hardwareAcceleration'))!=='off';if(!rememberInviteCode){signalIn.value='';ssSet('savedInviteCode',null)}voiceProcessing.checked=voiceProcessingEnabled;soundEffects.checked=soundEnabled;shareProfile.checked=profileSharing;rememberInvite.checked=rememberInviteCode;reduceMotion.checked=motion;hardwareAcceleration.checked=hardware;document.documentElement.dataset.reduceMotion=String(motion);hardwareHint.textContent='Hardware acceleration is '+(hardware?'enabled':'disabled')+' for the next start.';await refreshAudioDevices();await applyOutputDevice()})();signalIn.addEventListener('input',()=>{if(!rememberInviteCode)ssSet('savedInviteCode',null)});
+(async()=>{inputDeviceId=(await ss('inputDevice'))||'default';outputDeviceId=(await ss('outputDevice'))||'default';voiceProcessingEnabled=(await ss('voiceProcessing'))==='on';soundEnabled=(await ss('soundEffects'))!=='off';profileSharing=(await ss('shareProfile'))!=='off';rememberInviteCode=(await ss('rememberInvite'))!=='off';const motion=(await ss('reduceMotion'))==='on';const hardware=(await ss('hardwareAcceleration'))!=='off';if(!rememberInviteCode){signalIn.value='';ssSet('savedInviteCode',null)}voiceProcessing.checked=voiceProcessingEnabled;soundEffects.checked=soundEnabled;shareProfile.checked=profileSharing;rememberInvite.checked=rememberInviteCode;reduceMotion.checked=motion;hardwareAcceleration.checked=hardware;document.documentElement.dataset.reduceMotion=String(motion);hardwareHint.textContent='Hardware acceleration is '+(hardware?'enabled':'disabled')+' for the next start.';await restoreScreenShareSettings();await refreshAudioDevices();await applyOutputDevice()})();signalIn.addEventListener('input',()=>{if(!rememberInviteCode)ssSet('savedInviteCode',null)});
 (async()=>{const savedServer=await ss('signalServer');const savedRoom=await ss('roomCode');const savedInvite=await ss('savedInviteCode');if(savedServer)$('#signalServer').value=savedServer;if(savedRoom)$('#roomCode').value=savedRoom;if(typeof savedInvite==='string'&&savedInvite.length<=MAX_SIGNAL_SIZE)signalIn.value=savedInvite;['signalServer','roomCode'].forEach(id=>$('#'+id).addEventListener('input',()=>ssSet(id==='signalServer'?'signalServer':'roomCode',$('#'+id).value.trim())));signalIn.addEventListener('input',()=>ssSet('savedInviteCode',signalIn.value.trim()));const savedVol=await ss('volume');if(savedVol!==null){const v=parseFloat(savedVol);if(v>=0&&v<=1)setCallVolume(Math.round(v*100),false)}const savedFrame=await ss('profileFrame');try{if(savedFrame)profileFrame=normalizeFrame(JSON.parse(savedFrame))}catch{};profileZoom.value=profileFrame.zoom;profileX.value=profileFrame.x;profileY.value=profileFrame.y;const savedAvatar=await ss('profileAvatar');if(validProfileData(savedAvatar)){profileAvatar=savedAvatar;renderProfile();announceProfile()}})();
 // Every installation gets a stable generated look until the owner chooses a
 // photo. The compact identity is only used to derive the avatar color.
@@ -1052,9 +1076,10 @@ async function startScreenShare(){
     const id=await new Promise(resolve=>{
       const o=document.createElement('div');o.className='screen-source-modal';
       const b=document.createElement('div');b.className='screen-source-dialog';
-      b.innerHTML='<h3>Select what to share</h3>';
+      b.innerHTML='<h3>Select what to share</h3><div class="share-start-options"><label>Resolution<select id="shareResolution"><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select></label><label>Frame rate<select id="shareFrameRate"><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></label><label class="share-audio-option"><input id="shareSystemAudio" type="checkbox" checked /> Share system audio</label></div>';
+      const resolution=b.querySelector('#shareResolution'),frameRate=b.querySelector('#shareFrameRate'),audio=b.querySelector('#shareSystemAudio');resolution.value=String(shareResolution);frameRate.value=String(shareFrameRate);audio.checked=screenAudioOn;
       const g=document.createElement('div');g.className='screen-source-grid';
-      sources.forEach(s=>{const btn=document.createElement('button');btn.className='screen-source-option';const img=document.createElement('img');img.src=s.thumbnail;img.alt='';const name=document.createElement('span');name.textContent=s.name;btn.append(img,name);btn.onclick=()=>{resolve(s.id);o.remove()};g.appendChild(btn)});
+      sources.forEach(s=>{const btn=document.createElement('button');btn.type='button';btn.className='screen-source-option';const img=document.createElement('img');img.src=s.thumbnail;img.alt='';const name=document.createElement('span');name.textContent=s.name;btn.append(img,name);btn.onclick=()=>{shareResolution=Number(resolution.value)||1080;shareFrameRate=Number(frameRate.value)||30;screenAudioOn=audio.checked;resolve(s.id);o.remove()};g.appendChild(btn)});
       const c=document.createElement('button');c.className='screen-source-cancel';c.textContent='Cancel';c.onclick=()=>{resolve(null);o.remove()};
       b.appendChild(g);b.appendChild(c);o.appendChild(b);document.body.appendChild(o);
     });
@@ -1062,9 +1087,9 @@ async function startScreenShare(){
     window.pairEnv.setPendingSource(id);
   }
   try{
-    const preset=SCREEN_PRESETS[screenPreset.value];
-    const v=preset?{...preset}:{width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:30,max:30}};
-    v.cursor='always';
+    const heights={720:720,1080:1080,1440:1440,2160:2160},height=heights[shareResolution]||1080,width=Math.round(height*16/9),fps=shareFrameRate===60?60:30;
+    const v={width:{ideal:width,max:width},height:{ideal:height,max:height},frameRate:{ideal:fps,max:fps}};
+    v.cursor=screenCursor;
     const constraints={video:v};
     constraints.audio=screenAudioOn?{echoCancellation:true,autoGainControl:false,noiseSuppression:false}:false;
     const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
@@ -1074,7 +1099,7 @@ async function startScreenShare(){
     if(!track){stream.getTracks().forEach(t=>t.stop());return}
     // Desktop capture defaults to text/detail on some Chromium builds. Motion
     // tells the encoder to preserve changing game/action content instead.
-    try{track.contentHint='motion'}catch{}
+    try{track.contentHint=screenContentHint}catch{}
     // Add the video track
     let sender;
     try{sender=pc.addTrack(track,stream);screenSenders=[sender]}catch{stream.getTracks().forEach(t=>t.stop());return}
@@ -1095,8 +1120,8 @@ async function startScreenShare(){
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const cs=['video/AV1','video/H265','video/H264','video/VP9','video/VP8'].map(mt=>caps.codecs.find(c=>c.mimeType===mt)).filter(Boolean);if(cs.length){tr.setCodecPreferences(cs);console.log('[VIDEO] codec preference:',cs.map(c=>c.mimeType+' '+c.sdpFmtpLine?.slice(0,20)).join(', '))}else console.warn('[VIDEO] no codecs match')}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
-    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const preset=screenPreset.value;const maxBitrate={'480p30':4000000,'720p30':10000000,'720p60':18000000,'1080p30':20000000,'1080p60':32000000,'1440p60':50000000,'4k60':120000000}[preset]||20000000;p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=SCREEN_PRESETS[preset]?.frameRate?.max||30;p.degradationPreference='maintain-resolution';await sender.setParameters(p);console.log('[VIDEO] bitrate='+(maxBitrate/1e6)+'Mbps maintain-resolution')}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const names=screenCodec==='auto'?['AV1','H265','H264','VP9','VP8']:[screenCodec,'H264','VP9','VP8'];const cs=names.map(name=>caps.codecs.find(c=>c.mimeType===`video/${name}`)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
+    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const preset=screenPreset.value;const maxBitrate=Math.round(Math.max(2,Math.min(120,screenBitrateMbps))*1000000);p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=SCREEN_PRESETS[preset]?.frameRate?.max||30;p.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(p);console.log('[VIDEO] bitrate='+(maxBitrate/1e6)+'Mbps '+p.degradationPreference)}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
     if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
