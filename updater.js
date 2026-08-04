@@ -13,7 +13,10 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
-const DEFAULT_FEED = 'https://raw.githubusercontent.com/Mund0o/pair/master/public';
+// The Contents API follows the current Git branch immediately. GitHub's raw
+// CDN can serve an older latest.json for several minutes after a release,
+// making an otherwise valid Windows update look like "no update".
+const DEFAULT_FEED = 'https://api.github.com/repos/Mund0o/pair/contents/public/latest.json?ref=master';
 const CHECK_INTERVAL = 30 * 60 * 1000;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_UPDATE_BYTES = 4 * 1024 * 1024 * 1024;
@@ -91,6 +94,15 @@ async function fetchText(url, depth = 0) {
     response.on('error', reject);
   });
   return result.redirect ? fetchText(result.redirect, depth + 1) : result.text;
+}
+
+async function fetchManifest(feedUrl) {
+  const url = feedUrl.includes('/contents/public/latest.json') ? feedUrl : `${feedUrl.replace(/\/$/, '')}/latest.json`;
+  const text = await fetchText(url);
+  if (!url.startsWith('https://api.github.com/')) return JSON.parse(text);
+  const envelope = JSON.parse(text);
+  if (envelope?.encoding !== 'base64' || typeof envelope.content !== 'string') throw new Error('invalid GitHub update manifest');
+  return JSON.parse(Buffer.from(envelope.content.replace(/\s/g, ''), 'base64').toString('utf8'));
 }
 
 async function download(url, output, expectedHash, onProgress, depth = 0) {
@@ -243,7 +255,7 @@ async function checkOnce(feedUrl) {
   checking = true;
   report('checking', 'Checking for updates…');
   try {
-    const manifest = JSON.parse(await fetchText(`${feedUrl.replace(/\/$/, '')}/latest.json`));
+    const manifest = await fetchManifest(feedUrl);
     if (!isNewer(app.getVersion(), manifest.version)) { report('current', `Pair ${app.getVersion()} is up to date.`); return; }
     console.log(`[updater] installing Pair ${manifest.version}`);
     report('available', `Update found: Pair ${manifest.version}. Preparing download…`, { version: manifest.version });
