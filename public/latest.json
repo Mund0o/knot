@@ -1,10 +1,10 @@
 {
-  "version": "1.0.97",
-  "notes": "Discord-style screen sharing, push to talk, and fixed screen-share audio without echoing Pair audio.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.97/pair-p2p-1.0.97.tar.gz",
-  "linuxSha256": "c08dd0f6d29d753f8878a81650130e4814fbe04e376eee91dbff2abc98e2252b",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.97/Pair-1.0.97.AppImage",
-  "linuxAppImageSha256": "774e3792e71efa1f5e9fb5257416d34b756485a76edbb363259f51a03b63b438",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.97/Pair.Setup.1.0.97.exe",
-  "winSha256": "7a3398bd57773813959e6eb652ca2d176a82796b5562e544351325c1588721af"
+  "version": "1.0.98",
+  "notes": "Shows the running Pair version in the window title bar.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.98/pair-p2p-1.0.98.tar.gz",
+  "linuxSha256": "d7ed1fdd45d13782967fd651a5b6d231732532e5fb1d3944fac08f38bccd947f",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.98/Pair-1.0.98.AppImage",
+  "linuxAppImageSha256": "01705382896155d874ce6881b7b478587f8d19764a6ccf9cc3f291b88ae15dd6",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.98/Pair.Setup.1.0.98.exe",
+  "winSha256": "5e70c4fe64a246275f3683e25e44fa6661e1a3fa5774d43942a9c0da1becab58"
 }
