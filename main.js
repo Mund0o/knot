@@ -220,13 +220,14 @@ ipcMain.on('pair:relaunch', event => { if (isPairRenderer(event)) { app.relaunch
 ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });
 
 function createWindow() {
+  const windowTitle = `Pair ${app.getVersion()} — private P2P chat`;
   mainWin = new BrowserWindow({
     width: 1180,
     height: 820,
     minWidth: 860,
     minHeight: 680,
     backgroundColor: '#111318',
-    title: `Pair ${app.getVersion()} — private P2P chat`,
+    title: windowTitle,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -236,6 +237,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     }
   });
+  // The document's <title> is updated after load on Linux and would otherwise
+  // replace the versioned native title bar text.
+  mainWin.on('page-title-updated', event => { event.preventDefault(); mainWin?.setTitle(windowTitle); });
+  mainWin.webContents.on('did-finish-load', () => mainWin?.setTitle(windowTitle));
   mainWin.setMenuBarVisibility(false);
 
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
