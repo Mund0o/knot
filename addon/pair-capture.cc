@@ -3,6 +3,8 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include <audioclientactivationparams.h>
+#include <propvarutil.h>
 #include <vector>
 #include <mutex>
 #include <thread>
@@ -11,6 +13,41 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+
+// Windows process loopback lets us capture the system mix while excluding
+// Pair's process tree. This is the same class of capture Discord uses to keep
+// its own voice playback out of a stream. It needs Windows 10 build 20348+.
+struct ActivationState {
+  HANDLE event=nullptr;
+  HRESULT result=E_FAIL;
+  IAudioClient* client=nullptr;
+};
+
+class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler, public IAgileObject {
+  std::atomic<ULONG> refs{1};
+  ActivationState* state;
+public:
+  explicit ActivationHandler(ActivationState* s):state(s){}
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+    if(!out)return E_POINTER;
+    *out=nullptr;
+    if(iid==__uuidof(IUnknown)||iid==__uuidof(IActivateAudioInterfaceCompletionHandler)) *out=static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
+    else if(iid==__uuidof(IAgileObject)) *out=static_cast<IAgileObject*>(this);
+    else return E_NOINTERFACE;
+    AddRef();return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override{return ++refs;}
+  ULONG STDMETHODCALLTYPE Release() override{ULONG n=--refs;if(!n)delete this;return n;}
+  HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation) override {
+    HRESULT activation=E_FAIL;IUnknown* unknown=nullptr;
+    HRESULT hr=operation?operation->GetActivateResult(&activation,&unknown):E_POINTER;
+    if(SUCCEEDED(hr)&&SUCCEEDED(activation)&&unknown) hr=unknown->QueryInterface(__uuidof(IAudioClient),(void**)&state->client);
+    if(unknown)unknown->Release();
+    state->result=FAILED(hr)?hr:activation;
+    SetEvent(state->event);
+    return S_OK;
+  }
+};
 
 class Capture {
 public:
@@ -29,6 +66,7 @@ public:
   WAVEFORMATEX* mixFormat=nullptr;
   UINT32 bufFrames=0;
   HANDLE captureEvent=nullptr;
+  bool comInitialized=false;
   std::thread captureThread;
   Napi::ThreadSafeFunction dataCb,errCb;
 
@@ -79,18 +117,41 @@ public:
 
 private:
   HRESULT initWasapi(){
-    HRESULT hr;
-    hr=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-    if(FAILED(hr))return hr;
-    hr=CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,__uuidof(IMMDeviceEnumerator),(void**)&enumerator);
-    if(FAILED(hr))return hr;
-    hr=enumerator->GetDefaultAudioEndpoint(eRender,eConsole,&device);
-    if(FAILED(hr))return hr;
-    hr=device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,(void**)&audioClient);
-    if(FAILED(hr))return hr;
-    hr=audioClient->GetMixFormat(&mixFormat);
-    if(FAILED(hr))return hr;
-    hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_EVENTCALLBACK,0,0,mixFormat,nullptr);
+    HRESULT hr=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    if(SUCCEEDED(hr))comInitialized=true;
+    else if(hr!=RPC_E_CHANGED_MODE)return hr;
+
+    // Capture every Windows render stream except Pair and its child processes.
+    // Unlike endpoint loopback, this does not need an audio-device selection
+    // and therefore cannot feed the remote caller's Pair audio back to them.
+    ActivationState state;
+    state.event=CreateEvent(nullptr,FALSE,FALSE,nullptr);
+    if(!state.event)return HRESULT_FROM_WIN32(GetLastError());
+    AUDIOCLIENT_ACTIVATION_PARAMS params={};
+    params.ActivationType=AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+    params.ProcessLoopbackParams.TargetProcessId=GetCurrentProcessId();
+    params.ProcessLoopbackParams.ProcessLoopbackMode=PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
+    PROPVARIANT prop={};
+    prop.vt=VT_BLOB;prop.blob.cbSize=sizeof(params);prop.blob.pBlobData=(BYTE*)&params;
+    auto* handler=new ActivationHandler(&state);
+    IActivateAudioInterfaceAsyncOperation* operation=nullptr;
+    hr=ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,__uuidof(IAudioClient),&prop,handler,&operation);
+    if(FAILED(hr)){handler->Release();CloseHandle(state.event);return hr;}
+    WaitForSingleObject(state.event,INFINITE);
+    if(operation)operation->Release();
+    handler->Release();CloseHandle(state.event);
+    if(FAILED(state.result))return state.result;
+    audioClient=state.client;
+
+    // Request a predictable PCM format. Windows converts the process mix for
+    // us, which keeps the Node bridge's real-time samples simple and stable.
+    auto* requested=(WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
+    if(!requested)return E_OUTOFMEMORY;
+    ZeroMemory(requested,sizeof(WAVEFORMATEX));
+    requested->wFormatTag=WAVE_FORMAT_PCM;requested->nChannels=2;requested->nSamplesPerSec=48000;requested->wBitsPerSample=16;
+    requested->nBlockAlign=requested->nChannels*requested->wBitsPerSample/8;requested->nAvgBytesPerSec=requested->nSamplesPerSec*requested->nBlockAlign;
+    mixFormat=requested;
+    hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,0,0,mixFormat,nullptr);
     if(FAILED(hr))return hr;
     hr=audioClient->GetBufferSize(&bufFrames);
     if(FAILED(hr))return hr;
@@ -225,7 +286,7 @@ private:
     if(mixFormat)CoTaskMemFree(mixFormat);
     if(device)device->Release();
     if(enumerator)enumerator->Release();
-    CoUninitialize();
+    if(comInitialized)CoUninitialize();
   }
 };
 
