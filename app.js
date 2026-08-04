@@ -402,7 +402,7 @@ function renderItem(item,resultsEl){
 function isEncryptedMessage(value){return !!value&&Array.isArray(value.iv)&&value.iv.length===12&&Array.isArray(value.data)&&value.data.length>0&&value.data.length<=MAX_MESSAGE_SIZE+32&&value.iv.every(Number.isInteger)&&value.data.every(Number.isInteger)}
 function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>{setStatus('Connected directly',true);announceProfile()};chat.onmessage=async e=>{try{if(typeof e.data!=='string'||e.data.length>MAX_MESSAGE_SIZE*3)return;const o=JSON.parse(e.data);if(o.t==='msg'&&isEncryptedMessage(o.v)){const message=readChatPayload(dec.decode(await open(o.v)));addMessage(message.text,false,message.gif)}else if(o.t==='profile'){const p=typeof o.v==='string'?{image:o.v}:o.v;if(validProfileIdentity(p?.identity))setAvatarIdentity(friendAvatar,p.identity);if(typeof p?.image==='string'&&p.image.length<=MAX_PROFILE_DATA){setAvatar(friendAvatar,p.image);setAvatarFrame(friendAvatar,p.frame)}}      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
         // call→leave cycle still plays the leave tone instead of going silent.
-        friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}else if(o.t==='screen-start'){remoteScreenExpected=true;logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){remoteScreenExpected=false;logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}}catch{}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
+        friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';endCall(true)}else if(o.t==='screen-start'){remoteScreenExpected=true;logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){remoteScreenExpected=false;logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}else if(o.t==='reneg-offer'&&typeof o.sdp==='string'&&pc){if(renegPending){renegotiating++;renegPending=false}await pc.setRemoteDescription({type:'offer',sdp:o.sdp});const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();send({t:'reneg-answer',sdp:pc.localDescription.sdp});}else if(o.t==='reneg-answer'&&typeof o.sdp==='string'&&pc){await pc.setRemoteDescription({type:'answer',sdp:o.sdp});}}catch(e){console.warn('direct renegotiation error',e)}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Add name handling once per data channel without disturbing the encrypted
 // message/profile handler above. This also covers the channel received by the
 // answering peer through `ondatachannel`.
@@ -883,7 +883,7 @@ let renegotiating=0;
 // insisting on its own); the host wins. role is deterministic across peers.
 let renegPending=false;
 async function renegotiate(){
-  if(!signaling||!pc)return;
+  if(!pc||(!signaling&&chat?.readyState!=='open'))return;
   const myId=++renegotiating;
   renegPending=true;
   try{
@@ -892,8 +892,10 @@ async function renegotiate(){
     await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});
     if(!pc||myId!==renegotiating){renegPending=false;return}
     await waitIce();
-    if(!signaling||myId!==renegotiating){renegPending=false;return}
-    signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:pc.localDescription.sdp}}));
+    if(myId!==renegotiating){renegPending=false;return}
+    if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:pc.localDescription.sdp}}));
+    else if(chat?.readyState==='open')send({t:'reneg-offer',sdp:pc.localDescription.sdp});
+    else{renegPending=false;return}
   }catch(e){console.warn('renegotiate error',e)}
   renegPending=false;
 }
