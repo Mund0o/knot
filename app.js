@@ -788,7 +788,7 @@ async function startLocalTestCall(){
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints());
-    callActive=true;callStart=Date.now();callBtn.textContent='End call';callBtn.title='End local mic test';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';setParticipant(participantYou,true);playSound('ring');callStatus.textContent='Testing microphone locally';callStatus.className='call-status live';
+    callActive=true;callStart=Date.now();callBtn.textContent='End call';callBtn.title='End local mic test';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';applyMicTransmission();setParticipant(participantYou,true);playSound('ring');callStatus.textContent='Testing microphone locally';callStatus.className='call-status live';
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);callTimerEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0')},1000);
   }catch(e){callStatus.textContent='Mic test unavailable';callStatus.className='call-status'}finally{callStarting=false}
 }
