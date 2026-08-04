@@ -1,5 +1,24 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+function turnServersFromEnvironment() {
+  try {
+    const config = JSON.parse(process.env.PAIR_TURN || '[]');
+    if (!Array.isArray(config)) return [];
+    return config.slice(0, 8).flatMap(item => {
+      if (!item || typeof item !== 'object') return [];
+      const urls = (Array.isArray(item.urls) ? item.urls : [item.urls])
+        .filter(url => typeof url === 'string' && /^(?:stun|turn|turns):[^\s]+$/i.test(url));
+      if (!urls.length) return [];
+      const server = { urls };
+      if (typeof item.username === 'string' && item.username.length <= 512) server.username = item.username;
+      if (typeof item.credential === 'string' && item.credential.length <= 1024) server.credential = item.credential;
+      return [server];
+    });
+  } catch {
+    return [];
+  }
+}
+
 // Minimal, audited bridge for streaming an incoming file to disk.
 // The renderer is sandboxed, so it cannot touch `fs` directly — only these
 // four methods are exposed, and each round-trips to main.js over IPC.
@@ -22,11 +41,13 @@ contextBridge.exposeInMainWorld('pairSettings', {
 });
 
 // Read-only environment info + auto-update surface. `platform` lets the
-// renderer branch its update UX (Win = auto-install, Linux = download link).
+// renderer label platform-specific update links without exposing Node APIs.
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
   isApp: true,
+  iceServers: turnServersFromEnvironment(),
   toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
+  getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),
   getSources: () => ipcRenderer.invoke('pair:getSources'),
   setPendingSource: id => ipcRenderer.send('pair:setPendingSource', id),
   // Called once with a callback that fires when an update is available.
@@ -36,7 +57,7 @@ contextBridge.exposeInMainWorld('pairEnv', {
     ipcRenderer.on('update-available', listener);
     return () => ipcRenderer.removeListener('update-available', listener);
   },
-  // Linux builds never auto-install updates; retained only for UI compatibility.
+  // Updates are always user-initiated downloads; retained for UI compatibility.
   restartForUpdate: () => ipcRenderer.send('pair:installUpdate'),
   setFeed: () => {}
 });

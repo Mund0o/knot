@@ -1,4 +1,4 @@
-// Linux update notifier. It never downloads or launches software itself.
+// Cross-platform update notifier. It never downloads or launches software itself.
 // A release manifest is accepted only from HTTPS and must provide a SHA-256
 // checksum that the download page can show to the user for verification.
 const { app, BrowserWindow } = require('electron');
@@ -43,17 +43,25 @@ async function checkOnce(feedUrl) {
   checking = true;
   try {
     const manifest = JSON.parse(await fetchText(feedUrl.replace(/\/$/, '') + '/latest.json'));
-    const url = httpsUrl(manifest.linuxUrl);
-    if (!isNewer(app.getVersion(), manifest.version) || !url || !/^[a-f0-9]{64}$/i.test(String(manifest.linuxSha256 || ''))) return;
+    const platform = process.platform === 'win32' ? 'win' : 'linux';
+    const url = httpsUrl(manifest[`${platform}Url`]);
+    const sha256 = String(manifest[`${platform}Sha256`] || '');
+    if (!isNewer(app.getVersion(), manifest.version) || !url || !/^[a-f0-9]{64}$/i.test(sha256)) return;
     const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-    if (win) win.webContents.send('update-available', { platform: 'linux', version: String(manifest.version), notes: String(manifest.notes || ''), url, sha256: manifest.linuxSha256.toLowerCase(), stage: 'link' });
+    if (win) win.webContents.send('update-available', { platform, version: String(manifest.version), notes: String(manifest.notes || ''), url, sha256: sha256.toLowerCase(), stage: 'link' });
   } catch (e) { console.log('[updater] check failed:', e.message); } finally { checking = false; }
 }
-function startAutoUpdater() {
+function startAutoUpdater({ isSystemIdle = () => false } = {}) {
   const feed = readFeedUrl();
   if (initialTimer) clearTimeout(initialTimer); if (timer) clearInterval(timer);
-  initialTimer = setTimeout(() => checkOnce(feed), 4000);
-  timer = setInterval(() => checkOnce(feed), CHECK_INTERVAL);
+  // Checking a manifest is optional background work. Skip it while the OS is
+  // idle instead of creating network traffic or waking a radio/CPU.
+  const checkWhenActive = () => { if (!isSystemIdle()) checkOnce(feed); };
+  initialTimer = setTimeout(checkWhenActive, 4000);
+  timer = setInterval(checkWhenActive, CHECK_INTERVAL);
+  // These timers must never keep the app process alive by themselves.
+  initialTimer.unref?.();
+  timer.unref?.();
 }
 function performInstall() {} // Linux builds are deliberately never self-installed.
 module.exports = { startAutoUpdater, performInstall };

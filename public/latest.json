@@ -1,6 +1,8 @@
 {
-  "version": "1.0.85",
-  "notes": "Modern unified UI, improved YouTube and mixed GIPHY/Klipy GIF search, plus call and screen-share quality improvements.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.85/pair-p2p-1.0.85.tar.gz",
-  "linuxSha256": "15cdbf2e8b04fffff764ecbbbf3b60da5afde962707779d1c09b8b859f1be9a3"
+  "version": "1.0.90",
+  "notes": "Simplified serverless pairing with a cleaner two-step flow and compact private invite/reply codes.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.90/pair-p2p-1.0.90.tar.gz",
+  "linuxSha256": "f7872ba7df5971e794b9e4b85fc63dfb9ebba0fd896bf7cd75ab9b9a65d54d2e",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.0.90/Pair%20Setup%201.0.90.exe",
+  "winSha256": "b8f591f91e086208bb102de781c6504e4407a7728fe1cc7620753d287d728edb"
 }

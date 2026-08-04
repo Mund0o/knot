@@ -4,8 +4,9 @@ REM  Pair release script  -  builds + publishes a new version in one click.
 REM
 REM  What it does:
 REM    1. Bumps the patch version in package.json (0.8.1 -> 0.8.2 ...)
-REM    2. Builds the .exe (Windows) and .tar.gz (Linux) into dist8/
-REM    3. Publishes them to public/ + writes public/latest.json
+REM    2. Rebuilds the Windows native capture module for Electron
+REM    3. Builds the .exe (Windows) and .tar.gz (Linux) into dist/
+REM    4. Writes their update metadata to public/latest.json
 REM
 REM  After this runs, anyone with the app open (or who restarts it) will be
 REM  prompted to update within ~30 minutes. Make sure server.js is running and
@@ -29,9 +30,19 @@ echo == Cleaning build work dir (admin) ==
 powershell -NoProfile -Command "Remove-Item 'dist\win-unpacked' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item 'dist\linux-unpacked' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item 'dist\linux-unpacked.tmp' -Recurse -Force -ErrorAction SilentlyContinue; Write-Host 'cleared'" || echo (clean step skipped)
 
 echo.
-echo == Building + publishing (npm run dist) ==
+echo == Rebuilding Windows capture addon ==
+call npm run rebuild:addon
+if errorlevel 1 (
+  echo.
+  echo ADDON BUILD FAILED - install Visual Studio Build Tools and try again.
+  pause
+  exit /b 1
+)
+
+echo.
+echo == Building Windows + Linux releases ==
 set IS_PACKAGED=1
-call npm run dist
+call npm run dist:all
 if errorlevel 1 (
   echo.
   echo BUILD FAILED - see errors above. Version was already bumped; fix and re-run.
@@ -40,10 +51,13 @@ if errorlevel 1 (
 )
 
 echo.
-echo == Copying build output to dist8/ (for manual sharing) ==
-if not exist dist8 mkdir dist8
-for %%F in ("dist\Pair Setup %PKGVER%.exe" "dist\Pair Setup %PKGVER%.exe.blockmap" "dist\pair-p2p-%PKGVER%.tar.gz") do (
-  if exist %%F copy /Y %%F dist8\ >nul && echo   copied %%~nxF
+echo == Writing update manifest ==
+call npm run publish
+if errorlevel 1 (
+  echo.
+  echo PUBLISH MANIFEST FAILED - see errors above.
+  pause
+  exit /b 1
 )
 
 echo.

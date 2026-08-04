@@ -1,30 +1,78 @@
 const path = require('path');
-const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer } = require('electron');
+const { app, BrowserWindow, session, dialog, ipcMain, desktopCapturer, shell, powerMonitor } = require('electron');
 
 let mainWin = null;
 let pendingSourceId = null;
 let pendingSources = [];
 
-function isPairRenderer(event) { return event.senderFrame?.url?.startsWith('file://') === true; }
+function isPairRenderer(event) {
+  return event.senderFrame?.url?.startsWith('file://') === true;
+}
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'profileAvatar', 'profileFrame', 'profileIdentity']);
+const MAX_SETTING_VALUE = 7 * 1024 * 1024;
+const MAX_IPC_CHUNK = 8 * 1024 * 1024;
+const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
+const SYSTEM_AVATAR_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+function imageMime(buffer, extension = '') {
+  if (SYSTEM_AVATAR_MIME[extension]) return SYSTEM_AVATAR_MIME[extension];
+  if (buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (buffer.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) return 'image/jpeg';
+  if (buffer.subarray(0, 6).toString('ascii').startsWith('GIF')) return 'image/gif';
+  if (buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function safeFileName(value) {
+  const name = path.basename(String(value || 'incoming')).replace(/[\0<>:"/\\|?*]/g, '_').trim();
+  return (name || 'incoming').slice(0, 255);
+}
+
+function accountAvatarCandidates(dir, depth = 1) {
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  return entries.flatMap(entry => {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory() && depth > 0) return accountAvatarCandidates(file, depth - 1);
+    if (!entry.isFile() || !SYSTEM_AVATAR_MIME[path.extname(entry.name).toLowerCase()]) return [];
+    try {
+      const stat = fs.statSync(file);
+      return stat.size > 0 && stat.size <= MAX_SYSTEM_AVATAR_SIZE ? [{ file, stat }] : [];
+    } catch { return []; }
+  });
+}
+
+function systemAccountAvatar() {
+  const home = app.getPath('home');
+  const direct = process.platform === 'linux' ? [path.join(home, '.face'), path.join(home, '.face.icon')] : [];
+  const directories = process.platform === 'win32'
+    ? [path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'AccountPictures'), path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'Windows', 'AccountPictures')]
+    : [];
+  const candidates = [
+    ...direct.flatMap(file => {
+      try { const stat = fs.statSync(file); return stat.isFile() && stat.size > 0 && stat.size <= MAX_SYSTEM_AVATAR_SIZE ? [{ file, stat }] : []; } catch { return []; }
+    }),
+    ...directories.flatMap(dir => accountAvatarCandidates(dir))
+  ].sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || b.stat.size - a.stat.size);
+  const selected = candidates[0];
+  if (!selected) return null;
+  try {
+    const bytes = fs.readFileSync(selected.file);
+    const mime = imageMime(bytes, path.extname(selected.file).toLowerCase());
+    return mime ? `data:${mime};base64,${bytes.toString('base64')}` : null;
+  } catch { return null; }
+}
+
 ipcMain.handle('pair:getSources', async event => {
   if (!isPairRenderer(event)) return [];
   pendingSources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } });
   return pendingSources.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
+ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
 ipcMain.on('pair:setPendingSource', (event, id) => { if (isPairRenderer(event) && typeof id === 'string') pendingSourceId = id; });
 
-// Enable hardware-accelerated video encode/decode for smoother screen sharing.
-app.commandLine.appendSwitch('enable-accelerated-video-encode');
-app.commandLine.appendSwitch('ignore-gpu-blocklist');
-// Electron's Vulkan ANGLE path conflicts with native Wayland. Keep VA-API video
-// acceleration there, and use Vulkan only on non-Wayland Linux sessions.
-const videoFeatures = ['VaapiVideoDecoder', 'VaapiVideoEncoder', 'VaapiIgnoreDriverChecks'];
-if (process.env.XDG_SESSION_TYPE !== 'wayland') videoFeatures.push('Vulkan', 'DefaultANGLEVulkan', 'VulkanFromANGLE');
-else { app.commandLine.appendSwitch('disable-features', 'Vulkan,DefaultANGLEVulkan,VulkanFromANGLE'); app.commandLine.appendSwitch('disable-vulkan'); }
-app.commandLine.appendSwitch('enable-features', videoFeatures.join(','));
-app.commandLine.appendSwitch('force-gpu-rasterization');
-app.commandLine.appendSwitch('enable-gpu-rasterization');
-app.commandLine.appendSwitch('enable-accelerated-2d-canvas');
+// Leave Chromium's graphics stack at its platform defaults. That avoids
+// pre-warming GPU/video paths while Pair is idle; hardware codecs still engage
+// on demand when a call or screen share actually needs them.
 const fs = require('fs');
 // Pair is serverless by default. `server.js` remains available through
 // `npm run signal` for people who deliberately operate their own signaling
@@ -53,12 +101,13 @@ function closeStream() {
   return closePromise;
 }
 
-ipcMain.handle('pair:saveStart', async (_e, name) => {
+ipcMain.handle('pair:saveStart', async (event, name) => {
+  if (!isPairRenderer(event)) return { ok: false };
   await closeStream();
   writeFailed = null;
   const result = await dialog.showSaveDialog({
     title: 'Save incoming file',
-    defaultPath: name || 'incoming',
+    defaultPath: safeFileName(name),
     buttonLabel: 'Save'
   });
   if (result.canceled || !result.filePath) return { ok: false };
@@ -80,7 +129,8 @@ ipcMain.handle('pair:saveStart', async (_e, name) => {
 // small enough to bound memory for very large files.
 const WRITE_HIGH_WATER = 256 * 1024 * 1024;
 
-ipcMain.handle('pair:saveWrite', async (_e, buf) => {
+ipcMain.handle('pair:saveWrite', async (event, buf) => {
+  if (!isPairRenderer(event) || !buf || buf.byteLength > MAX_IPC_CHUNK) throw new Error('invalid file chunk');
   if (!writeStream) throw new Error('no open stream');
   if (writeFailed) throw writeFailed;
   // Write without awaiting each drain. Node's Writable buffers internally; we
@@ -112,7 +162,9 @@ ipcMain.handle('pair:saveWrite', async (_e, buf) => {
   return true;
 });
 
-ipcMain.handle('pair:saveEnd', () => new Promise((resolve, reject) => {
+ipcMain.handle('pair:saveEnd', event => {
+  if (!isPairRenderer(event)) return Promise.resolve(false);
+  return new Promise((resolve, reject) => {
   if (!writeStream) return resolve(false);
   const s = writeStream;
   writeStream = null;
@@ -120,9 +172,10 @@ ipcMain.handle('pair:saveEnd', () => new Promise((resolve, reject) => {
   s.once('finish', () => { clearTimeout(to); resolve(true); });
   s.once('error', err => { clearTimeout(to); reject(err); });
   s.end();
-}));
+  });
+});
 
-ipcMain.handle('pair:saveCancel', () => closeStream().then(() => true));
+ipcMain.handle('pair:saveCancel', event => isPairRenderer(event) ? closeStream().then(() => true) : false);
 
 // --- Settings persistence (sandboxed renderer can't rely on localStorage) ---
 // Writes/reads a small JSON file in the app's userData directory so room code
@@ -139,18 +192,24 @@ function readSettings() {
 function writeSettings(obj) {
   try { fs.writeFileSync(sp(), JSON.stringify(obj), { encoding: 'utf8', mode: 0o600 }); fs.chmodSync(sp(), 0o600); } catch {}
 }
-ipcMain.handle('pair:getSetting', (_e, key) => (readSettings())[key]);
-ipcMain.handle('pair:setSetting', (_e, key, value) => {
+ipcMain.handle('pair:getSetting', (event, key) => {
+  if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return undefined;
+  return (readSettings())[key];
+});
+ipcMain.handle('pair:setSetting', (event, key, value) => {
+  if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return false;
+  if (value != null && (typeof value !== 'string' || value.length > MAX_SETTING_VALUE)) return false;
   const s = readSettings();
   if (value == null) delete s[key]; else s[key] = value;
   writeSettings(s);
+  return true;
 });
 
-// Linux update notifier. Downloads are never launched by the application.
+// Cross-platform update notifier. Downloads are never launched by the application.
 const { startAutoUpdater, performInstall } = require('./updater');
-ipcMain.on('pair:installUpdate', () => performInstall());
+ipcMain.on('pair:installUpdate', event => { if (isPairRenderer(event)) performInstall(); });
 // The update feed is never accepted from renderer or signaling input.
-ipcMain.on('pair:toggleFullscreen', () => { if (mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });
+ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });
 
 function createWindow() {
   mainWin = new BrowserWindow({
@@ -158,16 +217,25 @@ function createWindow() {
     height: 820,
     minWidth: 860,
     minHeight: 680,
-    backgroundColor: '#f4f1eb',
+    backgroundColor: '#111318',
     title: 'Pair — private P2P chat',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      backgroundThrottling: true,
       preload: path.join(__dirname, 'preload.js')
     }
   });
 
+  mainWin.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') shell.openExternal(parsed.href);
+    } catch {}
+    return { action: 'deny' };
+  });
+  mainWin.webContents.on('will-navigate', event => event.preventDefault());
   mainWin.loadFile(path.join(__dirname, 'index.html'));
 }
 
@@ -187,7 +255,10 @@ app.whenReady().then(() => {
     } else callback({ video: undefined, audio: undefined });
   });
   createWindow();
-  startAutoUpdater();
+  // Do not wake an otherwise idle machine just to check a release manifest.
+  startAutoUpdater({
+    isSystemIdle: () => powerMonitor.getSystemIdleTime() >= 5 * 60 || !mainWin || mainWin.isMinimized() || !mainWin.isFocused()
+  });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -266,15 +337,18 @@ function stopNativeCapture() {
   addon._running = false;
 }
 ipcMain.on('pair:startCapture', (event) => {
+  if (!isPairRenderer(event)) return;
   console.log('native capture: IPC startCapture');
   startNativeCapture(event.sender);
 });
-ipcMain.on('pair:stopCapture', () => {
+ipcMain.on('pair:stopCapture', event => {
+  if (!isPairRenderer(event)) return;
   console.log('native capture: IPC stopCapture');
   stopNativeCapture();
 });
 let refCount=0;
-ipcMain.on('pair:captureRef', (_event, buf) => {
+ipcMain.on('pair:captureRef', (event, buf) => {
+  if (!isPairRenderer(event) || !buf || buf.byteLength > MAX_IPC_CHUNK) return;
   refCount++;
   if(refCount%50===0)console.log('native capture: ref #'+refCount+' bytes='+(buf?.byteLength||buf?.length));
   const addon = nativeCapture;

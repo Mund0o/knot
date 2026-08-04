@@ -13,6 +13,14 @@ const rooms = new Map();
 // installers (.exe / .tar.gz) from here. Everything outside ./public is blocked.
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = { '.json': 'application/json', '.exe': 'application/octet-stream', '.gz': 'application/gzip', '.blockmap': 'application/octet-stream', '.txt': 'text/plain', '.yaml': 'text/plain', '.yml': 'text/plain' };
+function safeDownloadUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
 // Pick the right installer for the visitor's OS from the latest.json manifest,
 // based on the User-Agent string. Used by /download (redirect) and the landing
 // page so users never have to pick Windows vs Linux manually.
@@ -40,8 +48,8 @@ function readManifest() {
 function buildLandingPage(manifest) {
   const version = manifest && manifest.version ? manifest.version : '—';
   const notes = manifest && manifest.notes ? manifest.notes : '';
-  const winUrl = manifest && manifest.winUrl ? manifest.winUrl : '';
-  const linuxUrl = manifest && manifest.linuxUrl ? manifest.linuxUrl : '';
+  const winUrl = safeDownloadUrl(manifest && manifest.winUrl);
+  const linuxUrl = safeDownloadUrl(manifest && manifest.linuxUrl);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -69,8 +77,8 @@ function buildLandingPage(manifest) {
     <h1>Pair — private P2P chat</h1>
     <div class="ver">Latest version: ${version}</div>
     ${notes ? `<div class="notes">${escapeHtml(notes)}</div>` : ''}
-    <a class="btn" id="win" href="${winUrl || '#'}" download>Download for Windows</a>
-    <a class="btn alt" id="linux" href="${linuxUrl || '#'}" download>Download for Linux</a>
+    <a class="btn" id="win" href="${escapeHtml(winUrl || '#')}" download>Download for Windows</a>
+    <a class="btn alt" id="linux" href="${escapeHtml(linuxUrl || '#')}" download>Download for Linux</a>
     <div class="other" id="other"></div>
     <div class="muted">Your system was detected automatically. Pick the other link if that's wrong.</div>
   </div>
@@ -99,6 +107,9 @@ function escapeHtml(s) {
 
 function requestHandler(req, res) {
   try {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Frame-Options', 'DENY');
     const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
     if (urlPath === '/' || urlPath === '/index.html') {
       const manifest = readManifest();
@@ -113,7 +124,7 @@ function requestHandler(req, res) {
       const manifest = readManifest();
       const ua = (req.headers['user-agent'] || '').toLowerCase();
       const isLinux = /linux|x11/.test(ua);
-      const url = manifest ? (isLinux ? manifest.linuxUrl : manifest.winUrl) : null;
+      const url = manifest ? safeDownloadUrl(isLinux ? manifest.linuxUrl : manifest.winUrl) : null;
       if (!url) {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('No update published yet.');
@@ -239,7 +250,11 @@ httpServer.on('error', err => {
   console.error(`Pair server failed to start on port ${port}:`, err.message);
 });
 
-httpServer.listen(port, '0.0.0.0', () => {
-  console.log(`Pair server listening on ${tlsEnabled ? 'https' : 'http'}://0.0.0.0:${port} (signaling + update feed)`);
+// Non-TLS signaling is intentionally loopback-only. Remote peers must use TLS
+// (or a TLS reverse proxy), which keeps room codes and signaling metadata off a
+// local network observer.
+const bindHost = process.env.PAIR_BIND || (tlsEnabled ? '0.0.0.0' : '127.0.0.1');
+httpServer.listen(port, bindHost, () => {
+  console.log(`Pair server listening on ${tlsEnabled ? 'https' : 'http'}://${bindHost}:${port} (signaling + update feed)`);
 });
-console.log(`Pair signaling server listening on ${tlsEnabled ? 'wss' : 'ws'}://0.0.0.0:${port}`);
+console.log(`Pair signaling server ready for ${tlsEnabled ? 'wss' : 'ws'} connections on ${bindHost}:${port}`);

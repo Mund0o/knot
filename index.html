@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss: ws://localhost:* ws://127.0.0.1:*; frame-src https://www.youtube-nocookie.com; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <title>Pair — private P2P chat</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -21,13 +22,28 @@
       </header>
 
       <details id="connectCard" class="pair-card card connect-drawer">
-        <summary><span>Connect a friend</span><small>Pairing</small></summary>
+        <summary><span>Connect a friend</span><small>Secure pairing</small></summary>
         <div class="section-heading"><div><p class="eyebrow">01 / CONNECT</p><h2>Connect directly</h2></div><span class="lock">E2EE</span></div>
         <p class="muted">No account or server is needed. Exchange the two pairing codes with your friend; chat, calls, and files then travel peer to peer.</p>
         <div class="primary-pair manual-direct">
           <div class="auto-title"><div><p class="eyebrow">RECOMMENDED</p><h3>Direct pairing</h3></div><span class="status-note">NO SERVER</span></div>
-          <div class="pair-grid"><div><label for="signalOut">Your pairing code</label><textarea id="signalOut" readonly placeholder="Create an offer or answer…"></textarea><div class="button-row"><button id="createOffer" class="primary">Create invite</button><button id="createAnswer">Create reply</button></div></div><div><label for="signalIn">Friend’s pairing code</label><textarea id="signalIn" placeholder="Paste your friend’s code…"></textarea><button id="applySignal" class="wide">Apply reply</button></div></div><button id="copySignal" class="text-button">Copy pairing code</button>
-          <p id="pairHint" class="pair-hint">Create an invite, send it to your friend, then apply their reply.</p>
+          <div class="pair-grid pairing-steps">
+            <div class="pair-step">
+              <span class="step-number">1</span>
+              <div><label for="signalOut">Start a pair</label><p class="step-copy">Create an invite, then send the code to your friend.</p></div>
+              <button id="createOffer" class="primary">Create invite</button>
+              <label class="outgoing-label" for="signalOut">Your code to send</label>
+              <textarea id="signalOut" readonly placeholder="Your compact invite or reply will appear here…"></textarea>
+              <div class="pair-code-actions"><button id="copySignal" class="text-button" disabled>Copy code</button><span id="pairCodeMeta" aria-live="polite"></span></div>
+            </div>
+            <div class="pair-step">
+              <span class="step-number">2</span>
+              <div><label for="signalIn">Continue a pair</label><p class="step-copy">Paste your friend’s code here. Pair will tell you what happens next.</p></div>
+              <textarea id="signalIn" placeholder="Paste invite or reply…" spellcheck="false"></textarea>
+              <button id="processSignal" class="wide">Create reply</button>
+            </div>
+          </div>
+          <p id="pairHint" class="pair-hint">Start a new pair, or paste an invite from your friend and create a reply.</p>
         </div>
         <details class="manual-pair">
           <summary>Optional: use your own signaling server</summary>
@@ -91,7 +107,7 @@
         <div class="chat card">
           <div class="section-heading"><div><p class="eyebrow">03 / CHAT</p><h2>Private room</h2></div><span class="pill">DIRECT</span></div>
           <div id="messages" class="messages"><div class="empty"><span>✦</span><p>Messages travel directly between your devices.</p></div></div>
-          <form id="messageForm" class="composer"><input id="messageInput" autocomplete="off" placeholder="Write a message…" disabled /><button class="send" disabled>Send</button></form>
+          <form id="messageForm" class="composer"><input id="messageInput" autocomplete="off" maxlength="16000" placeholder="Message your friend" aria-label="Message your friend" disabled /><button class="send" disabled>Send</button></form>
           <audio id="remoteAudio" autoplay></audio>
         </div>
       </section>

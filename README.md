@@ -19,6 +19,24 @@ npm run dist
 
 The tarball will be created in the `dist` folder.
 
+## Build a Windows release
+
+Run these commands from a Windows machine with Node.js and Visual Studio Build
+Tools installed. The first command recompiles the optional WASAPI capture addon
+against Pair's current Electron version; the installer still works with its
+JavaScript audio fallback if that addon is unavailable.
+
+```powershell
+npm install
+npm run rebuild:addon
+npm run dist:win
+```
+
+The installer is created as `dist\Pair Setup <version>.exe`. To make a matched
+Windows + Linux release and update manifest, run `npm run dist:all` followed by
+`npm run publish`. Upload both installers to the matching GitHub release before
+committing/pushing `public/latest.json`.
+
 ## Run in a browser (optional)
 
 The browser version remains available for testing. Serve this folder over localhost or HTTPS; Web Crypto and WebRTC are restricted in insecure contexts in many browsers.
@@ -27,7 +45,7 @@ The browser version remains available for testing. Serve this folder over localh
 py -m http.server 5173
 ```
 
-Open `http://localhost:5173` in two browser windows. For a real friend-to-friend connection, the prototype uses manual offer/answer exchange and `iceServers: []`, so it works when the peers can connect directly but may fail across NATs. Adding a TURN server is the next networking step, but the TURN server would relay encrypted bytes and still could not read the content.
+Open `http://localhost:5173` in two browser windows. For a real friend-to-friend connection, the prototype uses manual offer/answer exchange and public STUN servers, so it works when the peers can establish a direct route but may fail across restrictive NATs. Set `PAIR_TURN` in the desktop app to use your own TURN relay; it only relays already-encrypted bytes.
 
 ## Direct pairing (default — no server)
 
@@ -66,7 +84,12 @@ WebRTC cannot always connect two peers on different home networks directly — s
    - UDP `3481` → internal `3478`
    - UDP `50100–50200` → internal `50100–50200` (the relay port range coturn uses; the 49152–49551 range is reserved by Windows)
 2. Start Docker Desktop, then double-click `coturn\start-coturn.bat` (or run `docker compose -f coturn\docker-compose.yml up -d`). coturn auto-restarts across reboots while Docker is running, so TURN stays available whenever either peer opens the app.
-3. That's it — the app already points at this relay (WAN port `3481`, remapped to coturn's internal `3478`). Replace `YOUR_PUBLIC_IP` in `turnserver.conf` with your actual public IP before starting.
+3. Replace `YOUR_PUBLIC_IP`, `YOUR_LAN_IP`, and `CHANGE_THIS_TO_A_LONG_RANDOM_SECRET` in `turnserver.conf` before starting. Generate the password with a password manager or `openssl rand -hex 32`.
+4. Start Pair with the same relay credentials on both devices (the app deliberately has no baked-in TURN password):
+
+```bash
+PAIR_TURN='[{"urls":["turn:YOUR_HOST:3481?transport=udp","turn:YOUR_HOST:3481?transport=tcp"],"username":"pair","credential":"YOUR_SECRET"}]' npm start
+```
 
 To verify it's reachable from outside your network, run from any other machine:
 
@@ -74,7 +97,7 @@ To verify it's reachable from outside your network, run from any other machine:
 docker logs pair-coturn          # local: should show no errors and several "allocate" lines after a call
 ```
 
-To change the credential later: edit `coturn\turnserver.conf` (`user=pair:...` line), update `app.js` `SELF_TURN`, rebuild. Or set `PAIR_TURN` at runtime to override everything without touching code:
+To rotate the credential later: edit `coturn\turnserver.conf` (`user=pair:...` line), restart coturn, then start Pair with a matching `PAIR_TURN` value on both devices. No rebuild is needed:
 
 ```bash
 set PAIR_TURN=[{"urls":"turn:YOUR_HOST:3481","username":"pair","credential":"YOUR_SECRET"}]

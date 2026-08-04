@@ -2,9 +2,8 @@
 //
 // Usage:  node publish-update.js
 //
-// Reads the version from package.json, copies that version's installers from
-// ./dist8 (named by electron-builder as "<Product> Setup <version>.exe" and
-// "pair-p2p-<version>.tar.gz") into ./public, and writes ./public/latest.json.
+// Reads the version from package.json, copies that version's Windows and Linux
+// installers from ./dist into ./public, and writes ./public/latest.json.
 //
 // The auto-updater fetches ./public/latest.json from GitHub (raw repo URL,
 // configured in updater.js), so updates work with no personal server. The
@@ -41,8 +40,9 @@ const safeVersion = version.replace(/[^0-9.]/g, '');
 const releaseBase = `https://github.com/${GITHUB_REPO}/releases/download/v${version}`;
 
 const linuxTar = `pair-p2p-${safeVersion}.tar.gz`;
-// GitHub release assets normalize spaces to dots in the download URL.
-const ghName = f => f.replace(/ /g, '.');
+const windowsExe = `Pair Setup ${version}.exe`;
+const windowsBlockmap = `${windowsExe}.blockmap`;
+const releaseUrl = file => `${releaseBase}/${encodeURIComponent(file)}`;
 
 fs.mkdirSync(OUT, { recursive: true });
 
@@ -62,29 +62,37 @@ for (const f of fs.readdirSync(OUT)) {
 }
 
 const gotTar = copyIf(linuxTar);
+const gotExe = copyIf(windowsExe);
+copyIf(windowsBlockmap);
 
-if (!gotTar) {
-  console.error('Missing Linux build artifact in dist/:');
-  console.error('  expected:', linuxTar);
-  console.error('  Build with: npm run dist');
+if (!gotTar || !gotExe) {
+  console.error('Missing release artifact(s) in dist/:');
+  if (!gotExe) console.error('  expected Windows:', windowsExe);
+  if (!gotTar) console.error('  expected Linux  :', linuxTar);
+  console.error('  Build with: npm run dist:all');
   process.exit(1);
 }
 const linuxSha256 = crypto.createHash('sha256').update(fs.readFileSync(path.join(SRC, linuxTar))).digest('hex');
+const winSha256 = crypto.createHash('sha256').update(fs.readFileSync(path.join(SRC, windowsExe))).digest('hex');
 
 const manifest = {
   version,
   notes: process.env.PAIR_NOTES || 'Update available.',
-  linuxUrl: `${releaseBase}/${ghName(linuxTar)}`,
-  linuxSha256
+  linuxUrl: releaseUrl(linuxTar),
+  linuxSha256,
+  winUrl: releaseUrl(windowsExe),
+  winSha256
 };
 
 fs.writeFileSync(path.join(OUT, 'latest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
 console.log('Published update feed:');
 console.log('  version:', version);
+console.log('  windows:', manifest.winUrl);
+console.log('  win sha:', manifest.winSha256);
 console.log('  linux  :', manifest.linuxUrl);
 console.log('  sha256 :', manifest.linuxSha256);
 console.log('  notes  :', manifest.notes);
 console.log('\nInstallers are hosted as GitHub release assets:');
 console.log('  ' + releaseBase);
-console.log('Publish it with: gh release create v' + version + ' ' + linuxTar + ' --title "Pair ' + version + '"');
+console.log('Publish it with: gh release create v' + version + ' "' + windowsExe + '" "' + linuxTar + '" --title "Pair ' + version + '"');

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <string>
 
 class Capture {
 public:
@@ -202,7 +203,7 @@ private:
     memcpy(buf,clean.data(),frames*sizeof(float));
     UINT32 fCopy=frames;
     auto status=dataCb.NonBlockingCall([buf,fCopy](Napi::Env e,Napi::Function cb){
-      auto ab=Napi::ArrayBuffer::New(e,buf,fCopy*sizeof(float));
+      auto ab=Napi::ArrayBuffer::New(e,buf,fCopy*sizeof(float),[](Napi::Env, void* data){std::free(data);});
       cb.Call({ab,Napi::Number::New(e,(double)fCopy)});
     });
     if(status!=napi_ok){
@@ -211,8 +212,9 @@ private:
   }
 
   void emitErr(const char* msg){
-    errCb.NonBlockingCall([msg](Napi::Env e,Napi::Function cb){
-      cb.Call({Napi::String::New(e,msg)});
+    const std::string message(msg ? msg : "unknown capture error");
+    errCb.NonBlockingCall([message](Napi::Env e,Napi::Function cb){
+      cb.Call({Napi::String::New(e,message)});
     });
   }
 
@@ -244,8 +246,8 @@ static Napi::Value PushRef(const Napi::CallbackInfo& info){
     auto buf=info[0].As<Napi::Buffer<float>>();
     data=buf.Data();len=buf.Length();
   }else if(info[0].IsTypedArray()){
-    auto arr=info[0].As<Napi::TypedArray>();
-    data=(float*)arr.ArrayBuffer().Data();len=arr.ElementLength();
+    auto arr=info[0].As<Napi::Float32Array>();
+    data=arr.Data();len=arr.ElementLength();
   }
   if(data&&len>0)static_cast<Capture*>(info.Data())->pushRef(data,len);
   return info.Env().Undefined();
