@@ -6,5 +6,5 @@
   "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.3/Pair-1.1.3.AppImage",
   "linuxAppImageSha256": "9a2686458ffd0c30566a699c7836277d727b9e2df15ff0821ede914e243f7b17",
   "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.3/Pair.Setup.1.1.3.exe",
-  "winSha256": "3822f161e2c6c041c42788da29a878d9a71083564c54b5ab5330f503de088240"
+  "winSha256": "cd3a96ede133feea7a33ddde306ae520c21bf2105b50f7bfe6b5588553b747d9"
 }
