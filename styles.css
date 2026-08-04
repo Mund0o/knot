@@ -74,6 +74,7 @@ input:focus, textarea:focus, select:focus { border-color: #7c89fa; background: #
 .update-text strong { font-size: 13px; }
 .update-notes { overflow: hidden; color: #bec5de; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .update-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.update-banner.update-downloading,.update-banner.update-installing,.update-banner.update-restarting{border-color:#6677df;background:#202849}.update-banner.update-failed{border-color:#a84d55;background:#351e24}.update-banner.update-failed strong{color:#ffc0c6}
 
 .card { border: 1px solid var(--stroke); border-radius: var(--r-lg); background: var(--surface); }
 .connect-drawer { margin-top: 18px; overflow: hidden; }

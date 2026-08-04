@@ -214,7 +214,8 @@ ipcMain.handle('pair:setSetting', (event, key, value) => {
 
 // Updates are checked and installed by the main process on launch. The renderer
 // cannot influence the feed URL, package URL, or installer invocation.
-const { startAutoUpdater } = require('./updater');
+const { startAutoUpdater, getUpdateStatus } = require('./updater');
+ipcMain.handle('pair:getUpdateStatus', event => isPairRenderer(event) ? getUpdateStatus() : { state: 'idle' });
 ipcMain.on('pair:relaunch', event => { if (isPairRenderer(event)) { app.relaunch(); app.exit(0); } });
 // The update feed is never accepted from renderer or signaling input.
 ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });

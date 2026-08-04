@@ -4,7 +4,7 @@
 // downloaded to a private staging directory and SHA-256 verified before it is
 // ever executed. Updates run without renderer involvement and restart Pair
 // immediately once the replacement has been handed off to the OS.
-const { app } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -20,6 +20,14 @@ const MAX_UPDATE_BYTES = 4 * 1024 * 1024 * 1024;
 let timer = null;
 let checking = false;
 let installing = false;
+let updateStatus = { state: 'idle', message: '' };
+
+function report(state, message = '', extra = {}) {
+  updateStatus = { state, message, ...extra };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('pair:updateStatus', updateStatus);
+  }
+}
 
 function httpsUrl(value) {
   try {
@@ -85,12 +93,13 @@ async function fetchText(url, depth = 0) {
   return result.redirect ? fetchText(result.redirect, depth + 1) : result.text;
 }
 
-async function download(url, output, expectedHash, depth = 0) {
+async function download(url, output, expectedHash, onProgress, depth = 0) {
   if (depth > 3 || !httpsUrl(url)) throw new Error('unsafe update URL');
   const result = await request(url, MAX_UPDATE_BYTES, (response, resolve, reject) => {
     const file = fs.createWriteStream(output, { mode: 0o700, flags: 'wx' });
     const hash = crypto.createHash('sha256');
     let size = 0;
+    const total = Number(response.headers['content-length'] || 0);
     const fail = error => {
       file.destroy();
       response.destroy();
@@ -100,6 +109,7 @@ async function download(url, output, expectedHash, depth = 0) {
       size += chunk.length;
       if (size > MAX_UPDATE_BYTES) return fail(new Error('update is too large'));
       hash.update(chunk);
+      onProgress?.(size, Number.isSafeInteger(total) && total > 0 ? total : 0);
     });
     response.on('error', fail);
     file.on('error', fail);
@@ -112,7 +122,7 @@ async function download(url, output, expectedHash, depth = 0) {
   });
   if (result.redirect) {
     try { await fsp.unlink(output); } catch {}
-    return download(result.redirect, output, expectedHash, depth + 1);
+    return download(result.redirect, output, expectedHash, onProgress, depth + 1);
   }
   return result.file;
 }
@@ -134,7 +144,9 @@ function runWindowsInstaller(installer) {
   // electron-builder's NSIS installer understands these arguments, waits for
   // the running app when needed, updates it in place, and launches it again.
   const child = spawn(installer, ['/S', '--updated', '--force-run'], { detached: true, stdio: 'ignore', windowsHide: true });
+  child.once('error', error => report('failed', `Could not start the Windows installer: ${error.message}`));
   child.unref();
+  report('restarting', 'Update installed. Restarting Pair…');
   app.exit(0);
 }
 
@@ -211,7 +223,12 @@ async function install(manifest) {
   const stage = await fsp.mkdtemp(path.join(updateDirectory(), 'stage-'));
   try {
     const filename = process.platform === 'win32' ? `Pair-Setup-${manifest.version}.exe` : `Pair-${manifest.version}${fields.extension}`;
-    const archive = await download(url, path.join(stage, filename), sha256);
+    report('downloading', `Downloading Pair ${manifest.version}…`, { version: manifest.version, percent: 0 });
+    const archive = await download(url, path.join(stage, filename), sha256, (downloaded, total) => {
+      const percent = total ? Math.min(100, Math.round(downloaded / total * 100)) : null;
+      report('downloading', percent == null ? `Downloading Pair ${manifest.version}…` : `Downloading Pair ${manifest.version}… ${percent}%`, { version: manifest.version, percent });
+    });
+    report('installing', `Verifying and installing Pair ${manifest.version}…`, { version: manifest.version });
     if (process.platform === 'win32') runWindowsInstaller(archive);
     else if (process.platform === 'linux') runLinuxUpdate(archive, stage);
   } catch (error) {
@@ -224,13 +241,16 @@ async function install(manifest) {
 async function checkOnce(feedUrl) {
   if (checking || installing || !feedUrl || !app.isPackaged) return;
   checking = true;
+  report('checking', 'Checking for updates…');
   try {
     const manifest = JSON.parse(await fetchText(`${feedUrl.replace(/\/$/, '')}/latest.json`));
-    if (!isNewer(app.getVersion(), manifest.version)) return;
+    if (!isNewer(app.getVersion(), manifest.version)) { report('current', `Pair ${app.getVersion()} is up to date.`); return; }
     console.log(`[updater] installing Pair ${manifest.version}`);
+    report('available', `Update found: Pair ${manifest.version}. Preparing download…`, { version: manifest.version });
     await install(manifest);
   } catch (error) {
     console.log('[updater] check failed:', error.message);
+    report('failed', `Update check failed: ${error.message}`);
   } finally { checking = false; }
 }
 
@@ -244,4 +264,4 @@ function startAutoUpdater() {
   timer.unref?.();
 }
 
-module.exports = { startAutoUpdater, isNewer };
+module.exports = { startAutoUpdater, isNewer, getUpdateStatus: () => updateStatus };

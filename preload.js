@@ -40,6 +40,16 @@ contextBridge.exposeInMainWorld('pairSettings', {
   set: (key, value) => ipcRenderer.invoke('pair:setSetting', key, value)
 });
 
+contextBridge.exposeInMainWorld('pairUpdates', {
+  getStatus: () => ipcRenderer.invoke('pair:getUpdateStatus'),
+  onStatus: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, status) => cb(status);
+    ipcRenderer.on('pair:updateStatus', listener);
+    return () => ipcRenderer.removeListener('pair:updateStatus', listener);
+  }
+});
+
 // Read-only environment info exposed to the sandboxed renderer.
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
