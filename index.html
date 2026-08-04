@@ -65,26 +65,33 @@
             <div class="voice-participant" id="participantYou"><button id="profileBtn" class="avatar profile-avatar" type="button" title="Change your profile photo"><span class="avatar-letter">Y</span><i class="indicator"></i></button><span>You</span><button id="profileAdjust" class="profile-adjust" type="button" hidden>Adjust photo</button></div>
             <div class="voice-participant" id="participantFriend"><span id="friendAvatar" class="avatar"><span class="avatar-letter">F</span><i class="indicator"></i></span><span>Friend</span></div>
           </div>
-          <div class="voice-controls">
-            <button id="callBtn" class="primary" disabled title="Start voice call">Start call</button>
-            <button id="muteBtn" hidden title="Mute microphone">Mute</button>
-            <label class="sr-only" for="volumeSlider">Friend volume</label><input id="volumeSlider" type="range" min="0" max="100" value="50" class="volume-slider" hidden aria-label="Friend volume" /><output id="volumeValue" class="volume-value" hidden>50%</output>
-            <span id="callStatus" class="call-status">Voice off</span>
-            <span class="call-toolbar-divider" aria-hidden="true"></span>
-            <div class="screen-controls">
-              <button id="screenBtn" disabled title="Share screen">Share screen</button>
-              <select id="screenPreset" class="preset-select" disabled aria-label="Screen share quality">
-                <option value="1080p30">1080p 30fps</option>
-                <option value="1080p60">1080p 60fps</option>
-                <option value="720p60">720p 60fps</option>
-                <option value="720p30">720p 30fps</option>
-                <option value="480p30">480p 30fps</option>
-                <option value="1440p60">1440p 60fps</option>
-                <option value="4k60">4K 60fps</option>
-                <option value="custom">Custom</option>
-              </select>
-              <span id="screenStatus" class="screen-status">Not sharing</span>
-            </div>
+          <div class="voice-controls" aria-label="Call controls">
+            <section class="control-cluster call-cluster" aria-labelledby="voiceControlLabel">
+              <span id="voiceControlLabel" class="control-label">Voice</span>
+              <div class="control-row">
+                <button id="callBtn" class="primary" disabled title="Start voice call">Start call</button>
+                <button id="muteBtn" hidden title="Mute microphone">Mute</button>
+                <label class="sr-only" for="volumeSlider">Friend volume</label><input id="volumeSlider" type="range" min="0" max="100" value="50" class="volume-slider" hidden aria-label="Friend volume" /><output id="volumeValue" class="volume-value" hidden>50%</output>
+              </div>
+              <span id="callStatus" class="call-status">Voice off</span>
+            </section>
+            <section class="control-cluster screen-cluster" aria-labelledby="screenControlLabel">
+              <span id="screenControlLabel" class="control-label">Screen share</span>
+              <div class="screen-controls">
+                <button id="screenBtn" disabled title="Share screen">Share screen</button>
+                <select id="screenPreset" class="preset-select" disabled aria-label="Screen share quality">
+                  <option value="1080p30">1080p 30fps</option>
+                  <option value="1080p60">1080p 60fps</option>
+                  <option value="720p60">720p 60fps</option>
+                  <option value="720p30">720p 30fps</option>
+                  <option value="480p30">480p 30fps</option>
+                  <option value="1440p60">1440p 60fps</option>
+                  <option value="4k60">4K 60fps</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <span id="screenStatus" class="screen-status">Not sharing</span>
+              </div>
+            </section>
           </div>
           <div id="profileEditor" class="profile-editor" hidden>
             <strong>Profile photo</strong>

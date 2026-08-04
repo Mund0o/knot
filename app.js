@@ -975,12 +975,12 @@ async function startScreenShare(){
     const sources=await window.pairEnv.getSources();
     if(!sources.length||gen!==screenGen){screenStatus.textContent='No sources';return}
     const id=await new Promise(resolve=>{
-      const o=document.createElement('div');o.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center';
-      const b=document.createElement('div');b.style.cssText='background:#2b2d31;border-radius:10px;padding:20px;max-width:640px;width:90%;max-height:80vh;overflow-y:auto;color:#f2f3f5';
-      b.innerHTML='<h3 style="margin:0 0 14px;font-size:16px">Select what to share</h3>';
-      const g=document.createElement('div');g.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px';
-      sources.forEach(s=>{const btn=document.createElement('button');btn.style.cssText='background:#1e1f22;border:1px solid #3f4147;border-radius:8px;padding:8px;cursor:pointer;text-align:center;font-size:12px;color:#f2f3f5';const img=document.createElement('img');img.src=s.thumbnail;img.alt='';img.style.cssText='width:100%;border-radius:4px;display:block;margin-bottom:6px';const name=document.createElement('span');name.textContent=s.name;btn.append(img,name);btn.onclick=()=>{resolve(s.id);o.remove()};g.appendChild(btn)});
-      const c=document.createElement('button');c.textContent='Cancel';c.style.cssText='margin-top:12px;background:#4e5058;border:0;border-radius:4px;padding:8px 16px;color:#f2f3f5;cursor:pointer;font-size:12px';c.onclick=()=>{resolve(null);o.remove()};
+      const o=document.createElement('div');o.className='screen-source-modal';
+      const b=document.createElement('div');b.className='screen-source-dialog';
+      b.innerHTML='<h3>Select what to share</h3>';
+      const g=document.createElement('div');g.className='screen-source-grid';
+      sources.forEach(s=>{const btn=document.createElement('button');btn.className='screen-source-option';const img=document.createElement('img');img.src=s.thumbnail;img.alt='';const name=document.createElement('span');name.textContent=s.name;btn.append(img,name);btn.onclick=()=>{resolve(s.id);o.remove()};g.appendChild(btn)});
+      const c=document.createElement('button');c.className='screen-source-cancel';c.textContent='Cancel';c.onclick=()=>{resolve(null);o.remove()};
       b.appendChild(g);b.appendChild(c);o.appendChild(b);document.body.appendChild(o);
     });
     if(!id||gen!==screenGen)return;
@@ -1059,11 +1059,11 @@ screenPreset.onchange=()=>{if(screenActive){stopScreenShare();startScreenShare()
 // Screen share audio toggle — on by default, turn off to stop capturing system audio (prevents echo feedback on Windows loopback).
 let screenAudioOn=true;
 const audioToggleBtn=document.createElement('button');audioToggleBtn.textContent='Audio on';audioToggleBtn.className='audio-toggle is-on';
-audioToggleBtn.onclick=()=>{screenAudioOn=!screenAudioOn;audioToggleBtn.textContent=screenAudioOn?'Audio on':'Audio off';audioToggleBtn.classList.toggle('is-on',screenAudioOn)};screenBtn.parentElement.insertBefore(audioToggleBtn,screenStatus.nextSibling);
+audioToggleBtn.onclick=()=>{screenAudioOn=!screenAudioOn;audioToggleBtn.textContent=screenAudioOn?'Audio on':'Audio off';audioToggleBtn.classList.toggle('is-on',screenAudioOn)};screenBtn.parentElement.insertBefore(audioToggleBtn,screenStatus);
 // Volume slider for the remote screen share audio, shown on right-click.
-const screenVolWrap=document.createElement('div');screenVolWrap.style.cssText='display:none;position:absolute;bottom:52px;right:12px;z-index:11;background:rgba(0,0,0,.75);border-radius:6px;padding:8px 12px';
-const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Volume';screenVolLabel.style.cssText='color:#fff;font-size:11px;margin-right:8px';
-const screenVol=document.createElement('input');screenVol.type='range';screenVol.min=0;screenVol.max=100;screenVol.value=100;screenVol.style.cssText='width:80px;height:4px;cursor:pointer;accent-color:#5865f2;vertical-align:middle';
+const screenVolWrap=document.createElement('div');screenVolWrap.className='screen-volume';
+const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Volume';
+const screenVol=document.createElement('input');screenVol.type='range';screenVol.min=0;screenVol.max=100;screenVol.value=100;
 screenVol.oninput=()=>{const v=Math.max(0,Math.min(100,Number(screenVol.value)||0))/100;remoteScreen.volume=v;remoteScreen.muted=v===0;ssSet('screenVol',String(v))};
 // Restore saved screen volume (fire-and-forget).
 (async()=>{try{const saved=await ss('screenVol');if(saved!==null){const v=parseFloat(saved);if(v>=0&&v<=1){remoteScreen.volume=v;remoteScreen.muted=v===0;screenVol.value=Math.round(v*100)}}}catch{}})()
