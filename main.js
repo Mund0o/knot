@@ -226,7 +226,7 @@ function createWindow() {
     minWidth: 860,
     minHeight: 680,
     backgroundColor: '#111318',
-    title: 'Pair — private P2P chat',
+    title: `Pair ${app.getVersion()} — private P2P chat`,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
