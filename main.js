@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, powerMonitor } = require('electron');
+const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell } = require('electron');
 
 let mainWin = null;
 let pendingSourceId = null;
@@ -211,9 +211,9 @@ ipcMain.handle('pair:setSetting', (event, key, value) => {
   return true;
 });
 
-// Cross-platform update notifier. Downloads are never launched by the application.
-const { startAutoUpdater, performInstall } = require('./updater');
-ipcMain.on('pair:installUpdate', event => { if (isPairRenderer(event)) performInstall(); });
+// Updates are checked and installed by the main process on launch. The renderer
+// cannot influence the feed URL, package URL, or installer invocation.
+const { startAutoUpdater } = require('./updater');
 ipcMain.on('pair:relaunch', event => { if (isPairRenderer(event)) { app.relaunch(); app.exit(0); } });
 // The update feed is never accepted from renderer or signaling input.
 ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });
@@ -265,10 +265,7 @@ app.whenReady().then(() => {
     } else callback({ video: undefined, audio: undefined });
   });
   createWindow();
-  // Do not wake an otherwise idle machine just to check a release manifest.
-  startAutoUpdater({
-    isSystemIdle: () => powerMonitor.getSystemIdleTime() >= 5 * 60 || !mainWin || mainWin.isMinimized() || !mainWin.isFocused()
-  });
+  startAutoUpdater();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

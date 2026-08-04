@@ -17,7 +17,10 @@ To build the Linux package:
 npm run dist
 ```
 
-The tarball will be created in the `dist` folder.
+The tarball and AppImage will be created in the `dist` folder. The AppImage is
+the recommended Linux format: Pair can replace it and restart itself after an
+update. A tarball installation is also updated in place when its folder is
+writable.
 
 ## Build a Windows release
 
@@ -34,8 +37,13 @@ npm run dist:win
 
 The installer is created as `dist\Pair Setup <version>.exe`. To make a matched
 Windows + Linux release and update manifest, run `npm run dist:all` followed by
-`npm run publish`. Upload both installers to the matching GitHub release before
-committing/pushing `public/latest.json`.
+`npm run publish`. Upload the Windows installer, Linux tarball, and Linux
+AppImage to the matching GitHub release before committing/pushing
+`public/latest.json`.
+
+Every packaged build checks `public/latest.json` as it opens. If the manifest
+has a newer version, Pair downloads the appropriate package, verifies its
+SHA-256 checksum, installs it, and restarts automatically.
 
 ## Run in a browser (optional)
 

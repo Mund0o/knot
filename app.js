@@ -1150,7 +1150,3 @@ remoteScreen.ondblclick=toggleRemoteFs;
 const fsBtn=document.createElement('button');fsBtn.className='fs-btn hidden';fsBtn.textContent='⛶ Fullscreen';fsBtn.onclick=toggleRemoteFs;remoteScreen.parentElement.appendChild(fsBtn);const obs=new MutationObserver(()=>{fsBtn.classList.toggle('hidden',remoteScreen.hidden)});obs.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});
 // Escape key exits CSS fullscreen.
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&remoteScreen.classList.contains('fs'))toggleRemoteFs()});
-
-// Auto-update banner. Only wires up when running inside the Pair app
-// (window.pairEnv is exposed by preload.js). Browsers ignore this block.
-if(window.pairEnv&&window.pairEnv.onUpdate){const banner=$('#updateBanner'),title=$('#updateTitle'),notes=$('#updateNotes'),link=$('#updateLink'),restart=$('#updateRestart');$('#updateDismiss').onclick=()=>{banner.hidden=true};window.pairEnv.onUpdate(info=>{banner.hidden=false;title.textContent='Update available — version '+info.version;if(info.notes)notes.textContent=info.notes;else notes.textContent='';if(info.stage==='link'){link.hidden=false;link.href=info.url;link.target='_blank'}else link.hidden=true;if(info.stage==='ready'){restart.hidden=false;restart.onclick=()=>window.pairEnv.restartForUpdate()}else restart.hidden=true})}

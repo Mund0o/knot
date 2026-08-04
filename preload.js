@@ -40,8 +40,7 @@ contextBridge.exposeInMainWorld('pairSettings', {
   set: (key, value) => ipcRenderer.invoke('pair:setSetting', key, value)
 });
 
-// Read-only environment info + auto-update surface. `platform` lets the
-// renderer label platform-specific update links without exposing Node APIs.
+// Read-only environment info exposed to the sandboxed renderer.
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
   isApp: true,
@@ -50,17 +49,7 @@ contextBridge.exposeInMainWorld('pairEnv', {
   getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),
   getSources: () => ipcRenderer.invoke('pair:getSources'),
   setPendingSource: id => ipcRenderer.send('pair:setPendingSource', id),
-  // Called once with a callback that fires when an update is available.
-  onUpdate: cb => {
-    if (typeof cb !== 'function') { console.warn('onUpdate requires a function'); return () => {}; }
-    const listener = (_e, info) => cb(info);
-    ipcRenderer.on('update-available', listener);
-    return () => ipcRenderer.removeListener('update-available', listener);
-  },
-  // Updates are always user-initiated downloads; retained for UI compatibility.
-  restartForUpdate: () => ipcRenderer.send('pair:installUpdate'),
-  relaunch: () => ipcRenderer.send('pair:relaunch'),
-  setFeed: () => {}
+  relaunch: () => ipcRenderer.send('pair:relaunch')
 });
 
 // Native WASAPI loopback capture with echo cancellation bridge.

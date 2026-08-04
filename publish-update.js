@@ -40,6 +40,7 @@ const safeVersion = version.replace(/[^0-9.]/g, '');
 const releaseBase = `https://github.com/${GITHUB_REPO}/releases/download/v${version}`;
 
 const linuxTar = `pair-p2p-${safeVersion}.tar.gz`;
+const linuxAppImage = `Pair-${safeVersion}.AppImage`;
 const windowsExe = `Pair Setup ${version}.exe`;
 const windowsBlockmap = `${windowsExe}.blockmap`;
 const releaseUrl = file => `${releaseBase}/${encodeURIComponent(file)}`;
@@ -62,17 +63,20 @@ for (const f of fs.readdirSync(OUT)) {
 }
 
 const gotTar = copyIf(linuxTar);
+const gotAppImage = copyIf(linuxAppImage);
 const gotExe = copyIf(windowsExe);
 copyIf(windowsBlockmap);
 
-if (!gotTar || !gotExe) {
+if (!gotTar || !gotAppImage || !gotExe) {
   console.error('Missing release artifact(s) in dist/:');
   if (!gotExe) console.error('  expected Windows:', windowsExe);
   if (!gotTar) console.error('  expected Linux  :', linuxTar);
+  if (!gotAppImage) console.error('  expected AppImage:', linuxAppImage);
   console.error('  Build with: npm run dist:all');
   process.exit(1);
 }
 const linuxSha256 = crypto.createHash('sha256').update(fs.readFileSync(path.join(SRC, linuxTar))).digest('hex');
+const linuxAppImageSha256 = crypto.createHash('sha256').update(fs.readFileSync(path.join(SRC, linuxAppImage))).digest('hex');
 const winSha256 = crypto.createHash('sha256').update(fs.readFileSync(path.join(SRC, windowsExe))).digest('hex');
 
 const manifest = {
@@ -80,6 +84,8 @@ const manifest = {
   notes: process.env.PAIR_NOTES || 'Update available.',
   linuxUrl: releaseUrl(linuxTar),
   linuxSha256,
+  linuxAppImageUrl: releaseUrl(linuxAppImage),
+  linuxAppImageSha256,
   winUrl: releaseUrl(windowsExe),
   winSha256
 };
@@ -92,7 +98,9 @@ console.log('  windows:', manifest.winUrl);
 console.log('  win sha:', manifest.winSha256);
 console.log('  linux  :', manifest.linuxUrl);
 console.log('  sha256 :', manifest.linuxSha256);
+console.log('  AppImage:', manifest.linuxAppImageUrl);
+console.log('  AppImage sha256:', manifest.linuxAppImageSha256);
 console.log('  notes  :', manifest.notes);
 console.log('\nInstallers are hosted as GitHub release assets:');
 console.log('  ' + releaseBase);
-console.log('Publish it with: gh release create v' + version + ' "' + windowsExe + '" "' + linuxTar + '" --title "Pair ' + version + '"');
+console.log('Publish it with: gh release create v' + version + ' "' + windowsExe + '" "' + linuxTar + '" "' + linuxAppImage + '" --title "Pair ' + version + '"');
