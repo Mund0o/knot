@@ -1171,7 +1171,8 @@ screenVolWrap.appendChild(screenVolLabel);screenVolWrap.appendChild(screenVol);r
 remoteScreen.addEventListener('contextmenu',e=>{e.preventDefault();screenVolWrap.style.display=screenVolWrap.style.display==='none'?'flex':'none';screenVolWrap.style.alignItems='center'});
 document.addEventListener('click',e=>{if(!screenVolWrap.contains(e.target)&&e.target!==remoteScreen)screenVolWrap.style.display='none'});
 function toggleRemoteFs(){const is=remoteScreen.classList.toggle('fs');fsBtn.textContent=is?'✕ Exit fullscreen':'⛶ Fullscreen'}
-remoteScreen.ondblclick=toggleRemoteFs;
+remoteScreen.onclick=toggleRemoteFs;screenPreview.onclick=toggleRemoteFs;
 const fsBtn=document.createElement('button');fsBtn.className='fs-btn hidden';fsBtn.textContent='⛶ Fullscreen';fsBtn.onclick=toggleRemoteFs;remoteScreen.parentElement.appendChild(fsBtn);const obs=new MutationObserver(()=>{fsBtn.classList.toggle('hidden',remoteScreen.hidden)});obs.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});
+const screenLayoutObserver=new MutationObserver(()=>$('#voicePanel').classList.toggle('screen-sharing',!screenPreview.hidden||!remoteScreen.hidden));screenLayoutObserver.observe(screenPreview,{attributes:true,attributeFilter:['hidden']});screenLayoutObserver.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});
 // Escape key exits CSS fullscreen.
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&remoteScreen.classList.contains('fs'))toggleRemoteFs()});
