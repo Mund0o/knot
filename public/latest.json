@@ -1,10 +1,10 @@
 {
-  "version": "1.1.12",
-  "notes": "Restores robust Linux screen-share audio capture and uses real fullscreen for shared screens.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.12/pair-p2p-1.1.12.tar.gz",
-  "linuxSha256": "f932200ac044dd8361ea45756ca334844f326414d1e43d7d0e02d530960edafd",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.12/Pair-1.1.12.AppImage",
-  "linuxAppImageSha256": "325d2d763ab510bebc55a0802b1ae71ab5dd63e14c6d958bf4c59602fe22bd90",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.12/Pair.Setup.1.1.12.exe",
-  "winSha256": "5879ccd957ccad1268319a9e275f3b00b3d777752160ca5ab715375c0c00986a"
+  "version": "1.1.13",
+  "notes": "Prevents unsafe raw screen-audio fallback, so Pair call audio cannot loop back. Fixes screen volume and view-control overlap.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.13/pair-p2p-1.1.13.tar.gz",
+  "linuxSha256": "ebf02e6bc369cf43772b5cbe317d027f65f691e8e48ed616a664e650f3c99d15",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.13/Pair-1.1.13.AppImage",
+  "linuxAppImageSha256": "81f9753b193569a1911146f7337bc03fbf02b11ccc107fca60cbf0910c4eaa67",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.13/Pair.Setup.1.1.13.exe",
+  "winSha256": "2b98e914643ec2a0a6599e90711ed718323284dbecc1ee5a274f77e2c24b47a3"
 }
