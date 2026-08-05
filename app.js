@@ -71,6 +71,15 @@ function playSound(kind){
 }
 function setupPermanentAudioSink(){
   try{
+    // Receiving a WebRTC track does not mean the local user joined the call.
+    // Never create a Web Audio route before they explicitly press Start call:
+    // that route bypasses HTMLMediaElement.muted and previously let an incoming
+    // caller be heard (and briefly leak into the screen-share mix).
+    if(!callActive){
+      const inactiveCtx=audioCtx;
+      if(inactiveCtx?.audioSink){try{inactiveCtx.audioSink.disconnect()}catch{};delete inactiveCtx.audioSink}
+      return;
+    }
     const ctx=sfxCtx();const st=remoteAudio.srcObject;
     if(!ctx||!st||!st.getAudioTracks().length)return;
     if(ctx.state==='suspended'){
@@ -90,7 +99,7 @@ function setupPermanentAudioSink(){
     try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.audioGain);ctx.audioSink=src}catch{}
   }catch{}
 }
-function setCallVolume(percent,persist=true){const value=Math.max(0,Math.min(100,Number(percent)||0))/100;volumeSlider.value=String(Math.round(value*100));volumeValue.textContent=Math.round(value*100)+'%';try{const ctx=sfxCtx();if(ctx&&ctx.audioGain)ctx.audioGain.gain.setValueAtTime(value,ctx.currentTime)}catch{};try{remoteAudio.volume=0;remoteAudio.muted=false}catch{};if(persist)ssSet('volume',String(value));}
+function setCallVolume(percent,persist=true){const value=Math.max(0,Math.min(100,Number(percent)||0))/100;volumeSlider.value=String(Math.round(value*100));volumeValue.textContent=Math.round(value*100)+'%';try{const ctx=sfxCtx();if(ctx&&ctx.audioGain)ctx.audioGain.gain.setValueAtTime(value,ctx.currentTime)}catch{};try{remoteAudio.volume=0;remoteAudio.muted=!callActive}catch{};if(persist)ssSet('volume',String(value));}
 function setRemoteCallAudio(enabled){try{if(!enabled){remoteAudio.muted=true;remoteAudio.pause();const ctx=audioCtx;if(ctx?.audioSink){ctx.audioSink.disconnect();delete ctx.audioSink}return}remoteAudio.muted=false;remoteAudio.volume=0;remoteAudio.play().catch(()=>{});setupPermanentAudioSink()}catch{}}
 remoteAudio.addEventListener('play',()=>{if(!callActive)queueMicrotask(()=>setRemoteCallAudio(false))});
 // Separate WebSocket used to relay file bytes (E2EE) between peers. Reuses the
@@ -405,7 +414,7 @@ function renderItem(item,resultsEl){
 function isEncryptedMessage(value){return !!value&&Array.isArray(value.iv)&&value.iv.length===12&&Array.isArray(value.data)&&value.data.length>0&&value.data.length<=MAX_MESSAGE_SIZE+32&&value.iv.every(Number.isInteger)&&value.data.every(Number.isInteger)}
 function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>{setStatus('Connected directly',true);announceProfile()};chat.onmessage=async e=>{try{if(typeof e.data!=='string'||e.data.length>MAX_MESSAGE_SIZE*3)return;const o=JSON.parse(e.data);if(o.t==='msg'&&isEncryptedMessage(o.v)){const message=readChatPayload(dec.decode(await open(o.v)));addMessage(message.text,false,message.gif)}else if(o.t==='profile'){const p=typeof o.v==='string'?{image:o.v}:o.v;if(validProfileIdentity(p?.identity))setAvatarIdentity(friendAvatar,p.identity);if(typeof p?.image==='string'&&p.image.length<=MAX_PROFILE_DATA){setAvatar(friendAvatar,p.image);setAvatarFrame(friendAvatar,p.frame)}}      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
         // call→leave cycle still plays the leave tone instead of going silent.
-        friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';/* Keep this person's microphone and call state alive. The connection is a room, not a one-shot call: only the peer that pressed End Call leaves. */}else if(o.t==='screen-start'){remoteScreenExpected=true;logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){remoteScreenExpected=false;logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}else if(o.t==='reneg-offer'&&typeof o.sdp==='string'&&pc){// Same glare rule as the signaling path: only the join/answer side yields.
+        friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setRemoteCallAudio(callActive);}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';/* Keep this person's microphone and call state alive. The connection is a room, not a one-shot call: only the peer that pressed End Call leaves. */}else if(o.t==='screen-start'){remoteScreenExpected=true;logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){remoteScreenExpected=false;logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}else if(o.t==='reneg-offer'&&typeof o.sdp==='string'&&pc){// Same glare rule as the signaling path: only the join/answer side yields.
 if(renegPending&&(role==='join'||role==='answer')){renegotiating++;renegPending=false}await pc.setRemoteDescription({type:'offer',sdp:o.sdp});const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();send({t:'reneg-answer',sdp:pc.localDescription.sdp});}else if(o.t==='reneg-answer'&&typeof o.sdp==='string'&&pc){await pc.setRemoteDescription({type:'answer',sdp:o.sdp});}}catch(e){console.warn('direct renegotiation error',e)}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Add name handling once per data channel without disturbing the encrypted
 // message/profile handler above. This also covers the channel received by the
@@ -483,7 +492,7 @@ function setupPeer(){
       if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
-    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const play=()=>{const p=remoteAudio.play();if(p?.catch)p.catch(()=>{})};play();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{play();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{play();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.play()}catch{};e.track.onended=()=>{if(remoteScreen.srcObject===stream){remoteScreen.srcObject=null;remoteScreen.hidden=true}}}}catch{}};
+    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.play()}catch{};e.track.onended=()=>{if(remoteScreen.srcObject===stream){remoteScreen.srcObject=null;remoteScreen.hidden=true}}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;pc?.removeEventListener('icegatheringstatechange',f);clearTimeout(timeout);resolve()};const f=()=>{if(pc?.iceGatheringState==='complete')finish()};const timeout=setTimeout(finish,5000);pc.addEventListener('icegatheringstatechange',f)})}
 function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=256000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=256000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx=0';if(!m.includes('stereo'))m+='; stereo=1';else m=m.replace(/stereo=[01]/,'stereo=1');if(!m.includes('sprop-stereo'))m+='; sprop-stereo=1';else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo=1');return m})}
@@ -870,8 +879,6 @@ async function startCall(){
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
     // counter callGen is incremented by every endCall call. If it changed, bail.
     if(gen!==callGen||!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
-    try{remoteAudio.muted=false;remoteAudio.play()}catch{}
-    setupPermanentAudioSink();
     // endCall/disconnectRoom may have run during a nested await; if pc is gone bail.
     if(!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
     callActive=true;callStart=Date.now();setRemoteCallAudio(true);callBtn.textContent='End call';callBtn.title='End voice call';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';muteBtn.title='Mute microphone';applyMicTransmission();
@@ -912,7 +919,7 @@ function toggleMute(){
   applyMicTransmission();
   if(micMuted){muteBtn.textContent='Unmute';muteBtn.title='Unmute microphone'}else if(voiceInputModeValue!=='ptt'){muteBtn.textContent='Mute';muteBtn.title='Mute microphone'}
 }
-callBtn.onclick=()=>{if(callActive)endCall(false);else{try{remoteAudio.muted=false;remoteAudio.play()}catch{};setupPermanentAudioSink();startCall()}};
+callBtn.onclick=()=>{if(callActive)endCall(false);else{warmAudio();startCall()}};
 muteBtn.onclick=toggleMute;
 volumeSlider.oninput=()=>setCallVolume(volumeSlider.value);
 

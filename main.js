@@ -56,12 +56,31 @@ function startLinuxShareAudio() {
   pipewire('pactl', ['set-default-sink', sink]);
   const loop = spawn('pw-loopback', ['-n', 'Pair Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: 'ignore', detached: true });
   loop.unref();
-  linuxShareAudio = { original, sink, module, loop, moved, label: 'Pair Share Audio', source: `${sink}.monitor` };
+  const state = { original, sink, module, loop, moved, label: 'Pair Share Audio', source: `${sink}.monitor`, watch: null, audits: [] };
+  // New Electron audio streams can be created after the default sink changes.
+  // PULSE_SINK handles the normal case; subscribe to Pulse/PipeWire events as
+  // a second line of defence so a just-created Pair stream is moved to the real
+  // output before it can become part of the monitor being shared.
+  try {
+    const watch = spawn('pactl', ['subscribe'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    state.watch = watch;
+    watch.stdout.setEncoding('utf8');
+    watch.stdout.on('data', text => {
+      if (linuxShareAudio === state && /sink-input/i.test(text)) keepPairAudioOutOfLinuxShare(original);
+    });
+    watch.unref();
+  } catch {}
+  // Cover streams created between the initial move and subscription becoming
+  // active; these are one-shot checks, not a constant polling loop.
+  state.audits = [50, 500].map(delay => setTimeout(() => { if (linuxShareAudio === state) keepPairAudioOutOfLinuxShare(original); }, delay));
+  linuxShareAudio = state;
   return { label: linuxShareAudio.label, source: linuxShareAudio.source };
 }
 function stopLinuxShareAudio() {
   const state = linuxShareAudio; if (!state) return;
   linuxShareAudio = null;
+  if (state.watch) try { state.watch.kill(); } catch {}
+  for (const audit of state.audits || []) clearTimeout(audit);
   try { state.loop.kill(); } catch {}
   pipewire('pactl', ['set-default-sink', state.original]);
   for (const input of state.moved || []) pipewireOk('pactl', ['move-sink-input', input.id, input.sink]);
