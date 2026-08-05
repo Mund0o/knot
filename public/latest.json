@@ -1,10 +1,10 @@
 {
-  "version": "1.1.14",
-  "notes": "Fixes installed Windows clean audio capture and routes active Linux game/browser audio into the share mix while keeping Pair excluded.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.14/pair-p2p-1.1.14.tar.gz",
-  "linuxSha256": "b4fff49ed922d2a678035c0a884bf45abe1cb4754c6d0093ea73473e5d4c4d73",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.14/Pair-1.1.14.AppImage",
-  "linuxAppImageSha256": "5125bcffcffd7eb5fa9740cac188d5c01abe328e2823d2acada5bb795cabc2c5",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.14/Pair.Setup.1.1.14.exe",
-  "winSha256": "a17c575f2d2070cf890d9d98eb59c45b4c10b08c970e469af39c7ec671812d36"
+  "version": "1.1.15",
+  "notes": "Uses only process-excluded Windows audio or PipeWire-isolated Linux audio for screen sharing, preventing call playback from looping back.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.15/pair-p2p-1.1.15.tar.gz",
+  "linuxSha256": "17e4d38c13f155b6aaaa69327e83b40459568500659f26e9d0fe10e8f3026a86",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.15/Pair-1.1.15.AppImage",
+  "linuxAppImageSha256": "fea15ea3efb9ee0c51e4843b1bdf032f31979ff6f825fe803f67773a0edaa1de",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.15/Pair.Setup.1.1.15.exe",
+  "winSha256": "4ebd3e5aeb39949dba25ef486f67d00a86507493ce8db8e36380ba81d862321e"
 }
