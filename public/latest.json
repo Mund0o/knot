@@ -1,10 +1,10 @@
 {
-  "version": "1.1.6",
-  "notes": "Adds PipeWire audio isolation for Linux screen sharing.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.6/pair-p2p-1.1.6.tar.gz",
-  "linuxSha256": "69602ec3878b32f04273ae41957edc041720ddf61cc97537d8418995f619b40c",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.6/Pair-1.1.6.AppImage",
-  "linuxAppImageSha256": "abdc6b190cc0bfe67ad82900950dd2567a769de5987b090373ddc0ea65596a18",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.6/Pair.Setup.1.1.6.exe",
-  "winSha256": "2115ab3993621a9188b6e76014ab74e94adf59788416c5a0912587aeb291f242"
+  "version": "1.1.7",
+  "notes": "Improves app motion and requires joining a call before remote voice audio plays.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.7/pair-p2p-1.1.7.tar.gz",
+  "linuxSha256": "fbfc16b612a6a5e967a67b732ecca258df18e1b8217c6e69e837ab25587be24c",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.7/Pair-1.1.7.AppImage",
+  "linuxAppImageSha256": "68bb01d9d216093bd41993702fd050dcd14d3072f706b187d11a2004031f48f5",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.7/Pair.Setup.1.1.7.exe",
+  "winSha256": "1b14b5b616dc04e757e9114cf63ff2cdb4f75f11b7f9f09fecf3ec1166ea3dad"
 }
