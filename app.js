@@ -1081,9 +1081,13 @@ function cleanupNativeScreenCapture(){
   if(screenOutCtx){try{screenOutCtx.close()}catch{};screenOutCtx=null}
 }
 async function linuxShareAudioTrack(){
-  const label=await window.pairEnv?.startLinuxShareAudio?.();if(!label)return null;
-  for(let attempt=0;attempt<12;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();const device=devices.find(d=>d.kind==='audioinput'&&d.label.includes(label));if(device){const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});return stream.getAudioTracks()[0]||null}await new Promise(resolve=>setTimeout(resolve,150))}
-  window.pairEnv?.stopLinuxShareAudio?.();return null;
+  const share=await window.pairEnv?.startLinuxShareAudio?.();if(!share)return null;
+  const label=typeof share==='string'?share:share.label||'Pair Share Audio';
+  // PipeWire may expose this as “Monitor of Pair Share Audio”, so match both
+  // the friendly label and the stable Pair/Share words rather than one exact
+  // desktop-specific spelling.
+  for(let attempt=0;attempt<24;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));if(device){try{const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const track=stream.getAudioTracks()[0]||null;if(track){track.enabled=true;return track}}catch(e){console.warn('[AUDIO] Pair Share Audio device failed:',e)}}await new Promise(resolve=>setTimeout(resolve,150))}
+  console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');window.pairEnv?.stopLinuxShareAudio?.();return null;
 }
 function startScreenStats(sender){
   if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;
@@ -1130,7 +1134,7 @@ async function startScreenShare(){
     // Audio cleanup can take a few seconds on Windows. Start the video first,
     // then attach the cleaned audio in a second negotiation so clicking Share
     // never appears to hang while Pair protects the call from echo.
-    const attachShareAudio=async()=>{let audioTrack=stream.getAudioTracks()[0];if(window.pairEnv?.platform==='linux')audioTrack=await linuxShareAudioTrack();if(!audioTrack)return;if(window.pairEnv?.platform!=='linux')try{const cleanTrack=await setupNativeScreenCapture();if(cleanTrack)audioTrack=cleanTrack}catch(e){console.warn('[AUDIO] canceller exception:',e)}if(gen!==screenGen||!screenActive||!pc||!audioTrack)return;try{screenSenders.push(pc.addTrack(audioTrack,stream));await renegotiate()}catch(e){console.warn('[AUDIO] addTrack failed:',e)}};
+    const attachShareAudio=async()=>{if(!screenAudioOn)return;let audioTrack=stream.getAudioTracks()[0];if(window.pairEnv?.platform==='linux')audioTrack=await linuxShareAudioTrack();if(!audioTrack){console.warn('[AUDIO] no system-audio track available');return}if(window.pairEnv?.platform!=='linux')try{const cleanTrack=await setupNativeScreenCapture();if(cleanTrack)audioTrack=cleanTrack}catch(e){console.warn('[AUDIO] canceller exception:',e)}if(gen!==screenGen||!screenActive||!pc||!audioTrack)return;try{audioTrack.enabled=true;screenSenders.push(pc.addTrack(audioTrack,stream));await renegotiate();logCallEvent('Screen audio started')}catch(e){console.warn('[AUDIO] addTrack failed:',e)}};
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
@@ -1192,9 +1196,9 @@ const screenViewBar=document.createElement('div');screenViewBar.className='scree
 const gridViewButton=screenViewBar.querySelector('[data-screen-view="grid"]'),focusViewButton=screenViewBar.querySelector('[data-screen-view="focus"]'),fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]');
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
 function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden;if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-focus',screenView==='focus'&&hasLocal&&hasRemote);voicePanel.classList.toggle('screen-focus-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;gridViewButton.classList.toggle('active',screenView==='grid');focusViewButton.classList.toggle('active',screenView==='focus');fsBtn.hidden=!screenIsActive();fsBtn.textContent=(remoteScreen.classList.contains('fs')||screenPreview.classList.contains('fs'))?'✕ Exit fullscreen':'⛶ Fullscreen'}
-function toggleRemoteFs(){const target=focusedScreen==='local'?screenPreview:remoteScreen,other=target===screenPreview?remoteScreen:screenPreview;const is=target.classList.toggle('fs');other.classList.remove('fs');document.body.classList.toggle('screen-fullscreen',is);updateScreenLayout()}
+async function toggleRemoteFs(){const target=focusedScreen==='local'?screenPreview:remoteScreen,other=target===screenPreview?remoteScreen:screenPreview;if(target.classList.contains('fs')){target.classList.remove('fs');document.body.classList.remove('screen-fullscreen');updateScreenLayout();return}if(document.fullscreenElement){try{await document.exitFullscreen()}catch{};return}try{await target.requestFullscreen({navigationUI:'hide'});target.classList.remove('fs');other.classList.remove('fs');document.body.classList.add('screen-fullscreen')}catch{target.classList.add('fs');other.classList.remove('fs');document.body.classList.add('screen-fullscreen');updateScreenLayout()}}
 function selectScreen(kind){focusedScreen=kind;if(!remoteScreen.hidden&&!screenPreview.hidden)screenView='focus';updateScreenLayout()}
 screenVideos.addEventListener('click',event=>{const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;toggleRemoteFs()});
 screenViewBar.onclick=event=>{const view=event.target.closest('[data-screen-view]')?.dataset.screenView;if(view){screenView=view;updateScreenLayout();return}if(event.target.closest('[data-screen-fullscreen]'))toggleRemoteFs()};
 const screenLayoutObserver=new MutationObserver(updateScreenLayout);screenLayoutObserver.observe(screenPreview,{attributes:true,attributeFilter:['hidden']});screenLayoutObserver.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});updateScreenLayout();
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(remoteScreen.classList.contains('fs')||screenPreview.classList.contains('fs')))toggleRemoteFs()});
+document.addEventListener('fullscreenchange',()=>{const is=!!document.fullscreenElement;document.body.classList.toggle('screen-fullscreen',is);if(!is){remoteScreen.classList.remove('fs');screenPreview.classList.remove('fs')}updateScreenLayout()});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(document.fullscreenElement||remoteScreen.classList.contains('fs')||screenPreview.classList.contains('fs')))toggleRemoteFs()});

@@ -10,7 +10,7 @@ let linuxShareAudio = null;
 function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
 function startLinuxShareAudio() {
   if (process.platform !== 'linux') return null;
-  if (linuxShareAudio) return linuxShareAudio.label;
+  if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source };
   if (!/PipeWire/i.test(pipewire('pactl', ['info']))) return null;
   const original = pipewire('pactl', ['get-default-sink']);
   if (!original) return null;
@@ -22,8 +22,8 @@ function startLinuxShareAudio() {
   pipewire('pactl', ['set-default-sink', sink]);
   const loop = spawn('pw-loopback', ['-n', 'Pair Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: 'ignore', detached: true });
   loop.unref();
-  linuxShareAudio = { original, sink, module, loop, label: 'Pair Share Audio' };
-  return linuxShareAudio.label;
+  linuxShareAudio = { original, sink, module, loop, label: 'Pair Share Audio', source: `${sink}.monitor` };
+  return { label: linuxShareAudio.label, source: linuxShareAudio.source };
 }
 function stopLinuxShareAudio() {
   const state = linuxShareAudio; if (!state) return;
