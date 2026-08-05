@@ -351,6 +351,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media');
   });
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => permission === 'media');
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
   // System audio is deliberately not granted here. Chromium "loopback" captures
