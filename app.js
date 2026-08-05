@@ -926,22 +926,47 @@ let renegotiating=0;
 // we resolve it by role. The joiner defers (answers the host's offer instead of
 // insisting on its own); the host wins. role is deterministic across peers.
 let renegPending=false;
+// A screen share has two negotiations: video immediately, then audio once the
+// clean capture route is ready.  Do not create the latter offer while the
+// former is still awaiting its answer.  Chrome rejects createOffer in
+// have-local-offer, which made the audio sender local-only and resulted in a
+// silent share.
+function waitForStablePeer(target=pc,timeout=10000){
+  if(!target||target.signalingState==='closed')return Promise.resolve(false);
+  if(target.signalingState==='stable')return Promise.resolve(true);
+  return new Promise(resolve=>{
+    let finished=false;
+    const finish=value=>{if(finished)return;finished=true;clearTimeout(timer);target.removeEventListener('signalingstatechange',check);target.removeEventListener('connectionstatechange',closed);resolve(value)};
+    const check=()=>{if(target.signalingState==='stable')finish(true)};
+    const closed=()=>{if(['closed','failed'].includes(target.connectionState)||target.signalingState==='closed')finish(false)};
+    const timer=setTimeout(()=>finish(false),timeout);
+    target.addEventListener('signalingstatechange',check);target.addEventListener('connectionstatechange',closed);
+    check();
+  });
+}
 async function renegotiate(){
   if(!pc||(!signaling&&chat?.readyState!=='open'))return;
+  const target=pc;
+  if(!await waitForStablePeer(target)){
+    console.warn('renegotiate skipped: peer did not return to stable');
+    return false;
+  }
+  if(!pc||pc!==target||target.signalingState!=='stable')return false;
   const myId=++renegotiating;
   renegPending=true;
   try{
     const offer=await pc.createOffer({iceRestart:false});
-    if(!pc||myId!==renegotiating){renegPending=false;return}
+    if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
     await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});
-    if(!pc||myId!==renegotiating){renegPending=false;return}
+    if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
     await waitIce();
-    if(myId!==renegotiating){renegPending=false;return}
+    if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
     if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:pc.localDescription.sdp}}));
     else if(chat?.readyState==='open')send({t:'reneg-offer',sdp:pc.localDescription.sdp});
-    else{renegPending=false;return}
-  }catch(e){console.warn('renegotiate error',e)}
-  renegPending=false;
+    else{renegPending=false;return false}
+    return true;
+  }catch(e){console.warn('renegotiate error',e);return false}
+  finally{if(myId===renegotiating)renegPending=false}
 }
 // Capture system audio for screen share without including Pair's own playback.
 // Chromium endpoint loopback mixes every render stream (including remote voice
@@ -1041,6 +1066,11 @@ async function linuxShareAudioTrack(){
   // PipeWire may expose this as “Monitor of Pair Share Audio”, so match both
   // the friendly label and the stable Pair/Share words rather than one exact
   // desktop-specific spelling.
+  // Electron can redact input labels until getUserMedia has been granted once.
+  // Open and immediately stop the default input only to establish that grant;
+  // it is never added to the share. Without this, the Pair Share monitor is
+  // present but impossible to select on a first share or a fresh profile.
+  try{const permissionProbe=await navigator.mediaDevices.getUserMedia({audio:true});permissionProbe.getTracks().forEach(t=>t.stop())}catch(e){console.warn('[AUDIO] unable to reveal PipeWire inputs:',e?.message||e)}
   for(let attempt=0;attempt<24;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));if(device){try{const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const track=stream.getAudioTracks()[0]||null;if(track){track.enabled=true;return track}}catch(e){console.warn('[AUDIO] Pair Share Audio device failed:',e)}}await new Promise(resolve=>setTimeout(resolve,150))}
   console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');window.pairEnv?.stopLinuxShareAudio?.();return null;
 }
@@ -1115,16 +1145,29 @@ async function startScreenShare(){
         }
         return;
       }
-      if(gen!==screenGen||!screenActive||!pc){try{audioTrack.stop()}catch{};return}
+      const discardShareAudio=()=>{
+        try{audioTrack?.stop()}catch{}
+        try{stream.removeTrack(audioTrack)}catch{}
+        // A canceled/failed Linux attach must restore the desktop default sink
+        // immediately; otherwise a late async result can leave audio routed to
+        // an orphaned Pair Share sink after the user has already stopped.
+        if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+        else cleanupNativeScreenCapture();
+      };
+      if(gen!==screenGen||!screenActive||!pc){discardShareAudio();return}
       try{
         audioTrack.enabled=true;
         try{stream.addTrack(audioTrack)}catch{}
-        screenSenders.push(pc.addTrack(audioTrack,stream));
-        await renegotiate();
+        const audioSender=pc.addTrack(audioTrack,stream);
+        screenSenders.push(audioSender);
+        if(!await renegotiate())throw new Error('audio negotiation did not start');
+        if(gen!==screenGen||!screenActive||!pc)throw new Error('screen share ended during audio negotiation');
         logCallEvent('Screen audio started');
       }catch(e){
         console.warn('[AUDIO] addTrack failed:',e);
-        try{audioTrack.stop()}catch{}
+        const sender=screenSenders.find(s=>s.track===audioTrack);
+        if(sender){try{pc?.removeTrack(sender)}catch{};screenSenders=screenSenders.filter(s=>s!==sender)}
+        discardShareAudio();
       }
     };
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
