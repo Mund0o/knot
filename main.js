@@ -8,6 +8,25 @@ let pendingSourceId = null;
 let pendingSources = [];
 let linuxShareAudio = null;
 function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
+function pipewireOk(command, args) { try { execFileSync(command, args, { stdio: 'ignore' }); return true; } catch { return false; } }
+function pairProcessTree() {
+  const rows = pipewire('ps', ['-eo', 'pid=,ppid=']).split(/\n+/).map(line => line.trim().split(/\s+/).map(Number)).filter(row => row.length === 2 && row.every(Number.isFinite));
+  const children = new Map(); for (const [pid, ppid] of rows) { const list = children.get(ppid) || []; list.push(pid); children.set(ppid, list); }
+  const ids = new Set([process.pid]), todo = [process.pid]; while (todo.length) for (const child of children.get(todo.pop()) || []) if (!ids.has(child)) { ids.add(child); todo.push(child); }
+  return ids;
+}
+function moveExistingLinuxAudio(sink) {
+  const pairPids = pairProcessTree(), sinkNames = new Map(pipewire('pactl', ['list', 'short', 'sinks']).split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2).map(parts => [parts[0], parts[1]]));
+  const details = pipewire('pactl', ['list', 'sink-inputs']); const moved = [];
+  for (const parts of pipewire('pactl', ['list', 'short', 'sink-inputs']).split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2)) {
+    const [id, currentSink] = parts, block = details.match(new RegExp(`Sink Input #${id}\\n([\\s\\S]*?)(?=\\nSink Input #|$)`))?.[1] || '', pid = Number(block.match(/application\.process\.id\s*=\s*"(\d+)"/)?.[1]);
+    // Only move known non-Pair processes. Pair and all Electron child processes
+    // remain on the real output, so their call playback is never share audio.
+    if (!pid || pairPids.has(pid) || !sinkNames.get(currentSink)) continue;
+    if (pipewireOk('pactl', ['move-sink-input', id, sink])) moved.push({ id, sink: sinkNames.get(currentSink) });
+  }
+  return moved;
+}
 function startLinuxShareAudio() {
   if (process.platform !== 'linux') return null;
   if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source };
@@ -19,10 +38,11 @@ function startLinuxShareAudio() {
   if (!module) return null;
   // Pair's renderer inherits PULSE_SINK before it is created, so its own voice
   // playback remains on the real output while other applications use this mix.
+  const moved = moveExistingLinuxAudio(sink);
   pipewire('pactl', ['set-default-sink', sink]);
   const loop = spawn('pw-loopback', ['-n', 'Pair Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: 'ignore', detached: true });
   loop.unref();
-  linuxShareAudio = { original, sink, module, loop, label: 'Pair Share Audio', source: `${sink}.monitor` };
+  linuxShareAudio = { original, sink, module, loop, moved, label: 'Pair Share Audio', source: `${sink}.monitor` };
   return { label: linuxShareAudio.label, source: linuxShareAudio.source };
 }
 function stopLinuxShareAudio() {
@@ -30,6 +50,7 @@ function stopLinuxShareAudio() {
   linuxShareAudio = null;
   try { state.loop.kill(); } catch {}
   pipewire('pactl', ['set-default-sink', state.original]);
+  for (const input of state.moved || []) pipewireOk('pactl', ['move-sink-input', input.id, input.sink]);
   pipewire('pactl', ['unload-module', state.module]);
 }
 
@@ -327,6 +348,7 @@ let nativeCapture = null;
 function loadNativeCapture(win) {
   if (nativeCapture) return nativeCapture;
   const paths = [
+    ...(process.resourcesPath ? [path.join(process.resourcesPath, 'app.asar.unpacked', 'addon', 'build', 'Release', 'pair-capture')] : []),
     path.join(__dirname, 'addon', 'build', 'Release', 'pair-capture'),
     path.join(__dirname, '..', 'addon', 'build', 'Release', 'pair-capture'),
     path.join(process.cwd(), 'addon', 'build', 'Release', 'pair-capture'),
