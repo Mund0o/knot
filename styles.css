@@ -353,3 +353,6 @@ body{background:var(--background);background-attachment:fixed}.app-shell{display
 
 /* Navigation and the friend panel must never run below a small window. */
 .app-rail{box-sizing:border-box;overflow-y:auto;overscroll-behavior:contain}.rail-top,.rail-bottom{flex:0 0 auto}.rail-add{display:grid!important;visibility:visible!important}@supports(height:100dvh){.connect-drawer[open]{top:50dvh;max-height:calc(100dvh - 28px)}}@media(max-height:560px){.app-rail{height:100dvh;min-height:0;padding-block:8px}.rail-top,.rail-bottom{gap:6px}.rail-bottom{margin-top:auto}}
+
+/* The drawer is centered with a transform, so its entrance animation must retain it. */
+@keyframes pair-drawer-rise{from{opacity:0;transform:translate(-50%,calc(-50% + 10px)) scale(.985)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}.connect-drawer[open]{animation:pair-drawer-rise .26s cubic-bezier(.2,.8,.2,1) both}
