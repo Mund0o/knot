@@ -15,3 +15,11 @@ electron-dist/
 Pair-linux-source.zip
 .DS_Store
 nul
+*.log
+build*.log
+app_ids.txt
+html_ids.txt
+addon/build/*
+!addon/build/Release/
+addon/build/Release/*
+!addon/build/Release/pair-capture.node

@@ -4,6 +4,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
+const { validateSignalPayload } = require('./pair-helpers');
+
 const port = Number(process.env.PORT || 8787);
 const rooms = new Map();
 
@@ -75,7 +77,7 @@ function buildLandingPage(manifest) {
 <body>
   <div class="card">
     <h1>Pair — private P2P chat</h1>
-    <div class="ver">Latest version: ${version}</div>
+    <div class="ver">Latest version: ${escapeHtml(version)}</div>
     ${notes ? `<div class="notes">${escapeHtml(notes)}</div>` : ''}
     <a class="btn" id="win" href="${escapeHtml(winUrl || '#')}" download>Download for Windows</a>
     <a class="btn alt" id="linux" href="${escapeHtml(linuxUrl || '#')}" download>Download for Linux</a>
@@ -186,8 +188,16 @@ function leave(socket) {
   if (!socket.room) return;
   const peers = rooms.get(socket.room) || [];
   const remaining = peers.filter(peer => peer !== socket);
-  if (remaining.length) rooms.set(socket.room, remaining);
-  else rooms.delete(socket.room);
+  if (remaining.length) {
+    rooms.set(socket.room, remaining);
+    // Tell the remaining peer so they can tear down WebRTC cleanly instead of
+    // waiting for ICE to fail silently after the other side closes.
+    for (const peer of remaining) {
+      if (peer.readyState === WebSocket.OPEN) {
+        try { peer.send(JSON.stringify({ type: 'peer-left' })); } catch {}
+      }
+    }
+  } else rooms.delete(socket.room);
   socket.room = null;
 }
 
@@ -229,9 +239,11 @@ wss.on('connection', socket => {
       return;
     }
     if (socket.room && message.type === 'signal') {
-      // Relay signaling + any other JSON control messages to the peer.
+      const payload = validateSignalPayload(message.payload);
+      if (!payload) return;
+      const outbound = JSON.stringify({ type: 'signal', payload });
       for (const peer of rooms.get(socket.room) || []) {
-        if (peer !== socket && peer.readyState === WebSocket.OPEN) peer.send(JSON.stringify(message));
+        if (peer !== socket && peer.readyState === WebSocket.OPEN) peer.send(outbound);
       }
     }
   });
