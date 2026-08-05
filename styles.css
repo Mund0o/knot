@@ -356,3 +356,6 @@ body{background:var(--background);background-attachment:fixed}.app-shell{display
 
 /* The drawer is centered with a transform, so its entrance animation must retain it. */
 @keyframes pair-drawer-rise{from{opacity:0;transform:translate(-50%,calc(-50% + 10px)) scale(.985)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}.connect-drawer[open]{animation:pair-drawer-rise .26s cubic-bezier(.2,.8,.2,1) both}
+
+/* Keep share volume separate from layout controls in grid, focus, and fullscreen. */
+#voicePanel.screen-sharing .screen-volume{top:12px;right:12px;bottom:auto;z-index:20}#voicePanel.screen-sharing .screen-view-bar{right:24px;bottom:16px;z-index:21}.screen-tile.fs{position:fixed!important;z-index:10000!important;inset:0!important;width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;border:0!important;border-radius:0!important;background:#000!important}.screen-tile.fs .screen-volume{top:18px;right:18px;bottom:auto;z-index:10002}
