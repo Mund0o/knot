@@ -20,7 +20,7 @@ const LOCAL_TEST_MODE=true;
 // Per-connection sound flags so the chimes don't double/triple: chat+files both
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
 let connectSoundDone=false,friendLeftNotified=false,friendInCall=false,friendPresenceTimer=null,selfInCall=false,selfPresenceTimer=null;
-let screenTransceiver=null,screenActive=false,screenStarting=false,screenStream=null,screenGen=0,screenSenders=[],screenStatsTimer=null,screenStatsLast=null,remoteScreenExpected=false;
+let screenTransceiver=null,screenActive=false,screenStarting=false,screenStream=null,screenGen=0,screenSenders=[],screenStatsTimer=null,screenStatsLast=null,remoteScreenExpected=false,screenAudioDebug='';
 const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio'),connectCard=$('#connectCard'),addFriendBtn=$('#addFriend'),panelBackdrop=$('#panelBackdrop'),profileBtn=$('#profileBtn'),profileInput=$('#profileInput'),profileAdjust=$('#profileAdjust'),profileEditor=$('#profileEditor'),profileZoom=$('#profileZoom'),profileX=$('#profileX'),profileY=$('#profileY'),profileDone=$('#profileDone'),friendAvatar=$('#friendAvatar'),voicePanel=$('#voicePanel'),settingsPanel=$('#settingsPanel'),settingsAvatar=$('#settingsAvatar'),settingsChangePhoto=$('#settingsChangePhoto'),settingsAdjustPhoto=$('#settingsAdjustPhoto'),settingsRemovePhoto=$('#settingsRemovePhoto'),displayNameInput=$('#displayName'),yourNameEl=$('#yourName'),friendNameEl=$('#friendName'),inputDevice=$('#inputDevice'),outputDevice=$('#outputDevice'),voiceProcessing=$('#voiceProcessing'),voiceInputMode=$('#voiceInputMode'),pushToTalkSettings=$('#pushToTalkSettings'),pushToTalkKeyButton=$('#pushToTalkKey'),pushToTalkDelayInput=$('#pushToTalkDelay'),pushToTalkDelayValue=$('#pushToTalkDelayValue'),deviceHint=$('#deviceHint'),testMicrophone=$('#testMicrophone'),reduceMotion=$('#reduceMotion'),soundEffects=$('#soundEffects'),shareProfile=$('#shareProfile'),rememberInvite=$('#rememberInvite'),hardwareAcceleration=$('#hardwareAcceleration'),hardwareHint=$('#hardwareHint');
 let profileAvatar='',profileFrame={zoom:100,x:50,y:50},profileIdentity=makeProfileIdentity(),profileName='You',friendName='Friend',inputDeviceId='default',outputDeviceId='default',voiceProcessingEnabled=false,voiceInputModeValue='voice',pushToTalkKey='Space',pushToTalkDelay=0,pushToTalkHeld=false,pushToTalkCapturing=false,pushToTalkReleaseTimer=null,soundEnabled=true,profileSharing=true,rememberInviteCode=true,micTestStream=null,micTestSource=null,micTestGain=null;
 // A 5 MiB source GIF expands to roughly 6.7 MiB as a data URL. This remains
@@ -71,6 +71,15 @@ function playSound(kind){
 }
 function setupPermanentAudioSink(){
   try{
+    // Receiving a WebRTC track does not mean the local user joined the call.
+    // Never create a Web Audio route before they explicitly press Start call:
+    // that route bypasses HTMLMediaElement.muted and previously let an incoming
+    // caller be heard (and briefly leak into the screen-share mix).
+    if(!callActive){
+      const inactiveCtx=audioCtx;
+      if(inactiveCtx?.audioSink){try{inactiveCtx.audioSink.disconnect()}catch{};delete inactiveCtx.audioSink}
+      return;
+    }
     const ctx=sfxCtx();const st=remoteAudio.srcObject;
     if(!ctx||!st||!st.getAudioTracks().length)return;
     if(ctx.state==='suspended'){
@@ -90,7 +99,8 @@ function setupPermanentAudioSink(){
     try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.audioGain);ctx.audioSink=src}catch{}
   }catch{}
 }
-function setCallVolume(percent,persist=true){const value=Math.max(0,Math.min(100,Number(percent)||0))/100;volumeSlider.value=String(Math.round(value*100));volumeValue.textContent=Math.round(value*100)+'%';try{const ctx=sfxCtx();if(ctx&&ctx.audioGain)ctx.audioGain.gain.setValueAtTime(value,ctx.currentTime)}catch{};try{remoteAudio.volume=0;remoteAudio.muted=false}catch{};if(persist)ssSet('volume',String(value));}
+function setCallVolume(percent,persist=true){const value=Math.max(0,Math.min(100,Number(percent)||0))/100;volumeSlider.value=String(Math.round(value*100));volumeValue.textContent=Math.round(value*100)+'%';try{const ctx=sfxCtx();if(ctx&&ctx.audioGain)ctx.audioGain.gain.setValueAtTime(value,ctx.currentTime)}catch{};try{remoteAudio.volume=0;remoteAudio.muted=!callActive}catch{};if(persist)ssSet('volume',String(value));}
+function enableRangeDrag(range){if(!range||range.dataset.pairDrag)return;range.dataset.pairDrag='1';let pointerId=null;const setFromPointer=e=>{const box=range.getBoundingClientRect(),min=Number(range.min)||0,max=Number(range.max)||100,step=Number(range.step)||1,ratio=Math.max(0,Math.min(1,(e.clientX-box.left)/Math.max(1,box.width))),raw=min+(max-min)*ratio,value=Math.round((raw-min)/step)*step+min;range.value=String(Math.max(min,Math.min(max,value)));range.dispatchEvent(new Event('input',{bubbles:true}))};range.addEventListener('pointerdown',e=>{if(e.button!==0)return;range.focus({preventScroll:true});pointerId=e.pointerId;range.setPointerCapture?.(pointerId);setFromPointer(e);e.preventDefault()});range.addEventListener('pointermove',e=>{if(e.pointerId===pointerId)setFromPointer(e)});const finish=e=>{if(e.pointerId!==pointerId)return;try{range.releasePointerCapture?.(pointerId)}catch{};pointerId=null;range.dispatchEvent(new Event('change',{bubbles:true}))};range.addEventListener('pointerup',finish);range.addEventListener('pointercancel',finish)}
 function setRemoteCallAudio(enabled){try{if(!enabled){remoteAudio.muted=true;remoteAudio.pause();const ctx=audioCtx;if(ctx?.audioSink){ctx.audioSink.disconnect();delete ctx.audioSink}return}remoteAudio.muted=false;remoteAudio.volume=0;remoteAudio.play().catch(()=>{});setupPermanentAudioSink()}catch{}}
 remoteAudio.addEventListener('play',()=>{if(!callActive)queueMicrotask(()=>setRemoteCallAudio(false))});
 // Separate WebSocket used to relay file bytes (E2EE) between peers. Reuses the
@@ -416,7 +426,7 @@ function renderItem(item,resultsEl){
 function isEncryptedMessage(value){return !!value&&Array.isArray(value.iv)&&value.iv.length===12&&Array.isArray(value.data)&&value.data.length>0&&value.data.length<=MAX_MESSAGE_SIZE+32&&value.iv.every(Number.isInteger)&&value.data.every(Number.isInteger)}
 function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}function wire(){if(chat){chat.onopen=()=>{setStatus('Connected directly',true);announceProfile()};chat.onmessage=async e=>{try{if(typeof e.data!=='string'||e.data.length>MAX_MESSAGE_SIZE*3)return;const o=JSON.parse(e.data);if(o.t==='msg'&&isEncryptedMessage(o.v)){const message=readChatPayload(dec.decode(await open(o.v)));addMessage(message.text,false,message.gif)}else if(o.t==='profile'){const p=typeof o.v==='string'?{image:o.v}:o.v;const dmFriendAvatar=$('#dmFriendAvatar');if(validProfileIdentity(p?.identity)){setAvatarIdentity(friendAvatar,p.identity);if(dmFriendAvatar)setAvatarIdentity(dmFriendAvatar,p.identity)}if(typeof p?.image==='string'&&p.image.length<=MAX_PROFILE_DATA){setAvatar(friendAvatar,p.image);setAvatarFrame(friendAvatar,p.frame);if(dmFriendAvatar){setAvatar(dmFriendAvatar,p.image);setAvatarFrame(dmFriendAvatar,p.frame)}}}      else if(o.t==='call-ring'){// Reset the leave-chime flag when the friend rings again, so a second
         // call→leave cycle still plays the leave tone instead of going silent.
-        friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setupPermanentAudioSink();}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';/* Keep this person's microphone and call state alive. The connection is a room, not a one-shot call: only the peer that pressed End Call leaves. */}else if(o.t==='screen-start'){remoteScreenExpected=true;logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){remoteScreenExpected=false;logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}else if(o.t==='reneg-offer'&&typeof o.sdp==='string'&&pc){// Same glare rule as the signaling path: only the join/answer side yields.
+        friendLeftNotified=false;setParticipant(participantFriend,true);logCallEvent('Friend joined the call');playSound('ring');setRemoteCallAudio(callActive);}else if(o.t==='call-end'){setParticipant(participantFriend,false);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status';/* Keep this person's microphone and call state alive. The connection is a room, not a one-shot call: only the peer that pressed End Call leaves. */}else if(o.t==='screen-start'){remoteScreenExpected=true;logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';}else if(o.t==='screen-end'){remoteScreenExpected=false;logCallEvent('Friend stopped screen sharing');remoteScreen.srcObject=null;remoteScreen.hidden=true;screenStatus.textContent='Not sharing';}else if(o.t==='reneg-offer'&&typeof o.sdp==='string'&&pc){// Same glare rule as the signaling path: only the join/answer side yields.
 if(renegPending&&(role==='join'||role==='answer')){renegotiating++;renegPending=false}await pc.setRemoteDescription({type:'offer',sdp:o.sdp});const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();send({t:'reneg-answer',sdp:pc.localDescription.sdp});}else if(o.t==='reneg-answer'&&typeof o.sdp==='string'&&pc){await pc.setRemoteDescription({type:'answer',sdp:o.sdp});}}catch(e){console.warn('direct renegotiation error',e)}}}if(files){files.binaryType='arraybuffer';files.bufferedAmountLowThreshold=Math.max(1*1024*1024,SEND_WINDOW-4*1024*1024);   files.onmessage=e=>{receiveQueue=receiveQueue.then(()=>onFileFrame(e)).catch(()=>{})};files.onopen=()=>setStatus('Connected directly',true)}if(streamWs){streamWs.binaryType='arraybuffer';try{streamWs.bufferedAmountLowThreshold=SEND_WINDOW*0.75}catch{};streamWs.onmessage=e=>onStreamFrame(e);}}
 // Add name handling once per data channel without disturbing the encrypted
 // message/profile handler above. This also covers the channel received by the
@@ -468,12 +478,13 @@ function setupPeer(){
     pc._silentAudioCtx=silentCtx;
   }catch(e){console.warn('Silent audio track failed, using addTransceiver:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null}}
   logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid:'null'));
-  let gestureGuard=false;
+  let gestureGuard=false,screenGestureGuard=false;
   pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{const stream=e.streams[0]||new MediaStream([e.track]);
     // Keep remoteScreenExpected true until screen-end so audio that arrives after
     // the video track still routes to the screen element instead of the voice sink.
+    const screenStreamId=remoteScreen.srcObject?.id;
     const bindsToScreen=stream===remoteScreen.srcObject
-      ||!!(remoteScreen.srcObject&&e.streams?.[0]===remoteScreen.srcObject)
+      ||!!(screenStreamId&&e.streams?.some(s=>s?.id===screenStreamId))
       ||stream.getVideoTracks().length>0
       ||remoteScreenExpected
       ||(e.track.kind==='audio'&&!remoteScreen.hidden&&!!remoteScreen.srcObject);
@@ -489,12 +500,12 @@ function setupPeer(){
           ]);
         }
       }
-      logCallEvent('Screen audio received');
-      const play=()=>{const p=remoteScreen.play();if(p?.catch)p.catch(()=>{})};play();
-      if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
+      logCallEvent('Screen audio received');screenAudioDebug=' · audio received';screenStatus.textContent='Friend sharing'+screenAudioDebug;
+      const play=()=>{if(remoteScreen.volume>0)remoteScreen.muted=false;const p=remoteScreen.play();if(p?.catch)p.catch(()=>{})};play();
+      if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
-    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteAudio.muted=false;remoteAudio.volume=0;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};const play=()=>{const p=remoteAudio.play();if(p?.catch)p.catch(()=>{})};play();setupPermanentAudioSink();if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>{play();setupPermanentAudioSink()},{once:true});document.addEventListener('keydown',()=>{play();setupPermanentAudioSink()},{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.play()}catch{};e.track.onended=()=>{if(remoteScreen.srcObject===stream){remoteScreen.srcObject=null;remoteScreen.hidden=true}}}}catch{}};
+    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.play()}catch{};e.track.onended=()=>{if(remoteScreen.srcObject===stream){remoteScreen.srcObject=null;remoteScreen.hidden=true}}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;pc?.removeEventListener('icegatheringstatechange',f);clearTimeout(timeout);resolve()};const f=()=>{if(pc?.iceGatheringState==='complete')finish()};const timeout=setTimeout(finish,5000);pc.addEventListener('icegatheringstatechange',f)})}
 function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=256000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=256000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx=0';if(!m.includes('stereo'))m+='; stereo=1';else m=m.replace(/stereo=[01]/,'stereo=1');if(!m.includes('sprop-stereo'))m+='; sprop-stereo=1';else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo=1');return m})}
@@ -671,7 +682,7 @@ function addScreenShareSettings(){
   document.querySelector('.settings-tabs').append(tab);document.querySelector('.settings-pages').append(page);tab.onclick=()=>openSettingsTab('screen');
   const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),codec=$('#screenCodecSetting'),contentHint=$('#screenContentHintSetting'),cursor=$('#screenCursorSetting');
   const updateBitrate=()=>{screenBitrateMbps=Math.max(2,Math.min(120,Number(bitrate.value)||20));bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';ssSet('screenBitrate',String(screenBitrateMbps))};
-  bitrate.oninput=updateBitrate;codec.onchange=()=>{screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};
+  bitrate.oninput=updateBitrate;enableRangeDrag(bitrate);codec.onchange=()=>{screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};
   return async()=>{const b=Number(await ss('screenBitrate'));screenBitrateMbps=Number.isFinite(b)&&b>=2&&b<=120?b:20;bitrate.value=String(screenBitrateMbps);bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';const v=await ss('screenCodec');screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(v)?v:'auto';codec.value=screenCodec;const c=await ss('screenCursor');screenCursor=['always','motion','never'].includes(c)?c:'always';cursor.value=screenCursor;const h=await ss('screenContentHint');screenContentHint=h==='detail'?'detail':'motion';contentHint.value=screenContentHint};
 }
 const restoreScreenShareSettings=addScreenShareSettings();
@@ -830,7 +841,7 @@ function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer
   screenGen++;
   screenStarting=false;
   if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
-  screenActive=false;
+  screenActive=false;screenAudioDebug='';
   if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;
   cleanupNativeScreenCapture();
   if(screenStream){try{screenStream.getTracks().forEach(t=>t.stop())}catch{}screenStream=null}
@@ -901,8 +912,6 @@ async function startCall(){
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
     // counter callGen is incremented by every endCall call. If it changed, bail.
     if(gen!==callGen||!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
-    try{remoteAudio.muted=false;remoteAudio.play()}catch{}
-    setupPermanentAudioSink();
     // endCall/disconnectRoom may have run during a nested await; if pc is gone bail.
     if(!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
     callActive=true;callStart=Date.now();setRemoteCallAudio(true);callBtn.textContent='Leave';callBtn.title='Leave voice call';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';muteBtn.title='Mute microphone';applyMicTransmission();
@@ -946,7 +955,8 @@ function toggleMute(){
   if(micMuted){muteBtn.textContent='Unmute';muteBtn.title='Unmute microphone'}else if(voiceInputModeValue!=='ptt'){muteBtn.textContent='Mute';muteBtn.title='Mute microphone'}
   syncVoiceChrome();
 }
-callBtn.onclick=()=>{if(callActive)endCall(false);else{try{remoteAudio.muted=false;remoteAudio.play()}catch{};setupPermanentAudioSink();startCall()}};
+enableRangeDrag(volumeSlider);
+callBtn.onclick=()=>{if(callActive)endCall(false);else{warmAudio();startCall()}};
 muteBtn.onclick=toggleMute;
 const userBarMute=$('#userBarMute');
 const userBarDeafen=$('#userBarDeafen');
@@ -1161,12 +1171,12 @@ async function linuxShareAudioTrack(){
   // it is never added to the share. Without this, the Pair Share monitor is
   // present but impossible to select on a first share or a fresh profile.
   try{const permissionProbe=await navigator.mediaDevices.getUserMedia({audio:true});permissionProbe.getTracks().forEach(t=>t.stop())}catch(e){console.warn('[AUDIO] unable to reveal PipeWire inputs:',e?.message||e)}
-  for(let attempt=0;attempt<24;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));if(device){try{const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const track=stream.getAudioTracks()[0]||null;if(track){track.enabled=true;return track}}catch(e){console.warn('[AUDIO] Pair Share Audio device failed:',e)}}await new Promise(resolve=>setTimeout(resolve,150))}
-  console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');window.pairEnv?.stopLinuxShareAudio?.();return null;
+  let inputs=0,lastError='';for(let attempt=0;attempt<80;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();inputs=devices.filter(d=>d.kind==='audioinput').length;const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));if(device){try{const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},channelCount:{ideal:2},sampleRate:{ideal:48000},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const track=stream.getAudioTracks()[0]||null;if(track){track.enabled=true;return track}}catch(e){lastError=String(e?.name||e?.message||'capture rejected');console.warn('[AUDIO] Pair Share Audio device failed:',e)}}await new Promise(resolve=>setTimeout(resolve,150))}
+  screenAudioDebug=' · monitor unavailable ('+inputs+' inputs'+(lastError?', '+lastError:'')+')';console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');window.pairEnv?.stopLinuxShareAudio?.();return null;
 }
 function startScreenStats(sender){
   if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;
-  const sample=async()=>{try{if(!screenActive)return;const reports=await sender.getStats();let out;reports.forEach(r=>{if(r.type==='outbound-rtp'&&(r.kind==='video'||r.mediaType==='video')&&!r.isRemote)out=r});if(!out)return;const now=performance.now();let mbps='…';if(screenStatsLast&&now>screenStatsLast.at){mbps=(((out.bytesSent-screenStatsLast.bytes)*8)/(now-screenStatsLast.at)/1000).toFixed(1)}screenStatsLast={bytes:out.bytesSent,at:now};const fps=Math.round(out.framesPerSecond||0),w=out.frameWidth||0,h=out.frameHeight||0;const status='Sharing'+(w&&h?' · '+w+'×'+h:'')+(fps?' · '+fps+'fps':'')+(mbps!=='…'?' · '+mbps+' Mbps':'');screenStatus.textContent=status;screenBtn.title=status}catch{}};
+  const sample=async()=>{try{if(!screenActive)return;const reports=await sender.getStats();let out;reports.forEach(r=>{if(r.type==='outbound-rtp'&&(r.kind==='video'||r.mediaType==='video')&&!r.isRemote)out=r});if(!out)return;const now=performance.now();let mbps='…';if(screenStatsLast&&now>screenStatsLast.at){mbps=(((out.bytesSent-screenStatsLast.bytes)*8)/(now-screenStatsLast.at)/1000).toFixed(1)}screenStatsLast={bytes:out.bytesSent,at:now};const fps=Math.round(out.framesPerSecond||0),w=out.frameWidth||0,h=out.frameHeight||0;const status='Sharing'+(w&&h?' · '+w+'×'+h:'')+(fps?' · '+fps+'fps':'')+(mbps!=='…'?' · '+mbps+' Mbps':'')+screenAudioDebug;screenStatus.textContent=status;screenBtn.title=status}catch{}};
   sample();screenStatsTimer=setInterval(sample,2000);
 }
 async function startScreenShare(){
@@ -1229,7 +1239,7 @@ async function startScreenShare(){
       if(!audioTrack){
         console.warn('[AUDIO] computer sound unavailable without echo risk; sharing video only');
         if(gen===screenGen&&screenActive){
-          screenStatus.textContent=(screenStatus.textContent||'Sharing')+' · video only';
+          screenAudioDebug=' · sound unavailable';screenStatus.textContent=(screenStatus.textContent||'Sharing')+screenAudioDebug;
           logCallEvent('Computer sound unavailable — sharing video only');
         }
         return;
@@ -1262,9 +1272,9 @@ async function startScreenShare(){
         }catch{}
         if(!await renegotiate())throw new Error('audio negotiation did not start');
         if(gen!==screenGen||!screenActive||!pc)throw new Error('screen share ended during audio negotiation');
-        logCallEvent('Computer sound sharing started');
+        logCallEvent('Computer sound sharing started');screenAudioDebug=' · sound live';screenStatus.textContent='Sharing'+screenAudioDebug;
       }catch(e){
-        console.warn('[AUDIO] addTrack failed:',e);
+        console.warn('[AUDIO] addTrack failed:',e);if(gen===screenGen&&screenActive){screenAudioDebug=' · sound failed';screenStatus.textContent='Sharing'+screenAudioDebug}
         const sender=screenSenders.find(s=>s.track===audioTrack);
         if(sender){try{pc?.removeTrack(sender)}catch{};screenSenders=screenSenders.filter(s=>s!==sender)}
         discardShareAudio();
@@ -1274,9 +1284,9 @@ async function startScreenShare(){
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const names=screenCodec==='auto'?['AV1','H265','H264','VP9','VP8']:[screenCodec,'H264','VP9','VP8'];const cs=names.map(name=>caps.codecs.find(c=>c.mimeType===`video/${name}`)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
-    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const preset=screenPreset.value;const maxBitrate=Math.round(Math.max(2,Math.min(120,screenBitrateMbps))*1000000);p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=SCREEN_PRESETS[preset]?.frameRate?.max||30;p.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(p);console.log('[VIDEO] bitrate='+(maxBitrate/1e6)+'Mbps '+p.degradationPreference)}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
+    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const maxBitrate=Math.round(Math.max(2,Math.min(120,screenBitrateMbps))*1000000);p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=fps;p.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(p);console.log('[VIDEO] bitrate='+(maxBitrate/1e6)+'Mbps '+fps+'fps '+p.degradationPreference)}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
     if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());return}
-    screenActive=true;
+    screenActive=true;screenAudioDebug=screenAudioOn?' · starting sound capture':' · sound off';
     screenPreview.muted=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
     screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';screenStatus.textContent='Sharing';
@@ -1293,7 +1303,7 @@ async function stopScreenShare(fromEnd){
   screenGen++;
   screenStarting=false;
   if(window.pairEnv?.platform==='linux')window.pairEnv.stopLinuxShareAudio?.();
-  screenActive=false;
+  screenActive=false;screenAudioDebug='';
   if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;
   cleanupNativeScreenCapture();
   if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null}
@@ -1324,21 +1334,24 @@ const screenVolWrap=document.createElement('div');screenVolWrap.className='scree
 const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Volume';
 const screenVol=document.createElement('input');screenVol.type='range';screenVol.min=0;screenVol.max=100;screenVol.value=100;
 screenVol.oninput=()=>{const v=Math.max(0,Math.min(100,Number(screenVol.value)||0))/100;remoteScreen.volume=v;remoteScreen.muted=v===0;ssSet('screenVol',String(v))};
+enableRangeDrag(screenVol);
 // Restore saved screen volume (fire-and-forget).
 (async()=>{try{const saved=await ss('screenVol');if(saved!==null){const v=parseFloat(saved);if(v>=0&&v<=1){remoteScreen.volume=v;remoteScreen.muted=v===0;screenVol.value=Math.round(v*100)}}}catch{}})()
 screenVolWrap.appendChild(screenVolLabel);screenVolWrap.appendChild(screenVol);remoteScreen.parentElement.appendChild(screenVolWrap);
 remoteScreen.addEventListener('contextmenu',e=>{e.preventDefault();screenVolWrap.style.display=screenVolWrap.style.display==='none'?'flex':'none';screenVolWrap.style.alignItems='center'});
 document.addEventListener('click',e=>{if(!screenVolWrap.contains(e.target)&&e.target!==remoteScreen)screenVolWrap.style.display='none'});
-const screenVideos=screenPreview.parentElement;let screenView='grid',focusedScreen='remote';
+const screenVideos=screenPreview.parentElement;let screenExpanded=false,focusedScreen='remote';
 function makeScreenTile(video,label,kind){const tile=document.createElement('article');tile.className='screen-tile '+kind;tile.dataset.screenTile=kind;const name=document.createElement('span');name.className='screen-tile-name';name.textContent=label;const avatar=document.createElement('span');avatar.className='screen-tile-avatar';avatar.textContent=kind==='local'?'Y':'F';tile.append(video,name,avatar);return tile}
 const localScreenTile=makeScreenTile(screenPreview,'You', 'local'),remoteScreenTile=makeScreenTile(remoteScreen,'Friend', 'remote');remoteScreenTile.appendChild(screenVolWrap);screenVideos.replaceChildren(localScreenTile,remoteScreenTile);
-const screenViewBar=document.createElement('div');screenViewBar.className='screen-view-bar';screenViewBar.innerHTML='<button type="button" data-screen-view="grid" title="Grid view">▦ Grid</button><button type="button" data-screen-view="focus" title="Focus view">▣ Focus</button><button type="button" data-screen-fullscreen title="Fullscreen">⛶ Fullscreen</button>';screenVideos.after(screenViewBar);
-const gridViewButton=screenViewBar.querySelector('[data-screen-view="grid"]'),focusViewButton=screenViewBar.querySelector('[data-screen-view="focus"]'),fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]');
+const screenViewBar=document.createElement('div');screenViewBar.className='screen-view-bar';screenViewBar.innerHTML='<button type="button" data-screen-fullscreen title="Fullscreen" aria-label="Fullscreen">⛶</button>';screenVideos.after(screenViewBar);
+const fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=screenVideos.parentElement;screenStage.classList.add('screen-stage');let nativeShareFullscreen=false;
+const screenAudioBadge=document.createElement('span');screenAudioBadge.className='screen-audio-badge';screenStage.appendChild(screenAudioBadge);const syncScreenAudioBadge=()=>{screenAudioBadge.textContent=screenStatus.textContent||'Sharing';screenAudioBadge.hidden=!screenIsActive()};new MutationObserver(syncScreenAudioBadge).observe(screenStatus,{childList:true,characterData:true,subtree:true});
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
-function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,active=hasLocal||hasRemote;if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';voicePanel.classList.toggle('screen-sharing',active);voicePanel.classList.toggle('is-sharing',active||!!screenActive);voicePanel.classList.toggle('screen-focus',screenView==='focus'&&hasLocal&&hasRemote);voicePanel.classList.toggle('screen-focus-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;screenViewBar.hidden=!active;gridViewButton.hidden=!(hasLocal&&hasRemote);focusViewButton.hidden=!(hasLocal&&hasRemote);gridViewButton.classList.toggle('active',screenView==='grid');focusViewButton.classList.toggle('active',screenView==='focus');fsBtn.hidden=!active;fsBtn.textContent=(document.fullscreenElement||remoteScreenTile.classList.contains('fs')||localScreenTile.classList.contains('fs'))?'Exit fullscreen':'Fullscreen';if(typeof syncVoiceChrome==='function')syncVoiceChrome()}
-async function toggleRemoteFs(){const target=focusedScreen==='local'?localScreenTile:remoteScreenTile,other=target===localScreenTile?remoteScreenTile:localScreenTile;if(target.classList.contains('fs')){target.classList.remove('fs');document.body.classList.remove('screen-fullscreen');updateScreenLayout();return}if(document.fullscreenElement){try{await document.exitFullscreen()}catch{};return}try{await target.requestFullscreen({navigationUI:'hide'});target.classList.remove('fs');other.classList.remove('fs');document.body.classList.add('screen-fullscreen')}catch{target.classList.add('fs');other.classList.remove('fs');document.body.classList.add('screen-fullscreen');updateScreenLayout()}}
-function selectScreen(kind){focusedScreen=kind;if(!remoteScreen.hidden&&!screenPreview.hidden)screenView='focus';updateScreenLayout()}
-screenVideos.addEventListener('click',event=>{if(event.target.closest('input,button,label'))return;const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;toggleRemoteFs()});
-screenViewBar.onclick=event=>{const view=event.target.closest('[data-screen-view]')?.dataset.screenView;if(view){screenView=view;updateScreenLayout();return}if(event.target.closest('[data-screen-fullscreen]'))toggleRemoteFs()};
+function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=!!document.fullscreenElement||screenStage.classList.contains('fs');if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-expanded',screenExpanded&&(hasLocal||hasRemote));voicePanel.classList.toggle('is-sharing',hasLocal||hasRemote||!!screenActive);screenStage.classList.toggle('screen-expanded-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;fsBtn.hidden=!screenExpanded||!screenIsActive();fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen';syncScreenAudioBadge();if(typeof syncVoiceChrome==='function')syncVoiceChrome()}
+function returnToSharePreview(){screenStage.classList.remove('fs');document.body.classList.remove('screen-fullscreen');screenExpanded=false;updateScreenLayout()}
+function toggleRemoteFs(){if(screenStage.classList.contains('fs')||document.fullscreenElement){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else if(nativeShareFullscreen)window.pairEnv?.toggleFullscreen?.();nativeShareFullscreen=false;returnToSharePreview();return}screenStage.classList.add('fs');document.body.classList.add('screen-fullscreen');nativeShareFullscreen=!!window.pairEnv?.toggleFullscreen;window.pairEnv?.toggleFullscreen?.();updateScreenLayout()}
+screenVideos.addEventListener('click',event=>{if(event.target.closest('input,button,label'))return;const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;if(!screenExpanded)screenExpanded=true;try{if(remoteScreen.volume>0)remoteScreen.muted=false;remoteScreen.play().catch(()=>{})}catch{}updateScreenLayout()});
+screenViewBar.onclick=event=>{if(event.target.closest('[data-screen-fullscreen]'))toggleRemoteFs()};
+
 const screenLayoutObserver=new MutationObserver(updateScreenLayout);screenLayoutObserver.observe(screenPreview,{attributes:true,attributeFilter:['hidden']});screenLayoutObserver.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});updateScreenLayout();
-document.addEventListener('fullscreenchange',()=>{const is=!!document.fullscreenElement;document.body.classList.toggle('screen-fullscreen',is);if(!is){remoteScreenTile.classList.remove('fs');localScreenTile.classList.remove('fs')}updateScreenLayout()});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&(document.fullscreenElement||remoteScreenTile.classList.contains('fs')||localScreenTile.classList.contains('fs')))toggleRemoteFs()});
+window.pairEnv?.onFullscreenChange?.(isFullscreen=>{nativeShareFullscreen=!!isFullscreen;if(!isFullscreen)returnToSharePreview()});document.addEventListener('fullscreenchange',()=>{const is=!!document.fullscreenElement;document.body.classList.toggle('screen-fullscreen',is);if(!is)returnToSharePreview();else updateScreenLayout()});document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(document.fullscreenElement||screenStage.classList.contains('fs'))toggleRemoteFs();else if(screenExpanded)returnToSharePreview()});
