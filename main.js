@@ -336,6 +336,8 @@ function createWindow() {
   });
   mainWin.webContents.on('will-navigate', event => event.preventDefault());
   mainWin.loadFile(path.join(__dirname, 'index.html'));
+  mainWin.on('enter-full-screen', () => mainWin?.webContents.send('pair:fullscreenChanged', true));
+  mainWin.on('leave-full-screen', () => mainWin?.webContents.send('pair:fullscreenChanged', false));
 }
 
 app.whenReady().then(() => {
