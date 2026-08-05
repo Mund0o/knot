@@ -301,7 +301,7 @@ const { startAutoUpdater, getUpdateStatus } = require('./updater');
 ipcMain.handle('pair:getUpdateStatus', event => isPairRenderer(event) ? getUpdateStatus() : { state: 'idle' });
 ipcMain.on('pair:relaunch', event => { if (isPairRenderer(event)) { app.relaunch(); app.exit(0); } });
 // The update feed is never accepted from renderer or signaling input.
-ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullscreen(!mainWin.isFullscreen()); });
+ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullscreen(!mainWin.isFullScreen()); });
 
 function createWindow() {
   const windowTitle = `Pair ${app.getVersion()} — private P2P chat`;

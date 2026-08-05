@@ -467,7 +467,7 @@ function setupPeer(){
     pc._silentAudioCtx=silentCtx;
   }catch(e){console.warn('Silent audio track failed, using addTransceiver:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null}}
   logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid:'null'));
-  let gestureGuard=false;
+  let gestureGuard=false,screenGestureGuard=false;
   pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{const stream=e.streams[0]||new MediaStream([e.track]);
     // Keep remoteScreenExpected true until screen-end so audio that arrives after
     // the video track still routes to the screen element instead of the voice sink.
@@ -490,8 +490,8 @@ function setupPeer(){
         }
       }
       logCallEvent('Screen audio received');
-      const play=()=>{const p=remoteScreen.play();if(p?.catch)p.catch(()=>{})};play();
-      if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
+      const play=()=>{if(remoteScreen.volume>0)remoteScreen.muted=false;const p=remoteScreen.play();if(p?.catch)p.catch(()=>{})};play();
+      if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
     if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.play()}catch{};e.track.onended=()=>{if(remoteScreen.srcObject===stream){remoteScreen.srcObject=null;remoteScreen.hidden=true}}}}catch{}};
@@ -1252,7 +1252,7 @@ function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
 function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=!!document.fullscreenElement||screenStage.classList.contains('fs');if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-expanded',screenExpanded&&(hasLocal||hasRemote));screenStage.classList.toggle('screen-expanded-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;fsBtn.hidden=!screenExpanded||!screenIsActive();fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen'}
 function returnToSharePreview(){screenStage.classList.remove('fs');document.body.classList.remove('screen-fullscreen');screenExpanded=false;updateScreenLayout()}
 function toggleRemoteFs(){if(screenStage.classList.contains('fs')||document.fullscreenElement){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else if(nativeShareFullscreen)window.pairEnv?.toggleFullscreen?.();nativeShareFullscreen=false;returnToSharePreview();return}screenStage.classList.add('fs');document.body.classList.add('screen-fullscreen');nativeShareFullscreen=!!window.pairEnv?.toggleFullscreen;window.pairEnv?.toggleFullscreen?.();updateScreenLayout()}
-screenVideos.addEventListener('click',event=>{if(event.target.closest('input,button,label'))return;const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;if(!screenExpanded)screenExpanded=true;updateScreenLayout()});
+screenVideos.addEventListener('click',event=>{if(event.target.closest('input,button,label'))return;const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;if(!screenExpanded)screenExpanded=true;try{if(remoteScreen.volume>0)remoteScreen.muted=false;remoteScreen.play().catch(()=>{})}catch{}updateScreenLayout()});
 screenViewBar.onclick=event=>{if(event.target.closest('[data-screen-fullscreen]'))toggleRemoteFs()};
 const screenLayoutObserver=new MutationObserver(updateScreenLayout);screenLayoutObserver.observe(screenPreview,{attributes:true,attributeFilter:['hidden']});screenLayoutObserver.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});updateScreenLayout();
 window.pairEnv?.onFullscreenChange?.(isFullscreen=>{nativeShareFullscreen=!!isFullscreen;if(!isFullscreen)returnToSharePreview()});document.addEventListener('fullscreenchange',()=>{const is=!!document.fullscreenElement;document.body.classList.toggle('screen-fullscreen',is);if(!is)returnToSharePreview();else updateScreenLayout()});document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(document.fullscreenElement||screenStage.classList.contains('fs'))toggleRemoteFs();else if(screenExpanded)returnToSharePreview()});
