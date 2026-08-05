@@ -968,87 +968,80 @@ async function renegotiate(){
   }catch(e){console.warn('renegotiate error',e);return false}
   finally{if(myId===renegotiating)renegPending=false}
 }
-// Capture system audio for screen share without including Pair's own playback.
-// Chromium endpoint loopback mixes every render stream (including remote voice
-// and remote screen audio), so attaching that track immediately creates an
-// echo. Windows uses the native process-loopback addon that excludes Pair's
-// process tree; Linux uses a dedicated PipeWire sink elsewhere.
-function remotePlaybackReference(){
-  const tracks=[];
-  for(const el of [remoteAudio,remoteScreen]){
-    try{for(const t of el.srcObject?.getAudioTracks?.()||[]){if(t.readyState==='live'&&!tracks.includes(t))tracks.push(t)}}catch{}
-  }
-  return tracks.length?new MediaStream(tracks):null;
-}
-
+// Capture desktop sound for screen share while keeping Pair voice out of that
+// mix. Windows uses process-loopback that excludes Pair's process tree; Linux
+// uses a dedicated PipeWire sink. The voice call stays on its own WebRTC track.
 async function setupNativeScreenCapture(){
   if(!window.pairCapture){
-    console.warn('[AUDIO] native process-loopback capture unavailable; refusing Chromium loopback');
+    console.warn('[AUDIO] isolated desktop capture unavailable; refusing full-mix loopback');
     return null;
   }
 
-  const refStream=remotePlaybackReference();
   let ctx,dest,addonData=false,aecTimedOut=false;
   try{
     ctx=new AudioContext({sampleRate:48000});
     if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
-    dest=ctx.createMediaStreamDestination();dest.channelCount=1;
-    const RS=96000;const cleanBuf=new Float32Array(RS);
+    dest=ctx.createMediaStreamDestination();dest.channelCount=2;
+    // Interleaved stereo ring: [L,R,L,R,...]
+    const RS=96000;const cleanBuf=new Float32Array(RS*2);
     let wp=0,avail=0;
-    let cleanCount=0;
     const unsubClean=window.pairCapture.onCleanAudio((buf,frames)=>{
-      cleanCount++;
-      if(!aecTimedOut){
-        addonData=true;
-        const arr=new Float32Array(buf);
-        for(let i=0;i<arr.length&&avail<RS;i++){cleanBuf[wp]=arr[i];wp=(wp+1)%RS;avail++}
+      if(aecTimedOut)return;
+      addonData=true;
+      const arr=new Float32Array(buf);
+      // Prefer interleaved stereo from the native addon. Older builds emit mono
+      // (one float per frame); lift that to L/R so the share track stays stereo.
+      const stereo=arr.length>=frames*2;
+      for(let i=0;i<frames&&avail<RS;i++){
+        if(stereo){
+          cleanBuf[wp*2]=arr[i*2];
+          cleanBuf[wp*2+1]=arr[i*2+1];
+        }else{
+          const s=arr[i]||0;
+          cleanBuf[wp*2]=s;
+          cleanBuf[wp*2+1]=s;
+        }
+        wp=(wp+1)%RS;
+        avail++;
       }
     });
     const unsubError=window.pairCapture.onError(msg=>console.warn('[AUDIO] capture error:',msg));
     window.pairCapture.start();
-    let refProc,refSilence,refSource;
-    if(refStream&&refStream.getAudioTracks().length){
-      // Optional reference for residual cancellation. Process exclusion is the
-      // primary defence; this only helps when OS mixing still leaks call audio.
-      refSource=ctx.createMediaStreamSource(refStream);
-      refProc=ctx.createScriptProcessor(1024,1,1);
-      refSilence=ctx.createGain();refSilence.gain.value=0;
-      refProc.onaudioprocess=e=>{
-        const d=e.inputBuffer.getChannelData(0);
-        const ab=d.buffer.slice(d.byteOffset,d.byteOffset+d.byteLength);
-        window.pairCapture.pushReference(ab);
-      };
-      refSource.connect(refProc);refProc.connect(refSilence);refSilence.connect(ctx.destination);
-    }
-    await new Promise(r=>setTimeout(r,1500));
+    // Attach as soon as the first clean packets arrive so share audio starts
+    // with the video instead of waiting on a fixed multi-second delay.
+    const deadline=Date.now()+2500;
+    while(!addonData&&Date.now()<deadline)await new Promise(r=>setTimeout(r,40));
     if(!addonData){
-      console.warn('[AUDIO] native capture produced no samples; disabling system audio for this share');
+      console.warn('[AUDIO] isolated desktop capture produced no samples; sharing video only');
       aecTimedOut=true;
       if(unsubClean)unsubClean();if(unsubError)unsubError();
       window.pairCapture.stop();
-      try{if(refSource)refSource.disconnect()}catch{}
-      try{if(refProc)refProc.disconnect()}catch{}
-      try{if(refSilence)refSilence.disconnect()}catch{}
       if(ctx)try{ctx.close()}catch{}
       return null;
     }
     const B=1024;
-    const op=ctx.createScriptProcessor(B,0,1);
+    const op=ctx.createScriptProcessor(B,0,2);
     op.onaudioprocess=e=>{
-      const out=e.outputBuffer.getChannelData(0);
-      if(avail<out.length){out.fill(0);return}
+      const L=e.outputBuffer.getChannelData(0);
+      const R=e.outputBuffer.getChannelData(1);
+      if(avail<L.length){L.fill(0);R.fill(0);return}
       const rp=(wp-avail+RS)%RS;
-      for(let i=0;i<out.length;i++)out[i]=cleanBuf[(rp+i)%RS];
-      avail-=out.length;
+      for(let i=0;i<L.length;i++){
+        const idx=((rp+i)%RS)*2;
+        L[i]=cleanBuf[idx];
+        R[i]=cleanBuf[idx+1];
+      }
+      avail-=L.length;
     };
     op.connect(dest);
     screenOutCtx=ctx;screenOutDest=dest;
     screenNative=true;
     const t=dest.stream.getAudioTracks()[0];
-    screenCaptureCleanup=()=>{if(unsubClean)unsubClean();if(unsubError)unsubError();window.pairCapture.stop();try{if(refSource)refSource.disconnect()}catch{};try{if(refProc)refProc.disconnect()}catch{};try{if(refSilence)refSilence.disconnect()}catch{};try{op.disconnect()}catch{}};
+    try{if(t)t.contentHint='music'}catch{}
+    screenCaptureCleanup=()=>{if(unsubClean)unsubClean();if(unsubError)unsubError();window.pairCapture.stop();try{op.disconnect()}catch{}};
     return t||null;
   }catch(e){
-    console.warn('[AUDIO] native capture failed:',e?.message||e);
+    console.warn('[AUDIO] isolated desktop capture failed:',e?.message||e);
     if(ctx)try{ctx.close()}catch{}
     try{window.pairCapture.stop()}catch{}
     return null;
@@ -1091,7 +1084,7 @@ async function startScreenShare(){
     const id=await new Promise(resolve=>{
       const o=document.createElement('div');o.className='screen-source-modal';
       const b=document.createElement('div');b.className='screen-source-dialog';
-      b.innerHTML='<h3>Select what to share</h3><div class="share-start-options"><label>Resolution<select id="shareResolution"><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select></label><label>Frame rate<select id="shareFrameRate"><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></label><label class="share-audio-option"><input id="shareSystemAudio" type="checkbox" checked /> Share system audio</label></div>';
+      b.innerHTML='<h3>Select what to share</h3><div class="share-start-options"><label>Resolution<select id="shareResolution"><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select></label><label>Frame rate<select id="shareFrameRate"><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></label><label class="share-audio-option"><input id="shareSystemAudio" type="checkbox" checked /> Share computer sound<span class="share-audio-hint">Desktop apps and games — not the voice call</span></label></div>';
       const resolution=b.querySelector('#shareResolution'),frameRate=b.querySelector('#shareFrameRate'),audio=b.querySelector('#shareSystemAudio');resolution.value=String(shareResolution);frameRate.value=String(shareFrameRate);audio.checked=screenAudioOn;
       const g=document.createElement('div');g.className='screen-source-grid';
       sources.forEach(s=>{const btn=document.createElement('button');btn.type='button';btn.className='screen-source-option';const img=document.createElement('img');img.src=s.thumbnail;img.alt='';const name=document.createElement('span');name.textContent=s.name;btn.append(img,name);btn.onclick=()=>{shareResolution=Number(resolution.value)||1080;shareFrameRate=Number(frameRate.value)||30;screenAudioOn=audio.checked;resolve(s.id);o.remove()};g.appendChild(btn)});
@@ -1106,10 +1099,9 @@ async function startScreenShare(){
     const v={width:{ideal:width,max:width},height:{ideal:height,max:height},frameRate:{ideal:fps,max:fps}};
     v.cursor=screenCursor;
     const constraints={video:v};
-    // Never request Chromium endpoint loopback for Pair itself. That mix
-    // contains remote call playback and is what produced the hear-yourself
-    // screenshare echo. System audio is attached only through native
-    // process-loopback (Windows) or the PipeWire share sink (Linux).
+    // Never request Chromium's full-mix loopback. That path includes Pair voice
+    // playback. Computer sound is attached separately through isolated capture
+    // so desktop/game audio can share while the call stays on the voice track.
     constraints.audio=false;
     const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
@@ -1138,10 +1130,10 @@ async function startScreenShare(){
         }
       }
       if(!audioTrack){
-        console.warn('[AUDIO] system audio unavailable without echo risk; sharing video only');
+        console.warn('[AUDIO] computer sound unavailable without echo risk; sharing video only');
         if(gen===screenGen&&screenActive){
           screenStatus.textContent=(screenStatus.textContent||'Sharing')+' · video only';
-          logCallEvent('Screen audio unavailable — sharing video only');
+          logCallEvent('Computer sound unavailable — sharing video only');
         }
         return;
       }
@@ -1157,12 +1149,23 @@ async function startScreenShare(){
       if(gen!==screenGen||!screenActive||!pc){discardShareAudio();return}
       try{
         audioTrack.enabled=true;
+        try{audioTrack.contentHint='music'}catch{}
         try{stream.addTrack(audioTrack)}catch{}
         const audioSender=pc.addTrack(audioTrack,stream);
         screenSenders.push(audioSender);
+        try{
+          const p=audioSender.getParameters();
+          if(p){
+            if(!p.encodings||!p.encodings.length)p.encodings=[{}];
+            // Prefer higher bitrate stereo for game/music desktop sound; voice
+            // remains on the separate call track at its own Opus settings.
+            p.encodings[0].maxBitrate=192000;
+            await audioSender.setParameters(p);
+          }
+        }catch{}
         if(!await renegotiate())throw new Error('audio negotiation did not start');
         if(gen!==screenGen||!screenActive||!pc)throw new Error('screen share ended during audio negotiation');
-        logCallEvent('Screen audio started');
+        logCallEvent('Computer sound sharing started');
       }catch(e){
         console.warn('[AUDIO] addTrack failed:',e);
         const sender=screenSenders.find(s=>s.track===audioTrack);
@@ -1213,11 +1216,12 @@ async function stopScreenShare(fromEnd){
 }
 screenBtn.onclick=()=>{if(screenActive||screenStarting)stopScreenShare();else if(!pc&&LOCAL_TEST_MODE){screenStatus.textContent='Pair with a friend to start screen sharing';screenStatus.className='screen-status';}else startScreenShare()};
 screenPreset.onchange=async()=>{if(screenActive||screenStarting){await stopScreenShare();await startScreenShare()}};
-// Screen share audio toggle — on by default. When off, Pair never attaches
-// system audio; when on, only a clean native/PipeWire path is allowed.
+// Screen share computer-sound toggle. Voice always stays on the call track;
+// this only controls whether desktop/game sound rides with the share.
 let screenAudioOn=true;
-const audioToggleBtn=document.createElement('button');audioToggleBtn.textContent='Audio on';audioToggleBtn.className='audio-toggle is-on';
-audioToggleBtn.onclick=()=>{screenAudioOn=!screenAudioOn;audioToggleBtn.textContent=screenAudioOn?'Audio on':'Audio off';audioToggleBtn.classList.toggle('is-on',screenAudioOn)};screenBtn.parentElement.insertBefore(audioToggleBtn,screenStatus);
+const audioToggleBtn=document.createElement('button');audioToggleBtn.textContent='Sound on';audioToggleBtn.className='audio-toggle is-on';
+audioToggleBtn.title='Share computer sound with the screen (not the voice call)';
+audioToggleBtn.onclick=()=>{screenAudioOn=!screenAudioOn;audioToggleBtn.textContent=screenAudioOn?'Sound on':'Sound off';audioToggleBtn.classList.toggle('is-on',screenAudioOn);audioToggleBtn.title=screenAudioOn?'Share computer sound with the screen (not the voice call)':'Computer sound will not be shared'};screenBtn.parentElement.insertBefore(audioToggleBtn,screenStatus);
 // Volume slider for the remote screen share audio, shown on right-click.
 const screenVolWrap=document.createElement('div');screenVolWrap.className='screen-volume';
 const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Volume';
