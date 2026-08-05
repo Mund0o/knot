@@ -1,10 +1,10 @@
 {
-  "version": "1.1.9",
-  "notes": "Keeps Add Friend and its pairing panel fully visible in small windows.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.9/pair-p2p-1.1.9.tar.gz",
-  "linuxSha256": "8ab1478c3a45e2e7aae150b94eb649a36557ce9b1a2bd5245294daf5d0914e88",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.9/Pair-1.1.9.AppImage",
-  "linuxAppImageSha256": "c76e457b0805e5da8cf8a364d1fd7561cd6b9ca902cf4b3fa14bf85141545849",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.9/Pair.Setup.1.1.9.exe",
-  "winSha256": "706d73d1bdadaea595c524a46e79a2808652aec79eb0c6e8e38c3f44b18ecc9f"
+  "version": "1.1.10",
+  "notes": "Fixes the Add Friend panel centering and responsive sizing.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.10/pair-p2p-1.1.10.tar.gz",
+  "linuxSha256": "6518bbc83ff3c06dd05ec1c5a6a99a4718e840ce273654e532faefc70d44d032",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.10/Pair-1.1.10.AppImage",
+  "linuxAppImageSha256": "3ab71f0618958d9bf0a5b44a4b4f30e284ccdbbf1fd32497008c12813fe11809",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.10/Pair.Setup.1.1.10.exe",
+  "winSha256": "316d55082628e6e314f4d155cc1559e58d6bdc0a3daa557e840d6724e718fd7c"
 }
