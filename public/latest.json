@@ -1,10 +1,10 @@
 {
-  "version": "1.1.8",
-  "notes": "Polishes Pair animations across the app.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.8/pair-p2p-1.1.8.tar.gz",
-  "linuxSha256": "ad67f63607cff7bcca496f9279a7778156aecbd5d84c2efaba0a031837b26ac6",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.8/Pair-1.1.8.AppImage",
-  "linuxAppImageSha256": "1b5f2616031d22a5b7692863ac46060649d28df3c937b7cb15a1af1c4a1ba401",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.8/Pair.Setup.1.1.8.exe",
-  "winSha256": "ab34a9d768013fec7d77711d30257541fecba54835a915445376644a3c0d2a4c"
+  "version": "1.1.9",
+  "notes": "Keeps Add Friend and its pairing panel fully visible in small windows.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.9/pair-p2p-1.1.9.tar.gz",
+  "linuxSha256": "8ab1478c3a45e2e7aae150b94eb649a36557ce9b1a2bd5245294daf5d0914e88",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.9/Pair-1.1.9.AppImage",
+  "linuxAppImageSha256": "c76e457b0805e5da8cf8a364d1fd7561cd6b9ca902cf4b3fa14bf85141545849",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.9/Pair.Setup.1.1.9.exe",
+  "winSha256": "706d73d1bdadaea595c524a46e79a2808652aec79eb0c6e8e38c3f44b18ecc9f"
 }
