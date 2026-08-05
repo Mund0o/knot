@@ -1,10 +1,10 @@
 {
-  "version": "1.1.5",
-  "notes": "Keeps calls active when one person leaves and excludes Pair audio from Windows screen sharing.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.5/pair-p2p-1.1.5.tar.gz",
-  "linuxSha256": "7824396c8579e986683092942ebbfc6ea3509ffbf1b56f9d5334611208554888",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.5/Pair-1.1.5.AppImage",
-  "linuxAppImageSha256": "60a3345a182b2eed6f0700ed629373ef9040e0674f51802d7015c27e64d9f6c5",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.5/Pair.Setup.1.1.5.exe",
-  "winSha256": "d9adae22c4ac90e69bc6858ddd91f739829b0f2956bf35a3875abfa4e62921a0"
+  "version": "1.1.6",
+  "notes": "Adds PipeWire audio isolation for Linux screen sharing.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.6/pair-p2p-1.1.6.tar.gz",
+  "linuxSha256": "69602ec3878b32f04273ae41957edc041720ddf61cc97537d8418995f619b40c",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.6/Pair-1.1.6.AppImage",
+  "linuxAppImageSha256": "abdc6b190cc0bfe67ad82900950dd2567a769de5987b090373ddc0ea65596a18",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.6/Pair.Setup.1.1.6.exe",
+  "winSha256": "2115ab3993621a9188b6e76014ab74e94adf59788416c5a0912587aeb291f242"
 }
