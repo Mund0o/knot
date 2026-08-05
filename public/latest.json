@@ -1,10 +1,10 @@
 {
-  "version": "1.1.11",
-  "notes": "Handles duplicate pairing replies safely after a failed connection attempt.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.11/pair-p2p-1.1.11.tar.gz",
-  "linuxSha256": "a876d4cdfeb7508de2e68e8c954598e2306cb92898de8bd1faa93c6284b82c02",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.11/Pair-1.1.11.AppImage",
-  "linuxAppImageSha256": "48084eb624efe5a198d589c554223198cd89e5199d10186188fe5974cb5efce1",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.11/Pair.Setup.1.1.11.exe",
-  "winSha256": "9f9f8b0983b1ec2d73f6d6f3cd2323b979ce558f0edca756d9be273c7ba04e0a"
+  "version": "1.1.12",
+  "notes": "Restores robust Linux screen-share audio capture and uses real fullscreen for shared screens.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.12/pair-p2p-1.1.12.tar.gz",
+  "linuxSha256": "f932200ac044dd8361ea45756ca334844f326414d1e43d7d0e02d530960edafd",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.12/Pair-1.1.12.AppImage",
+  "linuxAppImageSha256": "325d2d763ab510bebc55a0802b1ae71ab5dd63e14c6d958bf4c59602fe22bd90",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.12/Pair.Setup.1.1.12.exe",
+  "winSha256": "5879ccd957ccad1268319a9e275f3b00b3d777752160ca5ab715375c0c00986a"
 }
