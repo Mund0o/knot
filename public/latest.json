@@ -1,10 +1,10 @@
 {
-  "version": "1.1.17",
-  "notes": "Fixes the incoming-call audio race and strengthens Linux screen-share audio isolation.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.17/pair-p2p-1.1.17.tar.gz",
-  "linuxSha256": "2b2afcf2a76f39d0cd5cb2b7ac27b51c8d275a7163ce06ba74b443859db3220f",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.17/Pair-1.1.17.AppImage",
-  "linuxAppImageSha256": "0eca889e65a6972ad762527b917167efa37e21bb736ddffac2964203bfa44815",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.17/Pair.Setup.1.1.17.exe",
-  "winSha256": "8e40343de896ba0a953154f6b66fb8270cdb1630f1feae2470ec9d6d6d86048a"
+  "version": "1.1.18",
+  "notes": "Improves screen sharing with a compact focused layout, fullscreen control, and reliable slider dragging.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.18/pair-p2p-1.1.18.tar.gz",
+  "linuxSha256": "2335efb80d38f367e847e4200c4e42575372f141a0acba3e28f3bd315fec0219",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.18/Pair-1.1.18.AppImage",
+  "linuxAppImageSha256": "aafcc6b279be90eda1615e7dc972f1e3aee59961fc4424075b11bece6e2cd2fc",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.18/Pair.Setup.1.1.18.exe",
+  "winSha256": "e183427f07d63b0f7b0efc8acdde3cb8fb88e0a1acca08efd68e90144a61d581"
 }
