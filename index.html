@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="obsidian">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -9,131 +9,308 @@
   </head>
   <body>
     <main class="app-shell">
-      <aside class="app-rail" aria-label="Pair navigation">
-        <div class="rail-top"><div class="rail-brand" aria-label="Pair">P</div><button id="addFriend" class="rail-button rail-add" type="button" aria-label="Add a friend" title="Add a friend">+</button></div>
-        <div class="rail-bottom"><button id="openSettings" class="rail-button" type="button" aria-label="Open settings" title="Settings">⚙</button></div>
+      <!-- 1. Home / brand rail -->
+      <nav class="app-rail" aria-label="Pair navigation">
+        <div class="rail-top">
+          <button type="button" class="rail-brand is-active" aria-label="Pair Home" title="Pair">P</button>
+          <div class="rail-divider" aria-hidden="true"></div>
+          <button id="addFriend" class="rail-pill rail-add" type="button" aria-label="Add a friend" title="Add a friend">+</button>
+        </div>
+      </nav>
+
+      <!-- 2. DM / channel sidebar -->
+      <aside class="side-panel" aria-label="Direct messages">
+        <header class="side-header">
+          <h2>Direct Messages</h2>
+        </header>
+
+        <button id="sideAddFriend" class="side-search" type="button" title="Add a friend">
+          <span>Find or start a conversation</span>
+        </button>
+
+        <div class="side-scroll">
+          <div class="side-section">
+            <div class="side-section-head">
+              <span>Direct Messages</span>
+              <button id="dmAddInline" class="side-mini-btn" type="button" aria-label="Add a friend" title="Add a friend">+</button>
+            </div>
+
+            <button type="button" class="dm-item is-active" id="dmFriendItem">
+              <span id="dmFriendAvatar" class="avatar dm-avatar"><span class="avatar-letter">F</span><i class="indicator"></i></span>
+              <span class="dm-meta">
+                <strong id="dmFriendName">Friend</strong>
+              </span>
+            </button>
+          </div>
+
+          <div class="side-section">
+            <div class="side-section-head"><span>Voice</span></div>
+
+            <section id="voicePanel" class="voice-channel" aria-label="Voice">
+              <div class="voice-channel-row">
+                <span class="voice-icon" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M11.383 3.079C11.02 2.923 10.588 3.003 10.293 3.297L6 7.59H4c-1.1 0-2 .9-2 2v4c0 1.1.9 2 2 2h2l4.293 4.293c.295.295.726.375 1.09.217.362-.158.607-.52.607-.922V4c0-.403-.245-.764-.607-.921zM14.293 7.293a1 1 0 011.414 0A6.978 6.978 0 0118 12a6.978 6.978 0 01-2.293 4.707 1 1 0 01-1.414-1.414A4.984 4.984 0 0016 12a4.984 4.984 0 00-1.707-3.293 1 1 0 010-1.414z"/></svg>
+                </span>
+                <div class="voice-channel-titles">
+                  <strong>Pair Voice</strong>
+                  <span id="callStatus" class="call-status">Voice off</span>
+                  <span id="callTimer" class="call-timer"></span>
+                </div>
+                <button id="callBtn" class="voice-join" disabled title="Start voice call">Join</button>
+              </div>
+
+              <div class="voice-body">
+                <div class="voice-participants" aria-label="Call participants">
+                  <div class="voice-participant self-participant is-absent" id="participantYou" aria-hidden="true">
+                    <button id="profileBtn" class="avatar profile-avatar" type="button" title="Change your profile photo"><span class="avatar-letter">Y</span><i class="indicator"></i></button>
+                    <span id="yourName" class="voice-name">You</span>
+                    <button id="profileAdjust" class="profile-adjust" type="button" hidden>Adjust</button>
+                  </div>
+                  <div class="voice-participant friend-participant is-absent" id="participantFriend" aria-hidden="true">
+                    <span id="friendAvatar" class="avatar"><span class="avatar-letter">F</span><i class="indicator"></i></span>
+                    <span id="friendName" class="voice-name">Friend</span>
+                  </div>
+                </div>
+
+                <div class="voice-controls" aria-label="Screen share controls">
+                  <button id="muteBtn" class="voice-action" hidden title="Mute microphone">Mute</button>
+                  <section class="control-cluster screen-cluster" aria-labelledby="screenControlLabel">
+                    <span id="screenControlLabel" class="control-label">Screen share</span>
+                    <div class="screen-controls">
+                      <button id="screenBtn" class="voice-action" disabled title="Share screen">Share Screen</button>
+                      <select id="screenPreset" class="preset-select" disabled aria-label="Screen share quality">
+                        <option value="1080p30">1080p 30</option>
+                        <option value="1080p60">1080p 60</option>
+                        <option value="720p60">720p 60</option>
+                        <option value="720p30">720p 30</option>
+                        <option value="480p30">480p 30</option>
+                        <option value="1440p60">1440p 60</option>
+                        <option value="4k60">4K 60</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                      <span id="screenStatus" class="screen-status">Not sharing</span>
+                    </div>
+                  </section>
+                </div>
+
+                <div class="screen-section">
+                  <div class="screen-videos">
+                    <video id="screenPreview" class="screen-preview" muted playsinline hidden></video>
+                    <video id="remoteScreen" class="remote-screen" playsinline hidden></video>
+                  </div>
+                </div>
+                <div id="voiceLog" class="voice-log"></div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div class="side-footer">
+          <div id="voiceConnection" class="voice-connection" hidden>
+            <div class="voice-connection-meta">
+              <strong id="voiceConnectionLabel">Voice Connected</strong>
+              <span id="voiceConnectionDetail">Pair Voice</span>
+            </div>
+            <label class="voice-volume-wrap" for="volumeSlider" title="Friend volume">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 10v4h4l5 5V5L7 10H3zm13.5 2c0-1.77-1-3.29-2.5-4.03v8.05c1.5-.74 2.5-2.26 2.5-4.02z"/></svg>
+              <input id="volumeSlider" type="range" min="0" max="100" value="50" class="volume-slider" aria-label="Friend volume" />
+              <output id="volumeValue" class="volume-value">50%</output>
+            </label>
+            <button type="button" class="ubar-btn voice-disconnect" id="voiceDisconnect" title="Leave voice" aria-label="Leave voice">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.996.996 0 01-.29-.71c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.66c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28a11.27 11.27 0 00-2.67-1.85.996.996 0 01-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+            </button>
+          </div>
+          <footer class="user-bar">
+            <button type="button" class="user-bar-profile" id="userBarProfile" title="Open profile settings">
+              <span id="userBarAvatar" class="avatar user-bar-avatar"><span class="avatar-letter">Y</span><i class="indicator on"></i></span>
+              <span class="user-bar-meta">
+                <strong id="userBarName">You</strong>
+                <small id="dmFriendStatus">Offline</small>
+              </span>
+            </button>
+            <div class="user-bar-actions">
+              <button id="userBarMute" class="ubar-btn" type="button" title="Mute" aria-label="Mute" disabled>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a4 4 0 00-4 4v6a4 4 0 008 0V6a4 4 0 00-4-4zm-7 10a1 1 0 012 0 5 5 0 0010 0 1 1 0 012 0 7 7 0 01-6 6.93V21a1 1 0 01-2 0v-2.07A7 7 0 015 12z"/></svg>
+              </button>
+              <button id="userBarDeafen" class="ubar-btn" type="button" title="Deafen" aria-label="Deafen">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a9 9 0 00-9 9v7c0 1.66 1.34 3 3 3h1v-8H5v-2a7 7 0 1114 0v2h-2v8h1c1.66 0 3-1.34 3-3v-7a9 9 0 00-9-9z"/></svg>
+              </button>
+              <button id="userBarShare" class="ubar-btn" type="button" title="Share screen" aria-label="Share screen" disabled>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
+              </button>
+              <button id="openSettings" class="ubar-btn" type="button" title="User Settings" aria-label="Settings">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.6-.22l-2.39.96a7.03 7.03 0 00-1.63-.94l-.36-2.54A.5.5 0 0014 2h-4a.5.5 0 00-.5.42l-.36 2.54c-.58.23-1.12.54-1.63.94l-2.39-.96a.5.5 0 00-.6.22L2.6 8.48a.5.5 0 00.12.64L4.75 10.7c-.04.31-.07.63-.07.95s.03.64.07.95L2.72 14.2a.5.5 0 00-.12.64l1.92 3.32c.13.22.4.31.6.22l2.39-.96c.5.4 1.05.72 1.63.94l.36 2.54c.05.24.25.42.49.42h4c.24 0 .44-.18.5-.42l.36-2.54c.58-.22 1.13-.54 1.63-.94l2.39.96c.22.09.48 0 .6-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.6zM12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z"/></svg>
+              </button>
+              <button id="userBarSettings" class="ubar-btn" type="button" hidden aria-hidden="true" tabindex="-1"></button>
+            </div>
+          </footer>
+        </div>
       </aside>
+
       <button id="panelBackdrop" class="panel-backdrop" type="button" aria-label="Close open panel" hidden></button>
+
+      <!-- 3. Main chat column -->
       <div class="app-content">
-      <header class="topbar">
-        <div class="brand-lockup">
-          <p class="eyebrow">DIRECT MESSAGES</p>
-          <h1>Pair<span>.</span></h1>
-        </div>
-        <div class="app-actions">
-          <div class="connection"><i id="statusDot"></i><span id="statusText">Not connected</span></div>
-        </div>
-      </header>
-      <section id="updateBanner" class="update-banner" aria-live="polite" hidden>
-        <div class="update-text"><strong id="updateTitle">Checking for updates…</strong><span id="updateDetails" class="update-notes"></span></div>
-      </section>
+        <header class="channel-header">
+          <div class="channel-title">
+            <span class="channel-hash" aria-hidden="true">@</span>
+            <h1 id="channelTitle">Friend</h1>
+            <div class="header-divider" aria-hidden="true"></div>
+            <div class="connection"><i id="statusDot"></i><span id="statusText">Not connected</span></div>
+          </div>
+          <div class="header-toolbar" aria-label="Conversation actions">
+            <button type="button" class="header-tool" id="headerCall" title="Join voice" aria-label="Join voice" disabled>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M6.62 10.79a15.15 15.15 0 006.59 6.59l2.2-2.2a1 1 0 011.01-.24c1.12.37 2.33.57 3.57.57a1 1 0 011 1V20a1 1 0 01-1 1C10.4 21 3 13.6 3 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.57 3.57a1 1 0 01-.25 1.02l-2.2 2.2z"/></svg>
+            </button>
+            <button type="button" class="header-tool" id="headerScreen" title="Share screen" aria-label="Share screen" disabled>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H8v2h8v-2h-2v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
+            </button>
+          </div>
+        </header>
 
-      <aside id="settingsPanel" class="settings-panel" aria-label="Settings" hidden>
-        <div class="settings-header"><div><p class="eyebrow">YOUR SPACE</p><h2>Settings</h2></div><button id="closeSettings" class="icon-button" type="button" aria-label="Close settings">×</button></div>
-        <nav class="settings-tabs" role="tablist" aria-label="Settings sections"><button class="settings-tab active" type="button" data-settings-tab="profile" role="tab" aria-selected="true">Profile</button><button class="settings-tab" type="button" data-settings-tab="devices" role="tab" aria-selected="false">Devices</button><button class="settings-tab" type="button" data-settings-tab="appearance" role="tab" aria-selected="false">Appearance</button><button class="settings-tab" type="button" data-settings-tab="privacy" role="tab" aria-selected="false">Privacy &amp; security</button><button class="settings-tab" type="button" data-settings-tab="advanced" role="tab" aria-selected="false">Advanced</button></nav>
-        <div class="settings-pages">
-          <section class="settings-section settings-page active" data-settings-page="profile" role="tabpanel"><div><h3>Profile &amp; username</h3><p>Only shared directly with the person you connect to.</p></div><label class="profile-name-field" for="displayName"><span>Display name</span><input id="displayName" type="text" maxlength="32" autocomplete="name" placeholder="Your name" /></label><div class="profile-settings-row"><span id="settingsAvatar" class="avatar settings-avatar"><span class="avatar-letter">Y</span></span><div class="profile-settings-actions"><button id="settingsChangePhoto" type="button">Change photo</button><button id="settingsAdjustPhoto" type="button" class="text-button" hidden>Adjust photo</button><button id="settingsRemovePhoto" type="button" class="text-button" hidden>Remove photo</button></div></div><div id="profileEditor" class="profile-editor" hidden><label for="profileZoom">Zoom</label><input id="profileZoom" type="range" min="40" max="180" value="100" /><label for="profileX">Left / right</label><input id="profileX" type="range" min="0" max="100" value="50" /><label for="profileY">Up / down</label><input id="profileY" type="range" min="0" max="100" value="50" /><button id="profileDone" type="button" class="primary">Save photo position</button></div></section>
-          <section class="settings-section settings-page" data-settings-page="devices" role="tabpanel" hidden><div><h3>Voice &amp; video devices</h3><p>Choose the microphone and speaker Pair uses for calls.</p></div><label class="settings-field" for="inputDevice"><span>Microphone</span><select id="inputDevice"><option value="default">System default</option></select></label><label class="settings-field" for="outputDevice"><span>Speaker</span><select id="outputDevice"><option value="default">System default</option></select></label><label class="settings-field" for="voiceInputMode"><span>Input mode</span><select id="voiceInputMode"><option value="voice">Voice activity</option><option value="ptt">Push to talk</option></select></label><div id="pushToTalkSettings" class="push-to-talk-settings" hidden><label class="settings-field"><span>Push to talk key</span><button id="pushToTalkKey" type="button" class="keybind-button">Set key</button></label><label class="settings-field" for="pushToTalkDelay"><span>Release delay <output id="pushToTalkDelayValue">0 ms</output></span><input id="pushToTalkDelay" type="range" min="0" max="1000" step="50" value="0" /></label><p class="settings-hint">Hold the key while Pair is focused to transmit. Your microphone stays closed until you hold it.</p></div><label class="settings-toggle"><input id="voiceProcessing" type="checkbox" /><span>High-quality echo cancellation</span><small>Applies during paired calls only, without noise suppression or auto-gain. Keep off with headphones for the cleanest raw sound.</small></label><div class="settings-inline-actions"><button id="refreshDevices" type="button">Refresh devices</button><button id="testSound" type="button" class="text-button">Test sound</button><button id="testMicrophone" type="button" class="primary">Test microphone</button></div><p id="deviceHint" class="settings-hint">Mic testing uses a raw single monitor path. Use headphones to avoid speaker feedback.</p></section>
-          <section class="settings-section settings-page" data-settings-page="appearance" role="tabpanel" hidden><div><h3>Appearance</h3><p>Keep Pair calm and easy to read.</p></div><div class="theme-grid" role="group" aria-label="Choose a theme"><button class="theme-option" type="button" data-theme="midnight"><i></i><span>Midnight</span></button><button class="theme-option" type="button" data-theme="violet"><i></i><span>Violet</span></button><button class="theme-option" type="button" data-theme="forest"><i></i><span>Forest</span></button><button class="theme-option" type="button" data-theme="ember"><i></i><span>Ember</span></button></div><label class="settings-toggle"><input id="reduceMotion" type="checkbox" /><span>Reduce motion</span><small>Turn off join, leave, and interface motion.</small></label><label class="settings-toggle"><input id="soundEffects" type="checkbox" checked /><span>Interface sounds</span><small>Play subtle call and presence sounds.</small></label></section>
-          <section class="settings-section settings-page" data-settings-page="privacy" role="tabpanel" hidden><div><h3>Privacy &amp; security</h3><p>Pair uses direct encrypted peer connections. These options control what stays on this device.</p></div><label class="settings-toggle"><input id="shareProfile" type="checkbox" checked /><span>Share name and profile photo</span><small>Your identity is sent only over the direct connection.</small></label><label class="settings-toggle"><input id="rememberInvite" type="checkbox" checked /><span>Remember pasted pairing codes</span><small>Keep the last pasted code on this device for convenience.</small></label><div class="settings-inline-actions"><button id="clearSavedInvite" type="button" class="text-button">Clear saved pairing code</button></div><p class="settings-hint">Always compare the security code with your friend before confirming a new connection.</p></section>
-          <section class="settings-section settings-page" data-settings-page="advanced" role="tabpanel" hidden><div><h3>Advanced</h3><p>Changes here affect how Pair runs on this computer.</p></div><label class="settings-toggle"><input id="hardwareAcceleration" type="checkbox" checked /><span>Hardware acceleration</span><small>Uses the GPU for rendering and media work. Requires a restart.</small></label><div class="settings-inline-actions"><button id="restartPair" type="button" class="primary">Restart Pair</button></div><p id="hardwareHint" class="settings-hint">The current setting is applied when Pair starts.</p></section>
-        </div>
-      </aside>
+        <section id="updateBanner" class="update-banner" aria-live="polite" hidden>
+          <div class="update-text"><strong id="updateTitle">Checking for updates…</strong><span id="updateDetails" class="update-notes"></span></div>
+        </section>
 
-      <div class="workspace-view">
-      <details id="connectCard" class="pair-card card connect-drawer">
-        <summary><span>Add a friend</span><small>Direct pairing</small></summary>
-        <div class="section-heading"><div><p class="eyebrow">01 / CONNECT</p><h2>Connect directly</h2></div><span class="lock">E2EE</span></div>
-        <p class="muted">No account or server is needed. Exchange the two pairing codes with your friend; chat, calls, and files then travel peer to peer.</p>
-        <div class="primary-pair manual-direct">
-          <div class="auto-title"><div><p class="eyebrow">RECOMMENDED</p><h3>Direct pairing</h3></div><span class="status-note">NO SERVER</span></div>
-          <div class="pair-grid pairing-steps">
-            <div class="pair-step">
-              <span class="step-number">1</span>
-              <div><label for="signalOut">Start a pair</label><p class="step-copy">Create an invite, then send the code to your friend.</p></div>
-              <button id="createOffer" class="primary">Create invite</button>
-              <label class="outgoing-label" for="signalOut">Your code to send</label>
-              <textarea id="signalOut" readonly placeholder="Your compact invite or reply will appear here…"></textarea>
-              <div class="pair-code-actions"><button id="copySignal" class="text-button" disabled>Copy code</button><span id="pairCodeMeta" aria-live="polite"></span></div>
-            </div>
-            <div class="pair-step">
-              <span class="step-number">2</span>
-              <div><label for="signalIn">Continue a pair</label><p class="step-copy">Paste your friend’s code here. Pair will tell you what happens next.</p></div>
-              <textarea id="signalIn" placeholder="Paste invite or reply…" spellcheck="false"></textarea>
-              <button id="processSignal" class="wide">Create reply</button>
-            </div>
+        <aside id="settingsPanel" class="settings-panel" aria-label="Settings" hidden>
+          <div class="settings-header">
+            <div><p class="eyebrow">User Settings</p><h2>Settings</h2></div>
+            <button id="closeSettings" class="icon-button" type="button" aria-label="Close settings">×</button>
           </div>
-          <p id="pairHint" class="pair-hint">Create an invite, or paste one from your friend. Pasted invites stay saved on this device.</p>
-        </div>
-        <details class="manual-pair">
-          <summary>Optional: use your own signaling server</summary>
-          <p class="hint">Only use this when you deliberately run a signaling service. It can make initial pairing easier, but it is not required for direct pairing.</p>
-          <div class="auto-pair">
-          <div class="auto-grid">
-            <div class="auto-field"><label for="signalServer">Signaling address</label><input id="signalServer" value="" placeholder="wss://your-server.example" aria-label="Signaling server address" /></div>
-            <div class="auto-field"><label for="roomCode">Room code</label><input id="roomCode" value="" placeholder="16+ character secret" aria-label="Room code" /></div>
-            <button id="hostRoom" class="primary">Host room</button><button id="joinRoom">Join room</button><button id="leaveRoom" hidden>Leave room</button>
-          </div>
-          </div>
-        </details>
-      </details>
-
-      <section id="voicePanel" class="voice card">
-        <div class="section-heading"><div><p class="eyebrow">02 / CALL</p><h2>Voice</h2></div><span id="callTimer" class="call-timer"></span></div>
-        <div class="voice-body">
-          <div class="voice-participants" aria-label="Call participants">
-            <div class="voice-participant self-participant is-absent" id="participantYou" aria-hidden="true"><button id="profileBtn" class="avatar profile-avatar" type="button" title="Change your profile photo"><span class="avatar-letter">Y</span><i class="indicator"></i></button><span id="yourName">You</span><button id="profileAdjust" class="profile-adjust" type="button" hidden>Adjust photo</button></div>
-            <div class="voice-participant friend-participant is-absent" id="participantFriend" aria-hidden="true"><span id="friendAvatar" class="avatar"><span class="avatar-letter">F</span><i class="indicator"></i></span><span id="friendName">Friend</span></div>
-          </div>
-          <div class="voice-controls" aria-label="Call controls">
-            <section class="control-cluster call-cluster" aria-labelledby="voiceControlLabel">
-              <span id="voiceControlLabel" class="control-label">Voice</span>
-              <div class="control-row">
-                <button id="callBtn" class="primary" disabled title="Start voice call">Start call</button>
-                <button id="muteBtn" hidden title="Mute microphone">Mute</button>
-                <label class="sr-only" for="volumeSlider">Friend volume</label><input id="volumeSlider" type="range" min="0" max="100" value="50" class="volume-slider" hidden aria-label="Friend volume" /><output id="volumeValue" class="volume-value" hidden>50%</output>
+          <nav class="settings-tabs" role="tablist" aria-label="Settings sections">
+            <button class="settings-tab active" type="button" data-settings-tab="profile" role="tab" aria-selected="true">My Account</button>
+            <button class="settings-tab" type="button" data-settings-tab="devices" role="tab" aria-selected="false">Voice &amp; Video</button>
+            <button class="settings-tab" type="button" data-settings-tab="appearance" role="tab" aria-selected="false">Appearance</button>
+            <button class="settings-tab" type="button" data-settings-tab="privacy" role="tab" aria-selected="false">Privacy &amp; Safety</button>
+            <button class="settings-tab" type="button" data-settings-tab="advanced" role="tab" aria-selected="false">Advanced</button>
+          </nav>
+          <div class="settings-pages">
+            <section class="settings-section settings-page active" data-settings-page="profile" role="tabpanel">
+              <div><h3>Profile</h3><p>Only shared directly with the person you connect to.</p></div>
+              <label class="profile-name-field" for="displayName"><span>Display name</span><input id="displayName" type="text" maxlength="32" autocomplete="name" placeholder="Your name" /></label>
+              <div class="profile-settings-row">
+                <span id="settingsAvatar" class="avatar settings-avatar"><span class="avatar-letter">Y</span></span>
+                <div class="profile-settings-actions">
+                  <button id="settingsChangePhoto" type="button">Change Avatar</button>
+                  <button id="settingsAdjustPhoto" type="button" class="text-button" hidden>Adjust Avatar</button>
+                  <button id="settingsRemovePhoto" type="button" class="text-button" hidden>Remove Avatar</button>
+                </div>
               </div>
-              <span id="callStatus" class="call-status">Voice off</span>
-            </section>
-            <section class="control-cluster screen-cluster" aria-labelledby="screenControlLabel">
-              <span id="screenControlLabel" class="control-label">Screen share</span>
-              <div class="screen-controls">
-                <button id="screenBtn" disabled title="Share screen">Share screen</button>
-                <select id="screenPreset" class="preset-select" disabled aria-label="Screen share quality">
-                  <option value="1080p30">1080p 30fps</option>
-                  <option value="1080p60">1080p 60fps</option>
-                  <option value="720p60">720p 60fps</option>
-                  <option value="720p30">720p 30fps</option>
-                  <option value="480p30">480p 30fps</option>
-                  <option value="1440p60">1440p 60fps</option>
-                  <option value="4k60">4K 60fps</option>
-                  <option value="custom">Custom</option>
-                </select>
-                <span id="screenStatus" class="screen-status">Not sharing</span>
+              <div id="profileEditor" class="profile-editor" hidden>
+                <label for="profileZoom">Zoom</label><input id="profileZoom" type="range" min="40" max="180" value="100" />
+                <label for="profileX">Left / right</label><input id="profileX" type="range" min="0" max="100" value="50" />
+                <label for="profileY">Up / down</label><input id="profileY" type="range" min="0" max="100" value="50" />
+                <button id="profileDone" type="button" class="primary">Save avatar position</button>
               </div>
             </section>
+            <section class="settings-section settings-page" data-settings-page="devices" role="tabpanel" hidden>
+              <div><h3>Voice &amp; Video</h3><p>Choose the microphone and speaker Pair uses for calls.</p></div>
+              <label class="settings-field" for="inputDevice"><span>Input Device</span><select id="inputDevice"><option value="default">System default</option></select></label>
+              <label class="settings-field" for="outputDevice"><span>Output Device</span><select id="outputDevice"><option value="default">System default</option></select></label>
+              <label class="settings-field" for="voiceInputMode"><span>Input Mode</span><select id="voiceInputMode"><option value="voice">Voice Activity</option><option value="ptt">Push to Talk</option></select></label>
+              <div id="pushToTalkSettings" class="push-to-talk-settings" hidden>
+                <label class="settings-field"><span>Shortcut</span><button id="pushToTalkKey" type="button" class="keybind-button">Set key</button></label>
+                <label class="settings-field" for="pushToTalkDelay"><span>Release delay <output id="pushToTalkDelayValue">0 ms</output></span><input id="pushToTalkDelay" type="range" min="0" max="1000" step="50" value="0" /></label>
+                <p class="settings-hint">Hold the key while Pair is focused to transmit.</p>
+              </div>
+              <label class="settings-toggle"><input id="voiceProcessing" type="checkbox" /><span>Echo Cancellation</span><small>Applies during paired calls only. Keep off with headphones for the cleanest raw sound.</small></label>
+              <div class="settings-inline-actions">
+                <button id="refreshDevices" type="button">Refresh Devices</button>
+                <button id="testSound" type="button" class="text-button">Test Sound</button>
+                <button id="testMicrophone" type="button" class="primary">Test Mic</button>
+              </div>
+              <p id="deviceHint" class="settings-hint">Mic testing uses a raw monitor path. Use headphones to avoid feedback.</p>
+            </section>
+            <section class="settings-section settings-page" data-settings-page="appearance" role="tabpanel" hidden>
+              <div><h3>Appearance</h3><p>Theme Pair’s dark chat shell.</p></div>
+              <div class="theme-grid" role="group" aria-label="Choose a theme">
+                <button class="theme-option selected" type="button" data-theme="obsidian"><i></i><span>Obsidian</span></button>
+                <button class="theme-option" type="button" data-theme="midnight"><i></i><span>Midnight</span></button>
+                <button class="theme-option" type="button" data-theme="violet"><i></i><span>Violet</span></button>
+                <button class="theme-option" type="button" data-theme="forest"><i></i><span>Forest</span></button>
+                <button class="theme-option" type="button" data-theme="ember"><i></i><span>Ember</span></button>
+              </div>
+              <label class="settings-toggle"><input id="reduceMotion" type="checkbox" /><span>Reduce Motion</span><small>Turn off join, leave, and interface motion.</small></label>
+              <label class="settings-toggle"><input id="soundEffects" type="checkbox" checked /><span>Interface Sounds</span><small>Play subtle call and presence sounds.</small></label>
+            </section>
+            <section class="settings-section settings-page" data-settings-page="privacy" role="tabpanel" hidden>
+              <div><h3>Privacy &amp; Safety</h3><p>Pair uses direct encrypted peer connections.</p></div>
+              <label class="settings-toggle"><input id="shareProfile" type="checkbox" checked /><span>Share name and profile photo</span><small>Your identity is sent only over the direct connection.</small></label>
+              <label class="settings-toggle"><input id="rememberInvite" type="checkbox" checked /><span>Remember pasted pairing codes</span><small>Keep the last pasted code on this device.</small></label>
+              <div class="settings-inline-actions"><button id="clearSavedInvite" type="button" class="text-button">Clear Saved Code</button></div>
+              <p class="settings-hint">Always compare the security code with your friend before confirming.</p>
+            </section>
+            <section class="settings-section settings-page" data-settings-page="advanced" role="tabpanel" hidden>
+              <div><h3>Advanced</h3><p>Changes here affect how Pair runs on this computer.</p></div>
+              <label class="settings-toggle"><input id="hardwareAcceleration" type="checkbox" checked /><span>Hardware Acceleration</span><small>Uses the GPU for rendering and media. Requires a restart.</small></label>
+              <div class="settings-inline-actions"><button id="restartPair" type="button" class="primary">Restart Pair</button></div>
+              <p id="hardwareHint" class="settings-hint">The current setting is applied when Pair starts.</p>
+            </section>
           </div>
-          <div class="screen-section">
-            <div class="screen-videos">
-              <video id="screenPreview" class="screen-preview" muted playsinline hidden></video>
-              <video id="remoteScreen" class="remote-screen" playsinline hidden></video>
-            </div>
-          </div>
-          <div id="voiceLog" class="voice-log"></div>
-        </div>
-      </section>
+        </aside>
 
-      <section class="workspace">
-        <div class="chat card">
-          <div class="section-heading"><div><p class="eyebrow">03 / CHAT</p><h2>Private room</h2></div><span class="pill">DIRECT</span></div>
-          <div id="messages" class="messages"><div class="empty"><span>✦</span><p>Messages travel directly between your devices.</p></div></div>
-          <form id="messageForm" class="composer"><input id="messageInput" autocomplete="off" maxlength="16000" placeholder="Message your friend" aria-label="Message your friend" disabled /><button class="send" disabled>Send</button></form>
-          <audio id="remoteAudio" autoplay></audio>
+        <div class="workspace-view">
+          <details id="connectCard" class="connect-drawer">
+            <summary><span>Add a Friend</span><small>Direct pairing</small></summary>
+            <div class="section-heading"><div><p class="eyebrow">Connect</p><h2>Pair directly</h2></div><span class="lock">E2EE</span></div>
+            <p class="muted">Exchange pairing codes with your friend. Chat, calls, and files travel peer to peer.</p>
+            <div class="primary-pair">
+              <div class="pair-grid">
+                <div class="pair-step">
+                  <span class="step-number">1</span>
+                  <div><label for="signalOut">Create invite</label><p class="step-copy">Send this code to your friend.</p></div>
+                  <button id="createOffer" class="primary">Create Invite</button>
+                  <label class="outgoing-label" for="signalOut">Your code</label>
+                  <textarea id="signalOut" readonly placeholder="Your invite appears here…"></textarea>
+                  <div class="pair-code-actions"><button id="copySignal" class="text-button" disabled>Copy</button><span id="pairCodeMeta" aria-live="polite"></span></div>
+                </div>
+                <div class="pair-step">
+                  <span class="step-number">2</span>
+                  <div><label for="signalIn">Accept invite</label><p class="step-copy">Paste your friend’s code here.</p></div>
+                  <textarea id="signalIn" placeholder="Paste invite or reply…" spellcheck="false"></textarea>
+                  <button id="processSignal" class="wide">Continue</button>
+                </div>
+              </div>
+              <p id="pairHint" class="pair-hint">Create an invite, or paste one from your friend.</p>
+            </div>
+            <details class="manual-pair">
+              <summary>Optional signaling server</summary>
+              <p class="hint">Only when you deliberately run a signaling service.</p>
+              <div class="auto-grid">
+                <div class="auto-field"><label for="signalServer">Address</label><input id="signalServer" value="" placeholder="wss://your-server.example" aria-label="Signaling server address" /></div>
+                <div class="auto-field"><label for="roomCode">Room</label><input id="roomCode" value="" placeholder="16+ character secret" aria-label="Room code" /></div>
+                <button id="hostRoom" class="primary">Host</button>
+                <button id="joinRoom">Join</button>
+                <button id="leaveRoom" hidden>Leave</button>
+              </div>
+            </details>
+          </details>
+
+          <section class="workspace">
+            <div class="chat">
+              <div id="messages" class="messages">
+                <div class="empty">
+                  <div class="empty-mark">P</div>
+                  <h3 id="emptyTitle">Friend</h3>
+                  <p id="emptyCopy">This is the beginning of your direct message history with Friend. Messages travel peer to peer.</p>
+                  <button type="button" class="primary empty-cta" id="emptyAddFriend">Add Friend</button>
+                </div>
+              </div>
+              <form id="messageForm" class="composer">
+                <input id="messageInput" autocomplete="off" maxlength="16000" placeholder="Message @Friend" aria-label="Message your friend" disabled />
+                <button class="send" type="submit" disabled aria-label="Send">Send</button>
+              </form>
+              <audio id="remoteAudio" autoplay></audio>
+              <span id="fingerprint" class="sr-only">Keys generated on connect</span>
+            </div>
+          </section>
         </div>
-      </section>
-      <footer><span>WebRTC data channel · AES-GCM payload encryption</span><span id="fingerprint">Keys generated on connect</span></footer>
-      </div>
-      <div hidden><input id="fileInput" type="file" multiple /><input id="profileInput" type="file" accept="image/*" /><div id="transfers"></div></div>
+
+        <div hidden>
+          <input id="fileInput" type="file" multiple />
+          <input id="profileInput" type="file" accept="image/*" />
+          <div id="transfers"></div>
+        </div>
       </div>
     </main>
     <script src="app.js"></script>
