@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('pairEnv', {
   giphyKey: optionalKey('PAIR_GIPHY_KEY'),
   klipyKey: optionalKey('PAIR_KLIPY_KEY'),
   toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
+  onFullscreenChange: cb => { if (typeof cb !== 'function') return () => {}; const listener = (_event, value) => cb(!!value); ipcRenderer.on('pair:fullscreenChanged', listener); return () => ipcRenderer.removeListener('pair:fullscreenChanged', listener); },
   getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),
   getSources: () => ipcRenderer.invoke('pair:getSources'),
   setPendingSource: id => ipcRenderer.send('pair:setPendingSource', id),
