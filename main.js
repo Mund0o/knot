@@ -27,6 +27,19 @@ function moveExistingLinuxAudio(sink) {
   }
   return moved;
 }
+function keepPairAudioOutOfLinuxShare(sink) {
+  const pairPids = pairProcessTree();
+  const inputs = pipewire('pactl', ['list', 'short', 'sink-inputs']).split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2);
+  const details = pipewire('pactl', ['list', 'sink-inputs']);
+  for (const [id, currentSink] of inputs) {
+    const block = details.match(new RegExp(`Sink Input #${id}\\n([\\s\\S]*?)(?=\\nSink Input #|$)`))?.[1] || '';
+    const pid = Number(block.match(/application\.process\.id\s*=\s*"(\d+)"/)?.[1]);
+    // PULSE_SINK already directs future Pair streams to `sink`. Move any
+    // existing child stream as well, so an Electron/AudioContext stream that
+    // was created before the share cannot leak call or screen playback into it.
+    if (pid && pairPids.has(pid) && currentSink !== sink) pipewireOk('pactl', ['move-sink-input', id, sink]);
+  }
+}
 function startLinuxShareAudio() {
   if (process.platform !== 'linux') return null;
   if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source };
@@ -38,6 +51,7 @@ function startLinuxShareAudio() {
   if (!module) return null;
   // Pair's renderer inherits PULSE_SINK before it is created, so its own voice
   // playback remains on the real output while other applications use this mix.
+  keepPairAudioOutOfLinuxShare(original);
   const moved = moveExistingLinuxAudio(sink);
   pipewire('pactl', ['set-default-sink', sink]);
   const loop = spawn('pw-loopback', ['-n', 'Pair Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: 'ignore', detached: true });
