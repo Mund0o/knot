@@ -5,19 +5,18 @@
 #include <audioclient.h>
 #include <audioclientactivationparams.h>
 #include <propvarutil.h>
-#include <vector>
-#include <mutex>
 #include <thread>
 #include <atomic>
-#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <algorithm>
 
 // Windows process loopback captures the system mix while excluding Pair's
 // process tree, so call playback is not shared with the screen. This needs
-// Windows 10 build 20348+. Older systems fall back to endpoint loopback plus
-// reference cancellation fed from Pair's remote voice playback.
+// Windows 10 build 20348+. Older Windows is not given an endpoint-loopback
+// fallback: that mix can still contain Pair playback (call voice and remote
+// screen audio), so the app shares video only when process exclusion fails.
 struct ActivationState {
   HANDLE event=nullptr;
   HRESULT result=E_FAIL;
@@ -52,17 +51,7 @@ public:
 
 class Capture {
 public:
-  std::vector<float> refRing;
-  std::mutex refMutex;
-  uint64_t refWritten=0;
-  float estimatedGain=0.5f;
-  int bestDelay=2048;
   bool runningFlag=false;
-  bool useProcessExclusion=true;
-  static constexpr int RING_SIZE=96000;
-
-  IMMDeviceEnumerator* enumerator=nullptr;
-  IMMDevice* device=nullptr;
   IAudioClient* audioClient=nullptr;
   IAudioCaptureClient* captureClient=nullptr;
   WAVEFORMATEX* mixFormat=nullptr;
@@ -72,7 +61,7 @@ public:
   std::thread captureThread;
   Napi::ThreadSafeFunction dataCb,errCb;
 
-  Capture():refRing(RING_SIZE,0.0f){}
+  Capture()=default;
   ~Capture(){stop();cleanup();}
 
   void start(Napi::Function dataCbFn,Napi::Function errCbFn){
@@ -99,13 +88,8 @@ public:
     if(errCb){errCb.Release();errCb=nullptr;}
   }
 
-  void pushRef(float* data,size_t frames){
-    std::lock_guard<std::mutex> lk(refMutex);
-    for(size_t i=0;i<frames;i++){
-      refRing[(refWritten+i)%RING_SIZE]=data[i];
-    }
-    refWritten+=frames;
-  }
+  // Kept for preload ABI compatibility; process exclusion needs no voice reference.
+  void pushRef(float*,size_t){}
 
   Napi::Object getFormat(Napi::Env env){
     auto o=Napi::Object::New(env);
@@ -114,7 +98,7 @@ public:
     o.Set("channels",Napi::Number::New(env,(double)mixFormat->nChannels));
     o.Set("bitsPerSample",Napi::Number::New(env,(double)mixFormat->wBitsPerSample));
     o.Set("sampleType",mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT?Napi::String::New(env,"float"):Napi::String::New(env,"pcm"));
-    o.Set("mode",Napi::String::New(env,useProcessExclusion?"process":"endpoint"));
+    o.Set("mode",Napi::String::New(env,"process"));
     o.Set("available",Napi::Boolean::New(env,true));
     return o;
   }
@@ -160,22 +144,6 @@ private:
     mixFormat=requested;
     hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,0,0,mixFormat,nullptr);
     if(FAILED(hr))return hr;
-    useProcessExclusion=true;
-    return finishClientInit();
-  }
-
-  HRESULT initEndpointLoopback(){
-    HRESULT hr=CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,__uuidof(IMMDeviceEnumerator),(void**)&enumerator);
-    if(FAILED(hr))return hr;
-    hr=enumerator->GetDefaultAudioEndpoint(eRender,eConsole,&device);
-    if(FAILED(hr))return hr;
-    hr=device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,(void**)&audioClient);
-    if(FAILED(hr))return hr;
-    hr=audioClient->GetMixFormat(&mixFormat);
-    if(FAILED(hr))return hr;
-    hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_EVENTCALLBACK,0,0,mixFormat,nullptr);
-    if(FAILED(hr))return hr;
-    useProcessExclusion=false;
     return finishClientInit();
   }
 
@@ -184,15 +152,11 @@ private:
     if(SUCCEEDED(hr))comInitialized=true;
     else if(hr!=RPC_E_CHANGED_MODE)return hr;
 
-    // Prefer process exclusion so Pair voice never enters the share mix.
-    hr=initProcessLoopback();
-    if(SUCCEEDED(hr))return hr;
-    // Older Windows: endpoint loopback + reference cancellation from the call.
-    return initEndpointLoopback();
+    // Process exclusion only. Endpoint loopback is intentionally unavailable:
+    // it cannot guarantee Pair playback stays out of the share mix.
+    return initProcessLoopback();
   }
 
-  int diagCounter=0;
-  int totalProcessed=0;
   void loop(){
     HRESULT hr=audioClient->Start();
     if(FAILED(hr)){emitErr("start failed");return;}
@@ -212,44 +176,7 @@ private:
     audioClient->Stop();
   }
 
-  void updateDelay(float* captured,int frames,int sr){
-    if(refWritten<(uint64_t)(sr*0.05))return;
-    static int counter=0;
-    if(++counter%30!=0)return;
-
-    int maxD=std::min((int)(sr*0.15),RING_SIZE-frames-256);
-    int minD=(int)(sr*0.01);
-    if(minD<256)minD=256;
-    if(maxD<=minD)return;
-
-    float bestCorr=0;int bestD=bestDelay;
-    int n=std::min(frames,256);
-    for(int d=minD;d<maxD;d+=4){
-      float c=0,nc=0,nr=0;
-      for(int i=0;i<n;i++){
-        float cap=captured[i];
-        float ref=refRing[(refWritten-d+i)%RING_SIZE];
-        c+=cap*ref;nc+=cap*cap;nr+=ref*ref;
-      }
-      float denom=sqrtf(nc*nr);
-      if(denom>1e-10f&&c/denom>bestCorr){bestCorr=c/denom;bestD=d;}
-    }
-    if(bestCorr>0.05f)bestDelay=(bestDelay*3+bestD)/4;
-  }
-
-  void diag(){
-    diagCounter++;
-    if(diagCounter%100!=0)return;
-    char m[128];
-    {
-      std::lock_guard<std::mutex> lk(refMutex);
-      sprintf(m,"[AEC] diag: delay=%d gain=%.4f refWritten=%llu total=%d",bestDelay,estimatedGain,(unsigned long long)refWritten,totalProcessed);
-    }
-    errCb.NonBlockingCall([m](Napi::Env e,Napi::Function cb){cb.Call({Napi::String::New(e,m)});});
-  }
-
   void process(BYTE* data,UINT32 frames){
-    totalProcessed+=frames;
     const int ch=mixFormat&&mixFormat->nChannels>0?mixFormat->nChannels:2;
     const int outCh=2;
     float* buf=(float*)calloc((size_t)frames*(size_t)outCh,sizeof(float));
@@ -268,59 +195,12 @@ private:
       return pl[i*ch+std::min(c,ch-1)]/2147483648.0f;
     };
 
-    if(useProcessExclusion){
-      for(UINT32 i=0;i<frames;i++){
-        float L=sampleAt(i,0);
-        float R=ch>1?sampleAt(i,1):L;
-        buf[i*outCh+0]=L;
-        buf[i*outCh+1]=R;
-      }
-    }else{
-      // Endpoint mix includes Pair playback. Prefer cancelled output once a
-      // voice reference exists; before that, pass desktop sound through so
-      // games/YouTube still work when nobody is yet heard on the call.
-      std::vector<float> mono(frames);
-      for(UINT32 i=0;i<frames;i++){
-        float s=0;
-        for(int c=0;c<ch;c++)s+=sampleAt(i,c);
-        mono[i]=s/(float)ch;
-      }
-      int delay=bestDelay;
-      int sr=mixFormat?(int)mixFormat->nSamplesPerSec:48000;
-      {
-        std::lock_guard<std::mutex> lk(refMutex);
-        if(refWritten>(uint64_t)(delay+(int)frames)){
-          updateDelay(mono.data(),(int)frames,sr);
-          delay=bestDelay;
-          for(UINT32 i=0;i<frames;i++){
-            float r=refRing[(refWritten-delay+i)%RING_SIZE];
-            float c=mono[i];
-            float clean=c-estimatedGain*r;
-            if(fabsf(r)>0.001f){
-              float num=c*r,den=r*r+1e-10f;
-              estimatedGain=0.995f*estimatedGain+0.005f*num/den;
-              if(estimatedGain<0)estimatedGain=0;
-              if(estimatedGain>4)estimatedGain=4;
-            }
-            // Soft clip to keep residual cancellation from blasting the mix.
-            if(clean>1)clean=1;else if(clean<-1)clean=-1;
-            buf[i*outCh+0]=clean;
-            buf[i*outCh+1]=clean;
-          }
-        }else if(refWritten==0){
-          for(UINT32 i=0;i<frames;i++){
-            float L=sampleAt(i,0);
-            float R=ch>1?sampleAt(i,1):L;
-            buf[i*outCh+0]=L;
-            buf[i*outCh+1]=R;
-          }
-        }else{
-          for(UINT32 i=0;i<frames;i++){
-            buf[i*outCh+0]=0;
-            buf[i*outCh+1]=0;
-          }
-        }
-      }
+    // Process-loopback exclusion already omits Pair's process tree.
+    for(UINT32 i=0;i<frames;i++){
+      float L=sampleAt(i,0);
+      float R=ch>1?sampleAt(i,1):L;
+      buf[i*outCh+0]=L;
+      buf[i*outCh+1]=R;
     }
 
     UINT32 fCopy=frames;
@@ -345,9 +225,8 @@ private:
     if(captureClient)captureClient->Release();
     if(audioClient)audioClient->Release();
     if(mixFormat)CoTaskMemFree(mixFormat);
-    if(device)device->Release();
-    if(enumerator)enumerator->Release();
     if(comInitialized)CoUninitialize();
+    captureEvent=nullptr;captureClient=nullptr;audioClient=nullptr;mixFormat=nullptr;comInitialized=false;
   }
 };
 

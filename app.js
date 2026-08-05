@@ -1023,20 +1023,9 @@ async function renegotiate(){
 }
 function clearRenegPending(){renegPending=false}
 // Capture desktop sound for screen share while keeping Pair voice out of that
-// mix. Windows uses process-loopback exclusion when available, otherwise endpoint
-// loopback plus a voice reference. Prefer AudioWorklet over ScriptProcessor.
-function remoteVoiceReferenceStream(){
-  try{
-    const tracks=[];
-    for(const el of [remoteAudio]){
-      for(const t of el.srcObject?.getAudioTracks?.()||[]){
-        if(t.readyState==='live'&&!tracks.includes(t))tracks.push(t);
-      }
-    }
-    return tracks.length?new MediaStream(tracks):null;
-  }catch{return null}
-}
-
+// mix. Windows uses process-loopback exclusion only; older Windows without that
+// API shares video only rather than falling back to endpoint loopback.
+// Prefer AudioWorklet over ScriptProcessor.
 async function loadShareAudioWorklet(ctx){
   const candidates=[];
   try{candidates.push(new URL('share-audio-worklet.js',window.location.href).href)}catch{}
@@ -1062,15 +1051,13 @@ async function setupNativeScreenCapture(){
     return null;
   }
 
-  let ctx,dest,addonData=false,aecTimedOut=false,captureMode='process';
-  let refProc,refSilence,refSource,workletNode,refTrackIds='';
+  let ctx,dest,addonData=false,captureTimedOut=false,workletNode;
   try{
     ctx=new AudioContext({sampleRate:48000});
     if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
     dest=ctx.createMediaStreamDestination();dest.channelCount=2;
-    const unsubFormat=window.pairCapture.onFormat?.(fmt=>{if(fmt&&fmt.mode)captureMode=fmt.mode});
     const feed=(arr,frames)=>{
-      if(aecTimedOut)return;
+      if(captureTimedOut)return;
       addonData=true;
       const stereo=arr.length>=frames*2;
       const interleaved=new Float32Array(frames*2);
@@ -1094,29 +1081,6 @@ async function setupNativeScreenCapture(){
       if(window.pairHelpers)window.pairHelpers.debugLog('capture error',msg);
     });
     window.pairCapture.start();
-
-    // Endpoint mode needs a live remote-voice reference while the call is up.
-    const wireReference=()=>{
-      const refStream=remoteVoiceReferenceStream();
-      const ids=(refStream?refStream.getAudioTracks().map(t=>t.id).join(','):'');
-      if(ids===refTrackIds)return;
-      refTrackIds=ids;
-      try{if(refSource)refSource.disconnect()}catch{}
-      try{if(refProc)refProc.disconnect()}catch{}
-      try{if(refSilence)refSilence.disconnect()}catch{}
-      refSource=refProc=refSilence=null;
-      if(!refStream)return;
-      refSource=ctx.createMediaStreamSource(refStream);
-      refProc=ctx.createScriptProcessor(1024,1,1);
-      refSilence=ctx.createGain();refSilence.gain.value=0;
-      refProc.onaudioprocess=e=>{
-        const d=e.inputBuffer.getChannelData(0);
-        const ab=d.buffer.slice(d.byteOffset,d.byteOffset+d.byteLength);
-        window.pairCapture.pushReference(ab);
-      };
-      refSource.connect(refProc);refProc.connect(refSilence);refSilence.connect(ctx.destination);
-    };
-    const formatTimer=setInterval(()=>{if(captureMode==='endpoint'||callActive)wireReference()},150);
 
     let usedWorklet=false;
     if(await loadShareAudioWorklet(ctx)){
@@ -1142,43 +1106,29 @@ async function setupNativeScreenCapture(){
     }
 
     const deadline=Date.now()+2500;
-    while(!addonData&&Date.now()<deadline){
-      if(captureMode==='endpoint'||callActive)wireReference();
-      await new Promise(r=>setTimeout(r,40));
-    }
-    clearInterval(formatTimer);
-    if(unsubFormat)try{unsubFormat()}catch{}
+    while(!addonData&&Date.now()<deadline)await new Promise(r=>setTimeout(r,40));
     if(!addonData){
       console.warn('[AUDIO] isolated desktop capture produced no samples; sharing video only');
       logCallEvent('Computer sound unavailable — sharing video only');
-      aecTimedOut=true;
+      captureTimedOut=true;
       if(unsubClean)unsubClean();if(unsubError)unsubError();
       window.pairCapture.stop();
-      try{if(refSource)refSource.disconnect()}catch{}
-      try{if(refProc)refProc.disconnect()}catch{}
-      try{if(refSilence)refSilence.disconnect()}catch{}
       try{if(workletNode)workletNode.disconnect()}catch{}
       try{if(dest._pairScript)dest._pairScript.disconnect()}catch{}
       if(ctx)try{ctx.close()}catch{}
       return null;
     }
-    wireReference();
-    const refWatch=setInterval(()=>{if(captureMode==='endpoint'||callActive)wireReference()},500);
     screenOutCtx=ctx;screenOutDest=dest;
     screenNative=true;
     const t=dest.stream.getAudioTracks()[0];
     try{if(t)t.contentHint='music'}catch{}
     screenCaptureCleanup=()=>{
-      clearInterval(refWatch);
       if(unsubClean)unsubClean();if(unsubError)unsubError();
       window.pairCapture.stop();
-      try{if(refSource)refSource.disconnect()}catch{}
-      try{if(refProc)refProc.disconnect()}catch{}
-      try{if(refSilence)refSilence.disconnect()}catch{}
       try{if(workletNode)workletNode.disconnect()}catch{}
       try{if(dest._pairScript)dest._pairScript.disconnect()}catch{}
     };
-    if(window.pairHelpers)window.pairHelpers.debugLog('share audio ready',captureMode,usedWorklet?'worklet':'script');
+    if(window.pairHelpers)window.pairHelpers.debugLog('share audio ready','process',usedWorklet?'worklet':'script');
     return t||null;
   }catch(e){
     console.warn('[AUDIO] isolated desktop capture failed:',e?.message||e);
@@ -1195,19 +1145,44 @@ function cleanupNativeScreenCapture(){
   if(screenOutCtx){try{screenOutCtx.close()}catch{};screenOutCtx=null}
 }
 
-async function linuxShareAudioTrack(){
-  const share=await window.pairEnv?.startLinuxShareAudio?.();if(!share)return null;
+async function linuxShareAudioTrack(expectedGen){
+  const aborted=()=>expectedGen!=null&&expectedGen!==screenGen;
+  let sinkStarted=false;
+  const discardSink=()=>{if(!sinkStarted)return;sinkStarted=false;try{window.pairEnv?.stopLinuxShareAudio?.()}catch{}};
+  // Electron can redact input labels until getUserMedia has been granted once.
+  // Probe and stop before creating the PipeWire share sink so enumerateDevices
+  // can see “Pair Share Audio” on a fresh profile or share-without-call.
+  try{
+    const permissionProbe=await navigator.mediaDevices.getUserMedia({audio:true});
+    permissionProbe.getTracks().forEach(t=>t.stop());
+  }catch(e){console.warn('[AUDIO] unable to reveal PipeWire inputs:',e?.message||e)}
+  if(aborted())return null;
+  const share=await window.pairEnv?.startLinuxShareAudio?.();
+  if(!share)return null;
+  sinkStarted=true;
+  if(aborted()){discardSink();return null}
   const label=typeof share==='string'?share:share.label||'Pair Share Audio';
   // PipeWire may expose this as “Monitor of Pair Share Audio”, so match both
   // the friendly label and the stable Pair/Share words rather than one exact
   // desktop-specific spelling.
-  // Electron can redact input labels until getUserMedia has been granted once.
-  // Open and immediately stop the default input only to establish that grant;
-  // it is never added to the share. Without this, the Pair Share monitor is
-  // present but impossible to select on a first share or a fresh profile.
-  try{const permissionProbe=await navigator.mediaDevices.getUserMedia({audio:true});permissionProbe.getTracks().forEach(t=>t.stop())}catch(e){console.warn('[AUDIO] unable to reveal PipeWire inputs:',e?.message||e)}
-  for(let attempt=0;attempt<24;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));if(device){try{const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const track=stream.getAudioTracks()[0]||null;if(track){track.enabled=true;return track}}catch(e){console.warn('[AUDIO] Pair Share Audio device failed:',e)}}await new Promise(resolve=>setTimeout(resolve,150))}
-  console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');window.pairEnv?.stopLinuxShareAudio?.();return null;
+  for(let attempt=0;attempt<24;attempt++){
+    if(aborted()){discardSink();return null}
+    const devices=await navigator.mediaDevices.enumerateDevices();
+    if(aborted()){discardSink();return null}
+    const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));
+    if(device){
+      try{
+        const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+        if(aborted()){stream.getTracks().forEach(t=>t.stop());discardSink();return null}
+        const track=stream.getAudioTracks()[0]||null;
+        if(track){track.enabled=true;return track}
+      }catch(e){console.warn('[AUDIO] Pair Share Audio device failed:',e)}
+    }
+    await new Promise(resolve=>setTimeout(resolve,150));
+  }
+  console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');
+  discardSink();
+  return null;
 }
 function startScreenStats(sender){
   if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;
@@ -1262,7 +1237,7 @@ async function startScreenShare(){
       screenStatus.textContent='Sharing… preparing sound';
       let audioTrack=null;
       if(window.pairEnv?.platform==='linux'){
-        audioTrack=await linuxShareAudioTrack();
+        audioTrack=await linuxShareAudioTrack(gen);
       }else{
         try{stream.getAudioTracks().forEach(t=>{try{t.stop()}catch{};try{stream.removeTrack(t)}catch{}})}catch{}
         try{audioTrack=await setupNativeScreenCapture()}catch(e){
@@ -1317,18 +1292,39 @@ async function startScreenShare(){
     // seconds of latency during desktop capture, so it stays a last fallback.
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const names=window.pairHelpers?window.pairHelpers.preferredVideoCodecs(screenCodec):(screenCodec==='auto'?['H264','VP9','VP8','H265','AV1']:[screenCodec,'H264','VP9','VP8']);const cs=names.map(name=>caps.codecs.find(c=>c.mimeType===`video/${name}`)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
     try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const preset=screenPreset.value;const maxBitrate=Math.round(Math.max(2,Math.min(120,screenBitrateMbps))*1000000);p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=SCREEN_PRESETS[preset]?.frameRate?.max||30;p.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(p);if(window.pairHelpers)window.pairHelpers.debugLog('video bitrate',maxBitrate,p.degradationPreference)}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
-    if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());cleanupNativeScreenCapture();return}
+    if(gen!==screenGen||!pc){
+      screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];
+      stream.getTracks().forEach(t=>t.stop());
+      if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+      cleanupNativeScreenCapture();
+      return;
+    }
     screenActive=true;
     screenPreview.muted=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
     screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';
-    screenStatus.textContent=audioReady?'Sharing':'Sharing · video only';
     startScreenStats(sender);
     try{send({t:'screen-start'})}catch{};
-    logCallEvent(audioReady?'You started screen sharing with computer sound':'You started screen sharing');
     track.onended=()=>{if(screenActive)stopScreenShare()};
-    await renegotiate();
-  }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
+    // Wait until signaling is stable inside renegotiate before createOffer.
+    // Only claim computer-sound success when that renegotiation actually starts.
+    const renegOk=await renegotiate();
+    if(gen!==screenGen)return;
+    const soundLive=audioReady&&renegOk;
+    screenStatus.textContent=soundLive?'Sharing':'Sharing · video only';
+    if(audioReady&&!renegOk){
+      console.warn('[AUDIO] share audio renegotiation did not start; sharing video only');
+      logCallEvent('You started screen sharing');
+      logCallEvent('Computer sound negotiation failed — sharing video only');
+    }else{
+      logCallEvent(soundLive?'You started screen sharing with computer sound':'You started screen sharing');
+    }
+  }catch(e){
+    screenStatus.textContent='Share failed';
+    if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+    cleanupNativeScreenCapture();
+    if(e.name!=='NotAllowedError')logCallEvent('Screen share error');
+  }
   }finally{if(gen===screenGen)screenStarting=false}
 }
 async function stopScreenShare(fromEnd){

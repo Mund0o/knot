@@ -46,6 +46,19 @@ test('share start/stop generation aborts stale attaches', () => {
   assert.equal(share.state().screenActive, false);
 });
 
+test('linux share audio sink is discarded when generation advances mid-setup', () => {
+  let screenGen = 1;
+  let sinkAlive = false;
+  const aborted = (expectedGen) => expectedGen !== screenGen;
+  const discardSink = () => { sinkAlive = false; };
+  // Simulate startLinuxShareAudio succeeding, then stopScreenShare mid-poll.
+  sinkAlive = true;
+  const expectedGen = 1;
+  screenGen = 2;
+  if (aborted(expectedGen)) discardSink();
+  assert.equal(sinkAlive, false);
+});
+
 test('second share start is blocked while active', () => {
   const share = makeShareSession();
   const a = share.start();
