@@ -1,10 +1,10 @@
 {
-  "version": "1.1.22",
-  "notes": "Fixes fullscreen and adds screen-share audio status diagnostics.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.22/pair-p2p-1.1.22.tar.gz",
-  "linuxSha256": "ba59557f6826d0a136d611eaa59ace99607e3af4770a14451121e0893aa4472c",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.22/Pair-1.1.22.AppImage",
-  "linuxAppImageSha256": "e63c2e56a5122a02a0241233fcbf9d1e5f91dbaecf965303555cb2b4f7db0195",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.22/Pair.Setup.1.1.22.exe",
-  "winSha256": "bb6cacf74b8272bf8bcd56c16c28264433ae90911a13dc5f59ca704c1fcaf7a4"
+  "version": "1.1.24",
+  "notes": "Fixes 4K/60 and adds persistent screen-share audio diagnostics.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.24/pair-p2p-1.1.24.tar.gz",
+  "linuxSha256": "5a6412e2bac75267fd033ccf69a94d781496d83f0d1122ce05d7d9f460625814",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.24/Pair-1.1.24.AppImage",
+  "linuxAppImageSha256": "c88c8f8d5cd79e235ecd5b80d98604c009883727545f65b10d9906b2fa988610",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.24/Pair.Setup.1.1.24.exe",
+  "winSha256": "a6675f1b9db12271decddd91a502b174c5663a01abecffe7643be1d75e08cf16"
 }
