@@ -1,22 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const { turnServersFromConfig, mergeIceServers, DEFAULT_ICE_SERVERS } = require('./pair-helpers');
 
-function turnServersFromEnvironment() {
-  try {
-    const config = JSON.parse(process.env.PAIR_TURN || '[]');
-    if (!Array.isArray(config)) return [];
-    return config.slice(0, 8).flatMap(item => {
-      if (!item || typeof item !== 'object') return [];
-      const urls = (Array.isArray(item.urls) ? item.urls : [item.urls])
-        .filter(url => typeof url === 'string' && /^(?:stun|turn|turns):[^\s]+$/i.test(url));
-      if (!urls.length) return [];
-      const server = { urls };
-      if (typeof item.username === 'string' && item.username.length <= 512) server.username = item.username;
-      if (typeof item.credential === 'string' && item.credential.length <= 1024) server.credential = item.credential;
-      return [server];
-    });
-  } catch {
-    return [];
-  }
+function iceServersForRenderer() {
+  return mergeIceServers(DEFAULT_ICE_SERVERS, turnServersFromConfig(process.env.PAIR_TURN || '[]'));
+}
+
+function optionalKey(name) {
+  const value = process.env[name];
+  return typeof value === 'string' && value.length > 8 && value.length < 256 ? value : '';
 }
 
 // Minimal, audited bridge for streaming an incoming file to disk.
@@ -54,7 +45,9 @@ contextBridge.exposeInMainWorld('pairUpdates', {
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
   isApp: true,
-  iceServers: turnServersFromEnvironment(),
+  iceServers: iceServersForRenderer(),
+  giphyKey: optionalKey('PAIR_GIPHY_KEY'),
+  klipyKey: optionalKey('PAIR_KLIPY_KEY'),
   toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
   onFullscreenChange: cb => { if (typeof cb !== 'function') return () => {}; const listener = (_event, value) => cb(!!value); ipcRenderer.on('pair:fullscreenChanged', listener); return () => ipcRenderer.removeListener('pair:fullscreenChanged', listener); },
   getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),

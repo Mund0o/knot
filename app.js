@@ -297,7 +297,7 @@ function buildGifPicker(){
   return wrap;
 }
 function giphyFetch(endpoint,type,query,offset){
-  const apiKey=window._giphyKey||'LtCRMfaqI1JFzONkJJFRJ8ktT3EdOoTL';
+  const apiKey=window.pairEnv?.giphyKey||window._giphyKey||'';if(!apiKey)return Promise.resolve({data:[]});
   const base=type==='stickers'?'stickers':'gifs';
   const off=offset?`&offset=${offset}`:'';
   if(giphyFetch._cooldown>Date.now())return Promise.resolve({data:[]});
@@ -305,14 +305,14 @@ function giphyFetch(endpoint,type,query,offset){
   return fetch(url,{credentials:'omit'}).then(r=>{if(r.status===429){giphyFetch._cooldown=Date.now()+10000;console.warn('giphy 429, cooling 10s');return{data:[]}}if(!r.ok)throw new Error('GIPHY '+r.status);return r.json()}).catch(()=>({data:[]}));
 }
 function klipyFetch(type,query,offset){
-  const key='wDEDuoSRgy4oajhdMGJ7gtS2cFBB3DtWULsUYodKIRhcXvHreSPr6eNM3nm0oWc1';
+  const key=window.pairEnv?.klipyKey||'';if(!key)return Promise.resolve({results:[]});
   const params=new URLSearchParams({key,limit:'24',contentfilter:'off',locale:'en',media_filter:'gif,tinygif,webm,tinywebm'});
   if(type==='stickers')params.set('searchfilter','sticker');
   if(offset)params.set('page',Math.floor(offset/24)+1);
   const url=query?`https://api.klipy.com/v2/search?${params}&q=${encodeURIComponent(query)}`:`https://api.klipy.com/v2/featured?${params}`;
   return fetch(url,{headers:{Accept:'application/json'},credentials:'omit'}).then(r=>{if(!r.ok){console.warn('klipy err',r.status);return{results:[]}}return r.json()}).catch(e=>{console.warn('klipy fail',e.message);return{results:[]}});
 }
-function klipyShare(id){try{fetch(`https://api.klipy.com/v1/registershare?key=wDEDuoSRgy4oajhdMGJ7gtS2cFBB3DtWULsUYodKIRhcXvHreSPr6eNM3nm0oWc1&id=${id}`)}catch{}}
+function klipyShare(id){const key=window.pairEnv?.klipyKey;if(!key)return;try{fetch(`https://api.klipy.com/v1/registershare?key=${encodeURIComponent(key)}&id=${id}`)}catch{}}
 function giphyAnalytics(giphyId,type){
   try{fetch('https://api.giphy.com/v1/analytics/action/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action_type:'SENT',action_object_type:type==='stickers'?'sticker':'gif',action_object_id:giphyId})})}catch{}
 }
@@ -431,8 +431,8 @@ function fileBus(){return (streamWs&&streamWs.readyState===WebSocket.OPEN)?strea
 // Direct pairing is STUN-only by default. In the desktop app, validated custom
 // TURN settings are supplied by the preload bridge; browser builds retain the
 // safe default rather than depending on a Node `process` global.
-const DEFAULT_ICE_SERVERS=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
-const ICE_SERVERS=Array.isArray(window.pairEnv?.iceServers)&&window.pairEnv.iceServers.length?window.pairEnv.iceServers:DEFAULT_ICE_SERVERS;
+const DEFAULT_ICE_SERVERS=(window.pairHelpers&&window.pairHelpers.DEFAULT_ICE_SERVERS)||[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
+const ICE_SERVERS=(window.pairHelpers?window.pairHelpers.mergeIceServers(DEFAULT_ICE_SERVERS,window.pairEnv&&window.pairEnv.iceServers):DEFAULT_ICE_SERVERS);
 function setupPeer(){
   // Close previous pc and associated resources if reconnecting (e.g. peer-left → peer-ready).
   // Null pc first so the old pc's onconnectionstatechange handler bails (sees !pc).
@@ -445,7 +445,54 @@ function setupPeer(){
     try{oldPc.close()}catch{}
   }
   pc=new RTCPeerConnection({iceServers:ICE_SERVERS});pc.onicecandidate=()=>{};  let wasEverConnected=false;
-  pc.onconnectionstatechange=()=>{if(!pc)return;if(pc.connectionState==='connected'){screenBtn.disabled=false;screenPreset.disabled=false;if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}    if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}callActive=false;startCall()}}else{setStatus('Connected directly',true);friendLeftNotified=false}}if(['failed','disconnected','closed'].includes(pc.connectionState)){screenBtn.disabled=true;screenPreset.disabled=true;if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}setParticipant(participantFriend,false);setStatus(pc.connectionState);if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}};if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}};pc.oniceconnectionstatechange=()=>{if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(pc.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}};pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+  let iceRestartTimer=null,iceRestartAttempts=0;
+  pc.onconnectionstatechange=()=>{
+    if(!pc)return;
+    if(pc.connectionState==='connected'){
+      screenBtn.disabled=false;screenPreset.disabled=false;
+      if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}
+      if(iceRestartTimer){clearTimeout(iceRestartTimer);iceRestartTimer=null}
+      iceRestartAttempts=0;
+      if(!wasEverConnected){
+        wasEverConnected=true;
+        if(reconnectCall){reconnectCall=false;if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}callActive=false;startCall()}
+      }else{setStatus('Connected directly',true);friendLeftNotified=false}
+    }
+    if(pc.connectionState==='disconnected'){
+      pairHint.textContent='Connection interrupted — trying to recover…';
+      if(!iceRestartTimer&&iceRestartAttempts<2){
+        iceRestartTimer=setTimeout(async()=>{
+          iceRestartTimer=null;
+          if(!pc||pc.connectionState==='connected'||pc.connectionState==='closed')return;
+          iceRestartAttempts++;
+          try{
+            const offer=await pc.createOffer({iceRestart:true});
+            if(!pc||pc.connectionState==='closed')return;
+            await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});
+            await waitIce();
+            if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:pc.localDescription.sdp}}));
+            else if(chat?.readyState==='open')send({t:'reneg-offer',sdp:pc.localDescription.sdp});
+            logCallEvent('Recovering connection…');
+          }catch(e){if(window.pairHelpers)window.pairHelpers.debugLog('ice restart failed',e)}
+        },1500);
+      }
+    }
+    if(pc.connectionState==='failed'||pc.connectionState==='closed'){
+      screenBtn.disabled=true;screenPreset.disabled=true;
+      if(pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=connectTimer=null}
+      if(iceRestartTimer){clearTimeout(iceRestartTimer);iceRestartTimer=null}
+      setParticipant(participantFriend,false);setStatus(pc.connectionState);
+      if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}
+      if(pc.connectionState==='failed')pairHint.textContent='Peer connection failed. Check network/NAT, or set PAIR_TURN for a relay.';
+    }
+    if(pc.connectionState==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+ (pc.iceConnectionState||'') +')…';armConnectTimeout()}
+  };
+  pc.oniceconnectionstatechange=()=>{
+    if(!pc)return;
+    if(pc.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE failed). NAT/network may be blocking the link; configure PAIR_TURN if needed.'}
+    else if(pc.iceConnectionState==='checking'||pc.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(pc.iceConnectionState||'')+' )…'}
+  };
+  pc.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
   // network), surface a clear message instead of hanging on "Connecting…" forever.
   let connectTimer=null;pc._connectTimer=null;function armConnectTimeout(){if(connectTimer||pc.connectionState==='connected')return;connectTimer=setTimeout(()=>{pc._connectTimer=null;if(pc&&pc.connectionState!=='connected'&&pc.connectionState!=='failed'&&pc.connectionState!=='closed'){pairHint.textContent='Still connecting… if this persists, one of you is behind a strict NAT/firewall that blocks the peer connection. Try a different network or add a TURN server.'}},25000);pc._connectTimer=connectTimer}
@@ -466,9 +513,10 @@ function setupPeer(){
     // Keep a reference so we can close the AudioContext on disconnect
     pc._silentAudioCtx=silentCtx;
   }catch(e){console.warn('Silent audio track failed, using addTransceiver:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null}}
+  if(window.pairHelpers)window.pairHelpers.debugLog('setupPeer transceivers',pc.getTransceivers().length);
   logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid:'null'));
   let gestureGuard=false,screenGestureGuard=false;
-  pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{const stream=e.streams[0]||new MediaStream([e.track]);
+  pc.ontrack=e=>{if(window.pairHelpers)window.pairHelpers.debugLog('ontrack',e.track.kind);logCallEvent('Diag: ontrack kind='+e.track.kind);try{const stream=e.streams[0]||new MediaStream([e.track]);
     // Keep remoteScreenExpected true until screen-end so audio that arrives after
     // the video track still routes to the screen element instead of the voice sink.
     const screenStreamId=remoteScreen.srcObject?.id;
@@ -496,18 +544,20 @@ function setupPeer(){
     }
     if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;e.track.onended=()=>{if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.play()}catch{};e.track.onended=()=>{if(remoteScreen.srcObject===stream){remoteScreen.srcObject=null;remoteScreen.hidden=true}}}}catch{}};
 }
-async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;pc?.removeEventListener('icegatheringstatechange',f);clearTimeout(timeout);resolve()};const f=()=>{if(pc?.iceGatheringState==='complete')finish()};const timeout=setTimeout(finish,5000);pc.addEventListener('icegatheringstatechange',f)})}
-function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=256000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=256000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx=0';if(!m.includes('stereo'))m+='; stereo=1';else m=m.replace(/stereo=[01]/,'stereo=1');if(!m.includes('sprop-stereo'))m+='; sprop-stereo=1';else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo=1');return m})}
+async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;pc?.removeEventListener('icegatheringstatechange',f);clearTimeout(timeout);resolve()};const f=()=>{if(pc?.iceGatheringState==='complete')finish()};const timeout=setTimeout(finish,15000);pc.addEventListener('icegatheringstatechange',f)})}
+function patchOpusSdp(sdp){return window.pairHelpers?window.pairHelpers.patchOpusSdp(sdp,96000):sdp}
 // Sender parameters are the primary limiter. This SDP fallback keeps browsers
 // that ignore those parameters from silently collapsing a high-motion share to
-// the old 16 Mbps ceiling.
+// an overly low ceiling on older clients.
 function patchVideoSdp(sdp){
+  const kbps=Math.round(Math.max(2,Math.min(120,screenBitrateMbps||12))*1000);
+  if(window.pairHelpers)return window.pairHelpers.patchVideoSdp(sdp,kbps);
   sdp=sdp.replace(/\r\n/g,'\n');
   return sdp.replace(/^m=video .*\n(?:[^m].*\n)*/gm,m=>{
     let section=m;
     section=section.replace(/\nb=AS:\d+/g,'');
     section=section.replace(/\na=x-google-(?:min|max)-bitrate:\d+/g,'');
-    return section+'a=x-google-max-bitrate:140000\n';
+    return section+'a=x-google-max-bitrate:'+kbps+'\n';
   });
 }
 function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
@@ -662,7 +712,7 @@ enableLocalTestControls();
 
 async function ss(key){if(window.pairSettings){try{return await window.pairSettings.get(key)}catch{}}try{return localStorage.getItem('pair.'+key)}catch{}}
 async function ssSet(key,val){if(window.pairSettings){try{await window.pairSettings.set(key,val);return}catch{}}try{if(val==null)localStorage.removeItem('pair.'+key);else localStorage.setItem('pair.'+key,val)}catch{}}
-let screenCursor='always',screenContentHint='motion',screenBitrateMbps=20,screenCodec='auto',shareResolution=1080,shareFrameRate=30;
+let screenCursor='always',screenContentHint='motion',screenBitrateMbps=12,screenCodec='auto',shareResolution=720,shareFrameRate=30;
 function openSettingsTab(name){document.querySelectorAll('.settings-tab').forEach(tab=>{const active=tab.dataset.settingsTab===name;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active))});document.querySelectorAll('.settings-page').forEach(page=>{const active=page.dataset.settingsPage===name;page.classList.toggle('active',active);page.hidden=!active})}
 function addScreenShareSettings(){
   const tab=document.createElement('button');tab.type='button';tab.className='settings-tab';tab.dataset.settingsTab='screen';tab.setAttribute('role','tab');tab.setAttribute('aria-selected','false');tab.textContent='Screen sharing';
@@ -672,7 +722,7 @@ function addScreenShareSettings(){
   const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),codec=$('#screenCodecSetting'),contentHint=$('#screenContentHintSetting'),cursor=$('#screenCursorSetting');
   const updateBitrate=()=>{screenBitrateMbps=Math.max(2,Math.min(120,Number(bitrate.value)||20));bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';ssSet('screenBitrate',String(screenBitrateMbps))};
   bitrate.oninput=updateBitrate;enableRangeDrag(bitrate);codec.onchange=()=>{screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};
-  return async()=>{const b=Number(await ss('screenBitrate'));screenBitrateMbps=Number.isFinite(b)&&b>=2&&b<=120?b:20;bitrate.value=String(screenBitrateMbps);bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';const v=await ss('screenCodec');screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(v)?v:'auto';codec.value=screenCodec;const c=await ss('screenCursor');screenCursor=['always','motion','never'].includes(c)?c:'always';cursor.value=screenCursor;const h=await ss('screenContentHint');screenContentHint=h==='detail'?'detail':'motion';contentHint.value=screenContentHint};
+  return async()=>{const b=Number(await ss('screenBitrate'));screenBitrateMbps=Number.isFinite(b)&&b>=2&&b<=120?b:12;bitrate.value=String(screenBitrateMbps);bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';const v=await ss('screenCodec');screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(v)?v:'auto';codec.value=screenCodec;const c=await ss('screenCursor');screenCursor=['always','motion','never'].includes(c)?c:'always';cursor.value=screenCursor;const h=await ss('screenContentHint');screenContentHint=h==='detail'?'detail':'motion';contentHint.value=screenContentHint};
 }
 const restoreScreenShareSettings=addScreenShareSettings();
 document.querySelectorAll('.settings-tab').forEach(tab=>tab.onclick=()=>openSettingsTab(tab.dataset.settingsTab));
@@ -745,10 +795,22 @@ async function automaticPair(kind){
   signaling.onerror=()=>pairHint.textContent='Could not reach the signaling server. Check the address and firewall.';
   signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);
     if(message.type==='full'){pairHint.textContent='That room already has two people.';return}
+    if(message.type==='peer-left'){
+      logCallEvent('Friend left the room');
+      pairHint.textContent='Friend left the room. Waiting for them to rejoin…';
+      setParticipant(participantFriend,false);
+      if(screenActive||screenStarting||screenStream)stopScreenShare(true);
+      try{if(pc){pc.close()}}catch{}
+      if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}
+      pc=chat=files=null;audioTransceiver=null;sharedKey=null;
+      try{remoteAudio.srcObject=null}catch{};try{remoteScreen.srcObject=null}catch{};remoteScreen.hidden=true;
+      setStatus('Waiting for friend');
+      return;
+    }
     if(message.type==='peer-ready'&&role==='host'){
       reconnectCall=callActive;setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
       const offer=await pc.createOffer();if(!pc)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
-      logCallEvent('Diag: offer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
+      
       signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
       openStreamRelay(address,room);pairHint.textContent='Offer sent. Connecting…';
       // If the friend never answers (wrong role, different room, or an old build
@@ -769,20 +831,14 @@ async function automaticPair(kind){
         // sender. Also update audioTransceiver to the MATCHED transceiver (with
         // non-null mid) so startCall uses it — the one from addTransceiver in
         // setupPeer has mid=null and would send on an un-negotiated path.
-        pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv'){t.setDirection('sendrecv');logCallEvent('Diag: set audioTr direction to sendrecv (was '+t.direction+')')}}catch(e){logCallEvent('Diag: setDirection error: '+e.message)}});
+        pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv')t.setDirection('sendrecv')}catch{}});
         const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
-        logCallEvent('Diag: before createAnswer transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
         const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
-        logCallEvent('Diag: answer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
         signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
         openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'
       }else if(remote.kind==='answer'&&role==='host'){
-        logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
         await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;if(!await derive(pc._kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}
-        logCallEvent('Diag: after setRD(answer)');
-        const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
-        const cd=matched?matched.currentDirection:'none';
-        logCallEvent('Diag: audio currentDir='+cd);
+        const matchedHost=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matchedHost)audioTransceiver=matchedHost;
         // If the friend's answer didn't include an audio sender, startCall will
         // add a transceiver and renegotiate instead of relying on the unmatched one.
         openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
@@ -795,7 +851,7 @@ async function automaticPair(kind){
         if(renegPending&&role==='join'){renegotiating++;renegPending=false}
         try{if(!pc)return;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp:pc.localDescription.sdp}}))}catch(e){console.warn('reneg-offer error',e)}
       }else if(remote.kind==='reneg-answer'){
-        try{if(!pc)return;await pc.setRemoteDescription({type:'answer',sdp:remote.sdp})}catch(e){console.warn('reneg-answer error',e)}
+        try{if(!pc)return;await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});clearRenegPending()}catch(e){console.warn('reneg-answer error',e)}
       }
     }
   }catch(e){console.warn('signaling message error',e);pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
@@ -872,11 +928,11 @@ async function startCall(){
     // Resolve to the transceiver that owns it so sender.sender is correct.
     const resolvedTr=tr&&tr.mid===undefined&&!tr.sender?allTransceivers.find(t=>t.sender===tr)||tr:tr;
     const sender=resolvedTr?resolvedTr.sender:null;
-    logCallEvent('Diag: startCall transceivers='+allTransceivers.length+' audioTr='+(tr?'ok:mid='+tr.mid+' dir='+tr.direction:'null')+' sender='+(sender?'ok':'null'));
+    
     if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
     // Configure Opus for maximum quality — 510 kbps (spec limit), 48 kHz, FEC
-    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=256000;if(p.codecs)p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=120;c.ptime=20;if(c.parameters){c.parameters.maxaveragebitrate=256000;c.parameters.maxplaybackrate=48000;c.parameters.useinbandfec=1;c.parameters.usedtx=0;c.parameters.cbr=1;c.parameters.stereo=1;c.parameters['sprop-stereo']=1;c.parameters.spropmaxcapturerate=48000}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
+    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=96000;if(p.codecs)p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=120;c.ptime=20;if(c.parameters){c.parameters.maxaveragebitrate=96000;c.parameters.maxplaybackrate=48000;c.parameters.useinbandfec=1;c.parameters.usedtx=1;c.parameters.cbr=0;c.parameters.stereo=1;c.parameters['sprop-stereo']=1;c.parameters.spropmaxcapturerate=48000}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
     // counter callGen is incremented by every endCall call. If it changed, bail.
@@ -936,11 +992,8 @@ let renegotiating=0;
 // we resolve it by role. The joiner defers (answers the host's offer instead of
 // insisting on its own); the host wins. role is deterministic across peers.
 let renegPending=false;
-// A screen share has two negotiations: video immediately, then audio once the
-// clean capture route is ready.  Do not create the latter offer while the
-// former is still awaiting its answer.  Chrome rejects createOffer in
-// have-local-offer, which made the audio sender local-only and resulted in a
-// silent share.
+// Do not createOffer while a previous renegotiation is still have-local-offer;
+// Chrome rejects that and can leave a new sender local-only (silent share).
 function waitForStablePeer(target=pc,timeout=10000){
   if(!target||target.signalingState==='closed')return Promise.resolve(false);
   if(target.signalingState==='stable')return Promise.resolve(true);
@@ -955,7 +1008,7 @@ function waitForStablePeer(target=pc,timeout=10000){
   });
 }
 async function renegotiate(){
-  if(!pc||(!signaling&&chat?.readyState!=='open'))return;
+  if(!pc||(!signaling&&chat?.readyState!=='open'))return false;
   const target=pc;
   if(!await waitForStablePeer(target)){
     console.warn('renegotiate skipped: peer did not return to stable');
@@ -974,84 +1027,123 @@ async function renegotiate(){
     if(signaling)signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:pc.localDescription.sdp}}));
     else if(chat?.readyState==='open')send({t:'reneg-offer',sdp:pc.localDescription.sdp});
     else{renegPending=false;return false}
+    // Keep renegPending true until the remote answer arrives (or this gen is
+    // superseded) so glare handling can still detect an in-flight offer.
     return true;
-  }catch(e){console.warn('renegotiate error',e);return false}
-  finally{if(myId===renegotiating)renegPending=false}
+  }catch(e){console.warn('renegotiate error',e);renegPending=false;return false}
 }
+function clearRenegPending(){renegPending=false}
 // Capture desktop sound for screen share while keeping Pair voice out of that
-// mix. Windows uses process-loopback that excludes Pair's process tree; Linux
-// uses a dedicated PipeWire sink. The voice call stays on its own WebRTC track.
+// mix. Windows uses process-loopback exclusion only; older Windows without that
+// API shares video only rather than falling back to endpoint loopback.
+// Prefer AudioWorklet over ScriptProcessor.
+async function loadShareAudioWorklet(ctx){
+  const candidates=[];
+  try{candidates.push(new URL('share-audio-worklet.js',window.location.href).href)}catch{}
+  candidates.push('share-audio-worklet.js');
+  for(const url of candidates){
+    try{await ctx.audioWorklet.addModule(url);return true}catch{}
+    try{
+      const res=await fetch(url,{cache:'force-cache'});
+      if(!res.ok)continue;
+      const text=await res.text();
+      const blobUrl=URL.createObjectURL(new Blob([text],{type:'application/javascript'}));
+      try{await ctx.audioWorklet.addModule(blobUrl);return true}
+      finally{try{URL.revokeObjectURL(blobUrl)}catch{}}
+    }catch{}
+  }
+  return false;
+}
+
 async function setupNativeScreenCapture(){
   if(!window.pairCapture){
     console.warn('[AUDIO] isolated desktop capture unavailable; refusing full-mix loopback');
+    logCallEvent('Computer sound unavailable on this system');
     return null;
   }
 
-  let ctx,dest,addonData=false,aecTimedOut=false;
+  let ctx,dest,addonData=false,captureTimedOut=false,workletNode;
   try{
     ctx=new AudioContext({sampleRate:48000});
     if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
     dest=ctx.createMediaStreamDestination();dest.channelCount=2;
-    // Interleaved stereo ring: [L,R,L,R,...]
-    const RS=96000;const cleanBuf=new Float32Array(RS*2);
-    let wp=0,avail=0;
-    const unsubClean=window.pairCapture.onCleanAudio((buf,frames)=>{
-      if(aecTimedOut)return;
+    const feed=(arr,frames)=>{
+      if(captureTimedOut)return;
       addonData=true;
-      const arr=new Float32Array(buf);
-      // Prefer interleaved stereo from the native addon. Older builds emit mono
-      // (one float per frame); lift that to L/R so the share track stays stereo.
       const stereo=arr.length>=frames*2;
-      for(let i=0;i<frames&&avail<RS;i++){
-        if(stereo){
-          cleanBuf[wp*2]=arr[i*2];
-          cleanBuf[wp*2+1]=arr[i*2+1];
-        }else{
-          const s=arr[i]||0;
-          cleanBuf[wp*2]=s;
-          cleanBuf[wp*2+1]=s;
-        }
-        wp=(wp+1)%RS;
-        avail++;
+      const interleaved=new Float32Array(frames*2);
+      for(let i=0;i<frames;i++){
+        if(stereo){interleaved[i*2]=arr[i*2];interleaved[i*2+1]=arr[i*2+1];}
+        else{const v=arr[i]||0;interleaved[i*2]=v;interleaved[i*2+1]=v;}
       }
+      if(workletNode)workletNode.port.postMessage({type:'pcm',samples:interleaved},[interleaved.buffer]);
+      else if(dest._pairPush)dest._pairPush(interleaved,frames);
+    };
+    const RS=96000;const cleanBuf=new Float32Array(RS*2);let wp=0,avail=0;
+    dest._pairPush=(interleaved,frames)=>{
+      for(let i=0;i<frames&&avail<RS;i++){
+        cleanBuf[wp*2]=interleaved[i*2];
+        cleanBuf[wp*2+1]=interleaved[i*2+1];
+        wp=(wp+1)%RS;avail++;
+      }
+    };
+    const unsubClean=window.pairCapture.onCleanAudio((buf,frames)=>feed(new Float32Array(buf),frames));
+    const unsubError=window.pairCapture.onError(msg=>{
+      if(window.pairHelpers)window.pairHelpers.debugLog('capture error',msg);
     });
-    const unsubError=window.pairCapture.onError(msg=>console.warn('[AUDIO] capture error:',msg));
     window.pairCapture.start();
-    // Attach as soon as the first clean packets arrive so share audio starts
-    // with the video instead of waiting on a fixed multi-second delay.
+
+    let usedWorklet=false;
+    if(await loadShareAudioWorklet(ctx)){
+      workletNode=new AudioWorkletNode(ctx,'pair-share-audio',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
+      workletNode.connect(dest);
+      usedWorklet=true;
+    }else{
+      if(window.pairHelpers)window.pairHelpers.debugLog('worklet unavailable; using script processor');
+      const op=ctx.createScriptProcessor(1024,0,2);
+      op.onaudioprocess=e=>{
+        const L=e.outputBuffer.getChannelData(0);
+        const R=e.outputBuffer.getChannelData(1);
+        if(avail<L.length){L.fill(0);R.fill(0);return}
+        const rp=(wp-avail+RS)%RS;
+        for(let i=0;i<L.length;i++){
+          const idx=((rp+i)%RS)*2;
+          L[i]=cleanBuf[idx];R[i]=cleanBuf[idx+1];
+        }
+        avail-=L.length;
+      };
+      op.connect(dest);
+      dest._pairScript=op;
+    }
+
     const deadline=Date.now()+2500;
     while(!addonData&&Date.now()<deadline)await new Promise(r=>setTimeout(r,40));
     if(!addonData){
       console.warn('[AUDIO] isolated desktop capture produced no samples; sharing video only');
-      aecTimedOut=true;
+      logCallEvent('Computer sound unavailable — sharing video only');
+      captureTimedOut=true;
       if(unsubClean)unsubClean();if(unsubError)unsubError();
       window.pairCapture.stop();
+      try{if(workletNode)workletNode.disconnect()}catch{}
+      try{if(dest._pairScript)dest._pairScript.disconnect()}catch{}
       if(ctx)try{ctx.close()}catch{}
       return null;
     }
-    const B=1024;
-    const op=ctx.createScriptProcessor(B,0,2);
-    op.onaudioprocess=e=>{
-      const L=e.outputBuffer.getChannelData(0);
-      const R=e.outputBuffer.getChannelData(1);
-      if(avail<L.length){L.fill(0);R.fill(0);return}
-      const rp=(wp-avail+RS)%RS;
-      for(let i=0;i<L.length;i++){
-        const idx=((rp+i)%RS)*2;
-        L[i]=cleanBuf[idx];
-        R[i]=cleanBuf[idx+1];
-      }
-      avail-=L.length;
-    };
-    op.connect(dest);
     screenOutCtx=ctx;screenOutDest=dest;
     screenNative=true;
     const t=dest.stream.getAudioTracks()[0];
     try{if(t)t.contentHint='music'}catch{}
-    screenCaptureCleanup=()=>{if(unsubClean)unsubClean();if(unsubError)unsubError();window.pairCapture.stop();try{op.disconnect()}catch{}};
+    screenCaptureCleanup=()=>{
+      if(unsubClean)unsubClean();if(unsubError)unsubError();
+      window.pairCapture.stop();
+      try{if(workletNode)workletNode.disconnect()}catch{}
+      try{if(dest._pairScript)dest._pairScript.disconnect()}catch{}
+    };
+    if(window.pairHelpers)window.pairHelpers.debugLog('share audio ready','process',usedWorklet?'worklet':'script');
     return t||null;
   }catch(e){
     console.warn('[AUDIO] isolated desktop capture failed:',e?.message||e);
+    logCallEvent('Computer sound failed to start');
     if(ctx)try{ctx.close()}catch{}
     try{window.pairCapture.stop()}catch{}
     return null;
@@ -1063,19 +1155,45 @@ function cleanupNativeScreenCapture(){
   if(screenOutDest){screenOutDest=null}
   if(screenOutCtx){try{screenOutCtx.close()}catch{};screenOutCtx=null}
 }
-async function linuxShareAudioTrack(){
-  const share=await window.pairEnv?.startLinuxShareAudio?.();if(!share)return null;
+
+async function linuxShareAudioTrack(expectedGen){
+  const aborted=()=>expectedGen!=null&&expectedGen!==screenGen;
+  let sinkStarted=false;
+  const discardSink=()=>{if(!sinkStarted)return;sinkStarted=false;try{window.pairEnv?.stopLinuxShareAudio?.()}catch{}};
+  // Electron can redact input labels until getUserMedia has been granted once.
+  // Probe and stop before creating the PipeWire share sink so enumerateDevices
+  // can see “Pair Share Audio” on a fresh profile or share-without-call.
+  try{
+    const permissionProbe=await navigator.mediaDevices.getUserMedia({audio:true});
+    permissionProbe.getTracks().forEach(t=>t.stop());
+  }catch(e){console.warn('[AUDIO] unable to reveal PipeWire inputs:',e?.message||e)}
+  if(aborted())return null;
+  const share=await window.pairEnv?.startLinuxShareAudio?.();
+  if(!share)return null;
+  sinkStarted=true;
+  if(aborted()){discardSink();return null}
   const label=typeof share==='string'?share:share.label||'Pair Share Audio';
   // PipeWire may expose this as “Monitor of Pair Share Audio”, so match both
   // the friendly label and the stable Pair/Share words rather than one exact
   // desktop-specific spelling.
-  // Electron can redact input labels until getUserMedia has been granted once.
-  // Open and immediately stop the default input only to establish that grant;
-  // it is never added to the share. Without this, the Pair Share monitor is
-  // present but impossible to select on a first share or a fresh profile.
-  try{const permissionProbe=await navigator.mediaDevices.getUserMedia({audio:true});permissionProbe.getTracks().forEach(t=>t.stop())}catch(e){console.warn('[AUDIO] unable to reveal PipeWire inputs:',e?.message||e)}
-  let inputs=0,lastError='';for(let attempt=0;attempt<80;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();inputs=devices.filter(d=>d.kind==='audioinput').length;const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));if(device){try{const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},channelCount:{ideal:2},sampleRate:{ideal:48000},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const track=stream.getAudioTracks()[0]||null;if(track){track.enabled=true;return track}}catch(e){lastError=String(e?.name||e?.message||'capture rejected');console.warn('[AUDIO] Pair Share Audio device failed:',e)}}await new Promise(resolve=>setTimeout(resolve,150))}
-  screenAudioDebug=' · monitor unavailable ('+inputs+' inputs'+(lastError?', '+lastError:'')+')';console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');window.pairEnv?.stopLinuxShareAudio?.();return null;
+  for(let attempt=0;attempt<24;attempt++){
+    if(aborted()){discardSink();return null}
+    const devices=await navigator.mediaDevices.enumerateDevices();
+    if(aborted()){discardSink();return null}
+    const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));
+    if(device){
+      try{
+        const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+        if(aborted()){stream.getTracks().forEach(t=>t.stop());discardSink();return null}
+        const track=stream.getAudioTracks()[0]||null;
+        if(track){track.enabled=true;return track}
+      }catch(e){console.warn('[AUDIO] Pair Share Audio device failed:',e)}
+    }
+    await new Promise(resolve=>setTimeout(resolve,150));
+  }
+  console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');
+  discardSink();
+  return null;
 }
 function startScreenStats(sender){
   if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;
@@ -1121,84 +1239,103 @@ async function startScreenShare(){
     // Desktop capture defaults to text/detail on some Chromium builds. Motion
     // tells the encoder to preserve changing game/action content instead.
     try{track.contentHint=screenContentHint}catch{}
-    // Add the video track
+    // Add the video track, prepare computer sound (if enabled), then renegotiate
+    // once so share audio and video land together instead of racing two offers.
     let sender;
     try{sender=pc.addTrack(track,stream);screenSenders=[sender]}catch{stream.getTracks().forEach(t=>t.stop());return}
-    // Audio attachment can take a moment while native capture warms up. Start
-    // video first, then renegotiate again only if a clean audio track is ready.
-    const attachShareAudio=async()=>{
-      if(!screenAudioOn)return;
+    let audioReady=false;
+    if(screenAudioOn){
+      screenStatus.textContent='Sharing… preparing sound';
       let audioTrack=null;
       if(window.pairEnv?.platform==='linux'){
-        audioTrack=await linuxShareAudioTrack();
+        audioTrack=await linuxShareAudioTrack(gen);
       }else{
-        // Drop any Chromium loopback that may have been granted unexpectedly.
         try{stream.getAudioTracks().forEach(t=>{try{t.stop()}catch{};try{stream.removeTrack(t)}catch{}})}catch{}
         try{audioTrack=await setupNativeScreenCapture()}catch(e){
           console.warn('[AUDIO] clean capture failed:',e?.message||e);
           audioTrack=null;
         }
       }
-      if(!audioTrack){
-        console.warn('[AUDIO] computer sound unavailable without echo risk; sharing video only');
-        if(gen===screenGen&&screenActive){
-          screenAudioDebug=' · sound unavailable';screenStatus.textContent=(screenStatus.textContent||'Sharing')+screenAudioDebug;
-          logCallEvent('Computer sound unavailable — sharing video only');
-        }
-        return;
-      }
       const discardShareAudio=()=>{
         try{audioTrack?.stop()}catch{}
-        try{stream.removeTrack(audioTrack)}catch{}
+        try{if(audioTrack)stream.removeTrack(audioTrack)}catch{}
         // A canceled/failed Linux attach must restore the desktop default sink
         // immediately; otherwise a late async result can leave audio routed to
         // an orphaned Pair Share sink after the user has already stopped.
         if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
         else cleanupNativeScreenCapture();
       };
-      if(gen!==screenGen||!screenActive||!pc){discardShareAudio();return}
-      try{
-        audioTrack.enabled=true;
-        try{audioTrack.contentHint='music'}catch{}
-        try{stream.addTrack(audioTrack)}catch{}
-        const audioSender=pc.addTrack(audioTrack,stream);
-        screenSenders.push(audioSender);
-        try{
-          const p=audioSender.getParameters();
-          if(p){
-            if(!p.encodings||!p.encodings.length)p.encodings=[{}];
-            // Prefer higher bitrate stereo for game/music desktop sound; voice
-            // remains on the separate call track at its own Opus settings.
-            p.encodings[0].maxBitrate=192000;
-            await audioSender.setParameters(p);
-          }
-        }catch{}
-        if(!await renegotiate())throw new Error('audio negotiation did not start');
-        if(gen!==screenGen||!screenActive||!pc)throw new Error('screen share ended during audio negotiation');
-        logCallEvent('Computer sound sharing started');screenAudioDebug=' · sound live';screenStatus.textContent='Sharing'+screenAudioDebug;
-      }catch(e){
-        console.warn('[AUDIO] addTrack failed:',e);if(gen===screenGen&&screenActive){screenAudioDebug=' · sound failed';screenStatus.textContent='Sharing'+screenAudioDebug}
-        const sender=screenSenders.find(s=>s.track===audioTrack);
-        if(sender){try{pc?.removeTrack(sender)}catch{};screenSenders=screenSenders.filter(s=>s!==sender)}
+      if(gen!==screenGen||!pc){
         discardShareAudio();
+        screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];
+        stream.getTracks().forEach(t=>t.stop());
+        return;
       }
-    };
+      if(audioTrack){
+        try{
+          audioTrack.enabled=true;
+          try{audioTrack.contentHint='music'}catch{}
+          try{stream.addTrack(audioTrack)}catch{}
+          const audioSender=pc.addTrack(audioTrack,stream);
+          screenSenders.push(audioSender);
+          try{
+            const p=audioSender.getParameters();
+            if(p){
+              if(!p.encodings||!p.encodings.length)p.encodings=[{}];
+              p.encodings[0].maxBitrate=192000;
+              await audioSender.setParameters(p);
+            }
+          }catch{}
+          audioReady=true;
+        }catch(e){
+          console.warn('[AUDIO] addTrack failed:',e);
+          const senderGone=screenSenders.find(s=>s.track===audioTrack);
+          if(senderGone){try{pc?.removeTrack(senderGone)}catch{};screenSenders=screenSenders.filter(s=>s!==senderGone)}
+          discardShareAudio();
+        }
+      }else{
+        console.warn('[AUDIO] computer sound unavailable without echo risk; sharing video only');
+        logCallEvent('Computer sound unavailable — sharing video only');
+      }
+    }
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const names=screenCodec==='auto'?['AV1','H265','H264','VP9','VP8']:[screenCodec,'H264','VP9','VP8'];const cs=names.map(name=>caps.codecs.find(c=>c.mimeType===`video/${name}`)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
-    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const maxBitrate=Math.round(Math.max(2,Math.min(120,screenBitrateMbps))*1000000);p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=fps;p.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(p);console.log('[VIDEO] bitrate='+(maxBitrate/1e6)+'Mbps '+fps+'fps '+p.degradationPreference)}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
-    if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());return}
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const names=window.pairHelpers?window.pairHelpers.preferredVideoCodecs(screenCodec):(screenCodec==='auto'?['H264','VP9','VP8','H265','AV1']:[screenCodec,'H264','VP9','VP8']);const cs=names.map(name=>caps.codecs.find(c=>c.mimeType===`video/${name}`)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
+    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const preset=screenPreset.value;const maxBitrate=Math.round(Math.max(2,Math.min(120,screenBitrateMbps))*1000000);p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=SCREEN_PRESETS[preset]?.frameRate?.max||30;p.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(p);if(window.pairHelpers)window.pairHelpers.debugLog('video bitrate',maxBitrate,p.degradationPreference)}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
+    if(gen!==screenGen||!pc){
+      screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];
+      stream.getTracks().forEach(t=>t.stop());
+      if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+      cleanupNativeScreenCapture();
+      return;
+    }
     screenActive=true;screenAudioDebug=screenAudioOn?' · starting sound capture':' · sound off';
     screenPreview.muted=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
-    screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';screenStatus.textContent='Sharing';
+    screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';
     startScreenStats(sender);
     try{send({t:'screen-start'})}catch{};
-    logCallEvent('You started screen sharing');
     track.onended=()=>{if(screenActive)stopScreenShare()};
-    await renegotiate();if(gen!==screenGen)return;void attachShareAudio();
-  }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
+    // Wait until signaling is stable inside renegotiate before createOffer.
+    // Only claim computer-sound success when that renegotiation actually starts.
+    const renegOk=await renegotiate();
+    if(gen!==screenGen)return;
+    const soundLive=audioReady&&renegOk;
+    screenStatus.textContent=soundLive?'Sharing':'Sharing · video only';
+    if(audioReady&&!renegOk){
+      console.warn('[AUDIO] share audio renegotiation did not start; sharing video only');
+      logCallEvent('You started screen sharing');
+      logCallEvent('Computer sound negotiation failed — sharing video only');
+    }else{
+      logCallEvent(soundLive?'You started screen sharing with computer sound':'You started screen sharing');
+    }
+  }catch(e){
+    screenStatus.textContent='Share failed';
+    if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+    cleanupNativeScreenCapture();
+    if(e.name!=='NotAllowedError')logCallEvent('Screen share error');
+  }
   }finally{if(gen===screenGen)screenStarting=false}
 }
 async function stopScreenShare(fromEnd){

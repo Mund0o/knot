@@ -330,7 +330,7 @@ function createWindow() {
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url);
-      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') shell.openExternal(parsed.href);
+      if (parsed.protocol === 'https:') shell.openExternal(parsed.href);
     } catch {}
     return { action: 'deny' };
   });
@@ -396,14 +396,11 @@ function loadNativeCapture(win) {
   let lastErr = '';
   for (const addonPath of paths) {
     try {
-      console.log('Trying addon path:', addonPath);
       const addon = require(addonPath);
       nativeCapture = addon;
-      console.log('Native capture addon loaded from:', addonPath);
       return addon;
     } catch (e) {
       lastErr = e.message;
-      console.warn('Addon path failed:', addonPath, '-', lastErr);
     }
   }
   const errMsg = 'Addon not built: ' + lastErr;
@@ -415,25 +412,20 @@ function startNativeCapture(win) {
   const addon = loadNativeCapture(win);
   if (!addon) { return; }
   if (addon._running) return;
-  console.log('native capture: starting...');
-  let cbCount=0;
   try {
     addon.start(
       (buf, frames) => {
-        cbCount++;
-        if (cbCount%50===0) console.log('native capture: data cb #'+cbCount+' frames='+frames);
         if (win && !win.isDestroyed()) {
-          try { win.send('pair:cleanAudio', buf, frames); } catch(e) { console.warn('send cleanAudio err:', e.message); }
+          try { win.send('pair:cleanAudio', buf, frames); } catch {}
         }
       },
       (errMsg) => {
-        console.warn('native capture err:', errMsg);
+        if (process.env.PAIR_DEBUG === '1') console.warn('native capture err:', errMsg);
         if (win && !win.isDestroyed()) win.send('pair:captureError', errMsg);
       }
     );
     addon._running = true;
     const fmt = addon.getFormat();
-    console.log('native capture: started, format=',JSON.stringify(fmt));
     if (win && !win.isDestroyed()) win.send('pair:captureFormat', fmt);
   } catch(e) {
     console.warn('native capture start failed:', e.message);
@@ -449,22 +441,18 @@ function stopNativeCapture() {
 }
 ipcMain.on('pair:startCapture', (event) => {
   if (!isPairRenderer(event)) return;
-  console.log('native capture: IPC startCapture');
   startNativeCapture(event.sender);
 });
 ipcMain.on('pair:stopCapture', event => {
   if (!isPairRenderer(event)) return;
-  console.log('native capture: IPC stopCapture');
   stopNativeCapture();
 });
-let refCount=0;
 ipcMain.on('pair:captureRef', (event, buf) => {
   if (!isPairRenderer(event) || !buf || buf.byteLength > MAX_IPC_CHUNK) return;
-  refCount++;
-  if(refCount%50===0)console.log('native capture: ref #'+refCount+' bytes='+(buf?.byteLength||buf?.length));
   const addon = nativeCapture;
-  if (!addon || !addon._running) { if(refCount===1)console.warn('native capture: ref sent but addon not running'); return; }
-  // IPC delivers ArrayBuffer; addon expects a Node.js Buffer
+  if (!addon || !addon._running) return;
   const b = Buffer.from(buf);
-  try { addon.pushReference(b); } catch (e) { console.warn('pushReference error:', e); }
+  try { addon.pushReference(b); } catch (e) {
+    if (process.env.PAIR_DEBUG === '1') console.warn('pushReference error:', e);
+  }
 });

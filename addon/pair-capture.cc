@@ -5,18 +5,18 @@
 #include <audioclient.h>
 #include <audioclientactivationparams.h>
 #include <propvarutil.h>
-#include <vector>
-#include <mutex>
 #include <thread>
 #include <atomic>
-#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <string>
+#include <algorithm>
 
-// Windows process loopback lets us capture the system mix while excluding
-// Pair's process tree. This is the same class of capture Discord uses to keep
-// its own voice playback out of a stream. It needs Windows 10 build 20348+.
+// Windows process loopback captures the system mix while excluding Pair's
+// process tree, so call playback is not shared with the screen. This needs
+// Windows 10 build 20348+. Older Windows is not given an endpoint-loopback
+// fallback: that mix can still contain Pair playback (call voice and remote
+// screen audio), so the app shares video only when process exclusion fails.
 struct ActivationState {
   HANDLE event=nullptr;
   HRESULT result=E_FAIL;
@@ -51,16 +51,7 @@ public:
 
 class Capture {
 public:
-  std::vector<float> refRing;
-  std::mutex refMutex;
-  uint64_t refWritten=0;
-  float estimatedGain=0.5f;
-  int bestDelay=2048;
   bool runningFlag=false;
-  static constexpr int RING_SIZE=96000;
-
-  IMMDeviceEnumerator* enumerator=nullptr;
-  IMMDevice* device=nullptr;
   IAudioClient* audioClient=nullptr;
   IAudioCaptureClient* captureClient=nullptr;
   WAVEFORMATEX* mixFormat=nullptr;
@@ -70,7 +61,7 @@ public:
   std::thread captureThread;
   Napi::ThreadSafeFunction dataCb,errCb;
 
-  Capture():refRing(RING_SIZE,0.0f){}
+  Capture()=default;
   ~Capture(){stop();cleanup();}
 
   void start(Napi::Function dataCbFn,Napi::Function errCbFn){
@@ -97,13 +88,8 @@ public:
     if(errCb){errCb.Release();errCb=nullptr;}
   }
 
-  void pushRef(float* data,size_t frames){
-    std::lock_guard<std::mutex> lk(refMutex);
-    for(size_t i=0;i<frames;i++){
-      refRing[(refWritten+i)%RING_SIZE]=data[i];
-    }
-    refWritten+=frames;
-  }
+  // Kept for preload ABI compatibility; process exclusion needs no voice reference.
+  void pushRef(float*,size_t){}
 
   Napi::Object getFormat(Napi::Env env){
     auto o=Napi::Object::New(env);
@@ -112,18 +98,23 @@ public:
     o.Set("channels",Napi::Number::New(env,(double)mixFormat->nChannels));
     o.Set("bitsPerSample",Napi::Number::New(env,(double)mixFormat->wBitsPerSample));
     o.Set("sampleType",mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT?Napi::String::New(env,"float"):Napi::String::New(env,"pcm"));
+    o.Set("mode",Napi::String::New(env,"process"));
+    o.Set("available",Napi::Boolean::New(env,true));
     return o;
   }
 
 private:
-  HRESULT initWasapi(){
-    HRESULT hr=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-    if(SUCCEEDED(hr))comInitialized=true;
-    else if(hr!=RPC_E_CHANGED_MODE)return hr;
+  HRESULT finishClientInit(){
+    HRESULT hr=audioClient->GetBufferSize(&bufFrames);
+    if(FAILED(hr))return hr;
+    captureEvent=CreateEvent(nullptr,FALSE,FALSE,nullptr);
+    if(!captureEvent)return E_FAIL;
+    hr=audioClient->SetEventHandle(captureEvent);
+    if(FAILED(hr))return hr;
+    return audioClient->GetService(__uuidof(IAudioCaptureClient),(void**)&captureClient);
+  }
 
-    // Capture every Windows render stream except Pair and its child processes.
-    // Unlike endpoint loopback, this does not need an audio-device selection
-    // and therefore cannot feed the remote caller's Pair audio back to them.
+  HRESULT initProcessLoopback(){
     ActivationState state;
     state.event=CreateEvent(nullptr,FALSE,FALSE,nullptr);
     if(!state.event)return HRESULT_FROM_WIN32(GetLastError());
@@ -134,13 +125,10 @@ private:
     PROPVARIANT prop={};
     prop.vt=VT_BLOB;prop.blob.cbSize=sizeof(params);prop.blob.pBlobData=(BYTE*)&params;
     auto* handler=new ActivationHandler(&state);
-    // Resolve dynamically: older SDK link libraries do not always export this
-    // newer API even though supported Windows releases do. That lets one addon
-    // run on both current and older Windows without a loader failure.
     HMODULE audioApi=LoadLibraryW(L"mmdevapi.dll");
     auto activate=audioApi?reinterpret_cast<decltype(&ActivateAudioInterfaceAsync)>(GetProcAddress(audioApi,"ActivateAudioInterfaceAsync")):nullptr;
     IActivateAudioInterfaceAsyncOperation* operation=nullptr;
-    hr=activate?activate(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,__uuidof(IAudioClient),&prop,handler,&operation):HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+    HRESULT hr=activate?activate(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,__uuidof(IAudioClient),&prop,handler,&operation):HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
     if(FAILED(hr)){if(audioApi)FreeLibrary(audioApi);handler->Release();CloseHandle(state.event);return hr;}
     WaitForSingleObject(state.event,INFINITE);
     if(operation)operation->Release();
@@ -148,9 +136,6 @@ private:
     handler->Release();CloseHandle(state.event);
     if(FAILED(state.result))return state.result;
     audioClient=state.client;
-
-    // Request a predictable PCM format. Windows converts the process mix for
-    // us, which keeps the Node bridge's real-time samples simple and stable.
     auto* requested=(WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
     if(!requested)return E_OUTOFMEMORY;
     ZeroMemory(requested,sizeof(WAVEFORMATEX));
@@ -159,18 +144,19 @@ private:
     mixFormat=requested;
     hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,0,0,mixFormat,nullptr);
     if(FAILED(hr))return hr;
-    hr=audioClient->GetBufferSize(&bufFrames);
-    if(FAILED(hr))return hr;
-    captureEvent=CreateEvent(nullptr,FALSE,FALSE,nullptr);
-    if(!captureEvent)return E_FAIL;
-    hr=audioClient->SetEventHandle(captureEvent);
-    if(FAILED(hr))return hr;
-    hr=audioClient->GetService(__uuidof(IAudioCaptureClient),(void**)&captureClient);
-    return hr;
+    return finishClientInit();
   }
 
-  int diagCounter=0;
-  int totalProcessed=0;
+  HRESULT initWasapi(){
+    HRESULT hr=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    if(SUCCEEDED(hr))comInitialized=true;
+    else if(hr!=RPC_E_CHANGED_MODE)return hr;
+
+    // Process exclusion only. Endpoint loopback is intentionally unavailable:
+    // it cannot guarantee Pair playback stays out of the share mix.
+    return initProcessLoopback();
+  }
+
   void loop(){
     HRESULT hr=audioClient->Start();
     if(FAILED(hr)){emitErr("start failed");return;}
@@ -190,76 +176,31 @@ private:
     audioClient->Stop();
   }
 
-  void updateDelay(float* captured,int frames,int sr){
-    if(refWritten<(uint64_t)(sr*0.05))return;
-    static int counter=0;
-    if(++counter%30!=0)return;
-
-    int maxD=std::min((int)(sr*0.15),RING_SIZE-frames-256);
-    int minD=(int)(sr*0.01);
-    if(minD<256)minD=256;
-    if(maxD<=minD)return;
-
-    float bestCorr=0;int bestD=bestDelay;
-    int n=std::min(frames,256);
-    for(int d=minD;d<maxD;d+=4){
-      float c=0,nc=0,nr=0;
-      for(int i=0;i<n;i++){
-        float cap=captured[i];
-        float ref=refRing[(refWritten-d+i)%RING_SIZE];
-        c+=cap*ref;nc+=cap*cap;nr+=ref*ref;
-      }
-      float denom=sqrtf(nc*nr);
-      if(denom>1e-10f&&c/denom>bestCorr){bestCorr=c/denom;bestD=d;}
-    }
-    if(bestCorr>0.05f)bestDelay=(bestDelay*3+bestD)/4;
-  }
-
-  void diag(){
-    diagCounter++;
-    if(diagCounter%100!=0)return;
-    char m[128];
-    {
-      std::lock_guard<std::mutex> lk(refMutex);
-      sprintf(m,"[AEC] diag: delay=%d gain=%.4f refWritten=%llu total=%d",bestDelay,estimatedGain,(unsigned long long)refWritten,totalProcessed);
-    }
-    errCb.NonBlockingCall([m](Napi::Env e,Napi::Function cb){cb.Call({Napi::String::New(e,m)});});
-  }
-
   void process(BYTE* data,UINT32 frames){
-    totalProcessed+=frames;
     const int ch=mixFormat&&mixFormat->nChannels>0?mixFormat->nChannels:2;
     const int outCh=2;
-    // Process-loopback already excludes Pair's process tree, so call playback is
-    // not in this mix. Keep a full stereo pass-through for music/game audio
-    // instead of collapsing to mono or running a soft canceller that can
-    // smear desktop sound.
     float* buf=(float*)calloc((size_t)frames*(size_t)outCh,sizeof(float));
     if(!buf)return;
-    if(mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT){
-      float* f=(float*)data;
-      for(UINT32 i=0;i<frames;i++){
-        float L=f[i*ch+0];
-        float R=ch>1?f[i*ch+1]:L;
-        buf[i*outCh+0]=L;
-        buf[i*outCh+1]=R;
+
+    auto sampleAt=[&](UINT32 i,int c)->float{
+      if(mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT){
+        float* f=(float*)data;
+        return f[i*ch+std::min(c,ch-1)];
       }
-    }else if(mixFormat->wBitsPerSample==16){
-      INT16* ps=(INT16*)data;
-      for(UINT32 i=0;i<frames;i++){
-        float L=ps[i*ch+0]/32768.0f;
-        float R=ch>1?ps[i*ch+1]/32768.0f:L;
-        buf[i*outCh+0]=L;
-        buf[i*outCh+1]=R;
+      if(mixFormat->wBitsPerSample==16){
+        INT16* ps=(INT16*)data;
+        return ps[i*ch+std::min(c,ch-1)]/32768.0f;
       }
-    }else{
       INT32* pl=(INT32*)data;
-      for(UINT32 i=0;i<frames;i++){
-        float L=pl[i*ch+0]/2147483648.0f;
-        float R=ch>1?pl[i*ch+1]/2147483648.0f:L;
-        buf[i*outCh+0]=L;
-        buf[i*outCh+1]=R;
-      }
+      return pl[i*ch+std::min(c,ch-1)]/2147483648.0f;
+    };
+
+    // Process-loopback exclusion already omits Pair's process tree.
+    for(UINT32 i=0;i<frames;i++){
+      float L=sampleAt(i,0);
+      float R=ch>1?sampleAt(i,1):L;
+      buf[i*outCh+0]=L;
+      buf[i*outCh+1]=R;
     }
 
     UINT32 fCopy=frames;
@@ -284,9 +225,8 @@ private:
     if(captureClient)captureClient->Release();
     if(audioClient)audioClient->Release();
     if(mixFormat)CoTaskMemFree(mixFormat);
-    if(device)device->Release();
-    if(enumerator)enumerator->Release();
     if(comInitialized)CoUninitialize();
+    captureEvent=nullptr;captureClient=nullptr;audioClient=nullptr;mixFormat=nullptr;comInitialized=false;
   }
 };
 
