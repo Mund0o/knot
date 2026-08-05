@@ -276,8 +276,9 @@ private:
         buf[i*outCh+1]=R;
       }
     }else{
-      // Endpoint mix includes Pair playback. Convert to mono, subtract the
-      // remote-voice reference when present, then emit stereo.
+      // Endpoint mix includes Pair playback. Prefer cancelled output once a
+      // voice reference exists; before that, pass desktop sound through so
+      // games/YouTube still work when nobody is yet heard on the call.
       std::vector<float> mono(frames);
       for(UINT32 i=0;i<frames;i++){
         float s=0;
@@ -297,16 +298,24 @@ private:
             float clean=c-estimatedGain*r;
             if(fabsf(r)>0.001f){
               float num=c*r,den=r*r+1e-10f;
-              estimatedGain=0.998f*estimatedGain+0.002f*num/den;
+              estimatedGain=0.995f*estimatedGain+0.005f*num/den;
               if(estimatedGain<0)estimatedGain=0;
+              if(estimatedGain>4)estimatedGain=4;
             }
+            // Soft clip to keep residual cancellation from blasting the mix.
+            if(clean>1)clean=1;else if(clean<-1)clean=-1;
             buf[i*outCh+0]=clean;
             buf[i*outCh+1]=clean;
           }
+        }else if(refWritten==0){
+          for(UINT32 i=0;i<frames;i++){
+            float L=sampleAt(i,0);
+            float R=ch>1?sampleAt(i,1):L;
+            buf[i*outCh+0]=L;
+            buf[i*outCh+1]=R;
+          }
         }else{
           for(UINT32 i=0;i<frames;i++){
-            // Hold silence until a voice reference arrives so call audio cannot
-            // leak into the share before cancellation engages.
             buf[i*outCh+0]=0;
             buf[i*outCh+1]=0;
           }

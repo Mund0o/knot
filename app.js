@@ -1005,10 +1005,32 @@ function clearRenegPending(){renegPending=false}
 // loopback plus a voice reference. Prefer AudioWorklet over ScriptProcessor.
 function remoteVoiceReferenceStream(){
   try{
-    const tracks=(remoteAudio.srcObject&&remoteAudio.srcObject.getAudioTracks&&remoteAudio.srcObject.getAudioTracks())||[];
-    const live=tracks.filter(t=>t.readyState==='live');
-    return live.length?new MediaStream(live):null;
+    const tracks=[];
+    for(const el of [remoteAudio]){
+      for(const t of el.srcObject?.getAudioTracks?.()||[]){
+        if(t.readyState==='live'&&!tracks.includes(t))tracks.push(t);
+      }
+    }
+    return tracks.length?new MediaStream(tracks):null;
   }catch{return null}
+}
+
+async function loadShareAudioWorklet(ctx){
+  const candidates=[];
+  try{candidates.push(new URL('share-audio-worklet.js',window.location.href).href)}catch{}
+  candidates.push('share-audio-worklet.js');
+  for(const url of candidates){
+    try{await ctx.audioWorklet.addModule(url);return true}catch{}
+    try{
+      const res=await fetch(url,{cache:'force-cache'});
+      if(!res.ok)continue;
+      const text=await res.text();
+      const blobUrl=URL.createObjectURL(new Blob([text],{type:'application/javascript'}));
+      try{await ctx.audioWorklet.addModule(blobUrl);return true}
+      finally{try{URL.revokeObjectURL(blobUrl)}catch{}}
+    }catch{}
+  }
+  return false;
 }
 
 async function setupNativeScreenCapture(){
@@ -1019,7 +1041,7 @@ async function setupNativeScreenCapture(){
   }
 
   let ctx,dest,addonData=false,aecTimedOut=false,captureMode='process';
-  let refProc,refSilence,refSource,workletNode;
+  let refProc,refSilence,refSource,workletNode,refTrackIds='';
   try{
     ctx=new AudioContext({sampleRate:48000});
     if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
@@ -1037,7 +1059,6 @@ async function setupNativeScreenCapture(){
       if(workletNode)workletNode.port.postMessage({type:'pcm',samples:interleaved},[interleaved.buffer]);
       else if(dest._pairPush)dest._pairPush(interleaved,frames);
     };
-    // Fallback ring filled by ScriptProcessor path when worklet is unavailable.
     const RS=96000;const cleanBuf=new Float32Array(RS*2);let wp=0,avail=0;
     dest._pairPush=(interleaved,frames)=>{
       for(let i=0;i<frames&&avail<RS;i++){
@@ -1046,18 +1067,23 @@ async function setupNativeScreenCapture(){
         wp=(wp+1)%RS;avail++;
       }
     };
-    const unsubClean=window.pairCapture.onCleanAudio((buf,frames)=>{
-      feed(new Float32Array(buf),frames);
-    });
+    const unsubClean=window.pairCapture.onCleanAudio((buf,frames)=>feed(new Float32Array(buf),frames));
     const unsubError=window.pairCapture.onError(msg=>{
       if(window.pairHelpers)window.pairHelpers.debugLog('capture error',msg);
     });
     window.pairCapture.start();
 
-    // Endpoint mode needs a remote-voice reference before we emit sound.
-    const ensureReference=()=>{
+    // Endpoint mode needs a live remote-voice reference while the call is up.
+    const wireReference=()=>{
       const refStream=remoteVoiceReferenceStream();
-      if(!refStream||refSource)return;
+      const ids=(refStream?refStream.getAudioTracks().map(t=>t.id).join(','):'');
+      if(ids===refTrackIds)return;
+      refTrackIds=ids;
+      try{if(refSource)refSource.disconnect()}catch{}
+      try{if(refProc)refProc.disconnect()}catch{}
+      try{if(refSilence)refSilence.disconnect()}catch{}
+      refSource=refProc=refSilence=null;
+      if(!refStream)return;
       refSource=ctx.createMediaStreamSource(refStream);
       refProc=ctx.createScriptProcessor(1024,1,1);
       refSilence=ctx.createGain();refSilence.gain.value=0;
@@ -1068,16 +1094,15 @@ async function setupNativeScreenCapture(){
       };
       refSource.connect(refProc);refProc.connect(refSilence);refSilence.connect(ctx.destination);
     };
-    const formatTimer=setInterval(()=>{if(captureMode==='endpoint')ensureReference()},200);
+    const formatTimer=setInterval(()=>{if(captureMode==='endpoint'||callActive)wireReference()},150);
 
     let usedWorklet=false;
-    try{
-      await ctx.audioWorklet.addModule('share-audio-worklet.js');
+    if(await loadShareAudioWorklet(ctx)){
       workletNode=new AudioWorkletNode(ctx,'pair-share-audio',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
       workletNode.connect(dest);
       usedWorklet=true;
-    }catch(e){
-      if(window.pairHelpers)window.pairHelpers.debugLog('worklet unavailable',e);
+    }else{
+      if(window.pairHelpers)window.pairHelpers.debugLog('worklet unavailable; using script processor');
       const op=ctx.createScriptProcessor(1024,0,2);
       op.onaudioprocess=e=>{
         const L=e.outputBuffer.getChannelData(0);
@@ -1091,14 +1116,12 @@ async function setupNativeScreenCapture(){
         avail-=L.length;
       };
       op.connect(dest);
-      workletNode=null;
-      screenCaptureCleanup=null;
       dest._pairScript=op;
     }
 
     const deadline=Date.now()+2500;
     while(!addonData&&Date.now()<deadline){
-      if(captureMode==='endpoint')ensureReference();
+      if(captureMode==='endpoint'||callActive)wireReference();
       await new Promise(r=>setTimeout(r,40));
     }
     clearInterval(formatTimer);
@@ -1117,12 +1140,14 @@ async function setupNativeScreenCapture(){
       if(ctx)try{ctx.close()}catch{}
       return null;
     }
-    if(captureMode==='endpoint')ensureReference();
+    wireReference();
+    const refWatch=setInterval(()=>{if(captureMode==='endpoint'||callActive)wireReference()},500);
     screenOutCtx=ctx;screenOutDest=dest;
     screenNative=true;
     const t=dest.stream.getAudioTracks()[0];
     try{if(t)t.contentHint='music'}catch{}
     screenCaptureCleanup=()=>{
+      clearInterval(refWatch);
       if(unsubClean)unsubClean();if(unsubError)unsubError();
       window.pairCapture.stop();
       try{if(refSource)refSource.disconnect()}catch{}
@@ -1201,71 +1226,71 @@ async function startScreenShare(){
     // Desktop capture defaults to text/detail on some Chromium builds. Motion
     // tells the encoder to preserve changing game/action content instead.
     try{track.contentHint=screenContentHint}catch{}
-    // Add the video track
+    // Add the video track, prepare computer sound (if enabled), then renegotiate
+    // once so share audio and video land together instead of racing two offers.
     let sender;
     try{sender=pc.addTrack(track,stream);screenSenders=[sender]}catch{stream.getTracks().forEach(t=>t.stop());return}
-    // Audio attachment can take a moment while native capture warms up. Start
-    // video first, then renegotiate again only if a clean audio track is ready.
-    const attachShareAudio=async()=>{
-      if(!screenAudioOn)return;
+    let audioReady=false;
+    if(screenAudioOn){
+      screenStatus.textContent='Sharing… preparing sound';
       let audioTrack=null;
       if(window.pairEnv?.platform==='linux'){
         audioTrack=await linuxShareAudioTrack();
       }else{
-        // Drop any Chromium loopback that may have been granted unexpectedly.
         try{stream.getAudioTracks().forEach(t=>{try{t.stop()}catch{};try{stream.removeTrack(t)}catch{}})}catch{}
         try{audioTrack=await setupNativeScreenCapture()}catch(e){
           console.warn('[AUDIO] clean capture failed:',e?.message||e);
           audioTrack=null;
         }
       }
-      if(!audioTrack){
-        console.warn('[AUDIO] computer sound unavailable without echo risk; sharing video only');
-        if(gen===screenGen&&screenActive){
-          screenStatus.textContent=(screenStatus.textContent||'Sharing')+' · video only';
-          logCallEvent('Computer sound unavailable — sharing video only');
-        }
+      if(gen!==screenGen||!pc){
+        try{if(audioTrack)audioTrack.stop()}catch{}
+        screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];
+        stream.getTracks().forEach(t=>t.stop());
+        cleanupNativeScreenCapture();
         return;
       }
-      if(gen!==screenGen||!screenActive||!pc){try{audioTrack.stop()}catch{};return}
-      try{
-        audioTrack.enabled=true;
-        try{audioTrack.contentHint='music'}catch{}
-        try{stream.addTrack(audioTrack)}catch{}
-        const audioSender=pc.addTrack(audioTrack,stream);
-        screenSenders.push(audioSender);
+      if(audioTrack){
         try{
-          const p=audioSender.getParameters();
-          if(p){
-            if(!p.encodings||!p.encodings.length)p.encodings=[{}];
-            // Prefer higher bitrate stereo for game/music desktop sound; voice
-            // remains on the separate call track at its own Opus settings.
-            p.encodings[0].maxBitrate=192000;
-            await audioSender.setParameters(p);
-          }
-        }catch{}
-        await renegotiate();
-        logCallEvent('Computer sound sharing started');
-      }catch(e){
-        console.warn('[AUDIO] addTrack failed:',e);
-        try{audioTrack.stop()}catch{}
+          audioTrack.enabled=true;
+          try{audioTrack.contentHint='music'}catch{}
+          try{stream.addTrack(audioTrack)}catch{}
+          const audioSender=pc.addTrack(audioTrack,stream);
+          screenSenders.push(audioSender);
+          try{
+            const p=audioSender.getParameters();
+            if(p){
+              if(!p.encodings||!p.encodings.length)p.encodings=[{}];
+              p.encodings[0].maxBitrate=192000;
+              await audioSender.setParameters(p);
+            }
+          }catch{}
+          audioReady=true;
+        }catch(e){
+          console.warn('[AUDIO] addTrack failed:',e);
+          try{audioTrack.stop()}catch{}
+          cleanupNativeScreenCapture();
+        }
+      }else{
+        logCallEvent('Computer sound unavailable — sharing video only');
       }
-    };
+    }
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
     try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const names=window.pairHelpers?window.pairHelpers.preferredVideoCodecs(screenCodec):(screenCodec==='auto'?['H264','VP9','VP8','H265','AV1']:[screenCodec,'H264','VP9','VP8']);const cs=names.map(name=>caps.codecs.find(c=>c.mimeType===`video/${name}`)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
     try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const preset=screenPreset.value;const maxBitrate=Math.round(Math.max(2,Math.min(120,screenBitrateMbps))*1000000);p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=SCREEN_PRESETS[preset]?.frameRate?.max||30;p.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(p);if(window.pairHelpers)window.pairHelpers.debugLog('video bitrate',maxBitrate,p.degradationPreference)}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
-    if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());return}
+    if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());cleanupNativeScreenCapture();return}
     screenActive=true;
     screenPreview.muted=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
-    screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';screenStatus.textContent='Sharing';
+    screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';
+    screenStatus.textContent=audioReady?'Sharing':'Sharing · video only';
     startScreenStats(sender);
     try{send({t:'screen-start'})}catch{};
-    logCallEvent('You started screen sharing');
+    logCallEvent(audioReady?'You started screen sharing with computer sound':'You started screen sharing');
     track.onended=()=>{if(screenActive)stopScreenShare()};
-    await renegotiate();if(gen!==screenGen)return;void attachShareAudio();
+    await renegotiate();
   }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
   }finally{if(gen===screenGen)screenStarting=false}
 }
