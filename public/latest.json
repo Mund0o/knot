@@ -1,10 +1,10 @@
 {
-  "version": "1.1.18",
-  "notes": "Improves screen sharing with a compact focused layout, fullscreen control, and reliable slider dragging.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.18/pair-p2p-1.1.18.tar.gz",
-  "linuxSha256": "2335efb80d38f367e847e4200c4e42575372f141a0acba3e28f3bd315fec0219",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.18/Pair-1.1.18.AppImage",
-  "linuxAppImageSha256": "aafcc6b279be90eda1615e7dc972f1e3aee59961fc4424075b11bece6e2cd2fc",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.18/Pair.Setup.1.1.18.exe",
-  "winSha256": "e183427f07d63b0f7b0efc8acdde3cb8fb88e0a1acca08efd68e90144a61d581"
+  "version": "1.1.19",
+  "notes": "Fixes screen-share audio routing and makes screen-share fullscreen reliable.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.19/pair-p2p-1.1.19.tar.gz",
+  "linuxSha256": "70f85b62892262003d3bec08c8402d5ccdef3e99a0ac2557e644b7527322e1cc",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.19/Pair-1.1.19.AppImage",
+  "linuxAppImageSha256": "fdcb0ec9262a92a74cf8bfc618cbbd43dec24379f02054c454bf294eabdcf641",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.19/Pair.Setup.1.1.19.exe",
+  "winSha256": "3771aa6ff74324d7943aef6f94da5ee36c45933c3019ab14373f7d158080a9ab"
 }
