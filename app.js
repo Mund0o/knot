@@ -128,8 +128,14 @@ function setStatus(text,on=false){
   statusText.textContent=text;$('.connection').classList.toggle('connected',on);
   if(connectCard)connectCard.hidden=on;if(addFriendBtn)addFriendBtn.disabled=on;
   const sideAdd=$('#sideAddFriend');if(sideAdd)sideAdd.disabled=on;
-  const dmStatus=$('#dmFriendStatus');if(dmStatus)dmStatus.textContent=on?'Online':(text||'Waiting to pair');
+  const dmStatus=$('#dmFriendStatus');
+  if(dmStatus){
+    if(on)dmStatus.textContent='Online';
+    else if(/local test/i.test(text))dmStatus.textContent='Test mode';
+    else dmStatus.textContent='Offline';
+  }
   if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{messageInput.disabled=true;messageForm.querySelector('.send').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}
+  if(typeof syncVoiceChrome==='function')syncVoiceChrome();
 }
 const MAX_SIGNAL_SIZE=1024*1024,MAX_MESSAGE_SIZE=64*1024,SIGNAL_COMPRESSED_PREFIX='pair1.',SIGNAL_RAW_PREFIX='pair0.';
 // Dot is used instead of base64url's underscore. Discord treats underscores
@@ -383,26 +389,25 @@ function renderItem(item,resultsEl){
   gifAttachment=document.createElement('div');gifAttachment.className='gif-attachment';gifAttachment.hidden=true;gifAttachment.innerHTML='<img alt="GIF attachment" /><span class="gif-attachment-name"></span><button type="button" class="gif-attachment-remove" aria-label="Remove GIF attachment">×</button>';
   gifAttachment.querySelector('.gif-attachment-remove').onclick=()=>setPendingGif(null);
   composer.prepend(gifAttachment);
-  // Plus button
-  const plusWrap=document.createElement('div');plusWrap.style.cssText='position:relative;display:inline-flex';
+  // Plus · input · GIF · emoji · send
+  const plusWrap=document.createElement('div');plusWrap.className='plus-wrap';
   const plusBtn=document.createElement('button');plusBtn.type='button';plusBtn.className='composer-btn plus-btn';plusBtn.textContent='+';plusBtn.title='Attach';
   const plusPopup=document.createElement('div');plusPopup.className='plus-popup';plusPopup.classList.add('hidden');
-  const fileOpt=document.createElement('button');fileOpt.className='plus-opt';fileOpt.textContent='📎 Send file';
+  const fileOpt=document.createElement('button');fileOpt.className='plus-opt';fileOpt.textContent='Send file';
   fileOpt.onclick=()=>{plusPopup.classList.add('hidden');fileInput.click()};
-  plusPopup.append(fileOpt);plusWrap.append(plusBtn,plusPopup);composer.insertBefore(plusWrap,sendBtn.nextSibling);
+  plusPopup.append(fileOpt);plusWrap.append(plusBtn,plusPopup);composer.insertBefore(plusWrap,messageInput);
   plusBtn.onclick=e=>{e.preventDefault();plusPopup.classList.toggle('hidden');emojiPicker&&emojiPicker.classList.add('hidden');gifPicker&&gifPicker.classList.add('hidden')};
   document.addEventListener('click',e=>{if(!plusWrap.contains(e.target))plusPopup.classList.add('hidden')});
-  emojiBtn=document.createElement('button');emojiBtn.type='button';emojiBtn.className='composer-btn emoji-btn';emojiBtn.textContent='😊';emojiBtn.title='Emoji';
-  emojiPicker=buildEmojiPicker();emojiPicker.style.position='absolute';emojiPicker.style.bottom='100%';emojiPicker.style.right='60px';
-  composer.append(emojiPicker);
-  emojiBtn.onclick=e=>{e.preventDefault();emojiPicker.classList.toggle('hidden');gifPicker&&gifPicker.classList.add('hidden');plusPopup&&plusPopup.classList.add('hidden')};
-  composer.insertBefore(emojiBtn,sendBtn.nextSibling);
-  // GIF button
   gifBtn=document.createElement('button');gifBtn.type='button';gifBtn.className='composer-btn gif-btn';gifBtn.textContent='GIF';gifBtn.title='GIF';
   gifPicker=buildGifPicker();gifPicker.style.position='absolute';gifPicker.style.bottom='100%';gifPicker.style.right='0';
   composer.append(gifPicker);
   gifBtn.onclick=e=>{e.preventDefault();const show=gifPicker.classList.contains('hidden');gifPicker.classList.toggle('hidden');emojiPicker&&emojiPicker.classList.add('hidden');plusPopup&&plusPopup.classList.add('hidden');if(show){const r=gifPicker.querySelector('.gif-results');const tabs=gifPicker.querySelectorAll('.gif-picker-tab');if(tabs[2]?.classList.contains('active'))renderFavs(r);else{tabs[0]?.click()}}};
-  composer.insertBefore(gifBtn,sendBtn.nextSibling);
+  composer.insertBefore(gifBtn,sendBtn);
+  emojiBtn=document.createElement('button');emojiBtn.type='button';emojiBtn.className='composer-btn emoji-btn';emojiBtn.textContent='😊';emojiBtn.title='Emoji';
+  emojiPicker=buildEmojiPicker();emojiPicker.style.position='absolute';emojiPicker.style.bottom='100%';emojiPicker.style.right='60px';
+  composer.append(emojiPicker);
+  emojiBtn.onclick=e=>{e.preventDefault();emojiPicker.classList.toggle('hidden');gifPicker&&gifPicker.classList.add('hidden');plusPopup&&plusPopup.classList.add('hidden')};
+  composer.insertBefore(emojiBtn,sendBtn);
   // Enable input/button on connect
   const orig=messageInput.disabled;
   Object.defineProperty(messageInput,'disabled',{set(v){this._disabled=v;if(v){this.setAttribute('disabled','')}else{this.removeAttribute('disabled')}sendBtn.disabled=v;emojiBtn.disabled=v;gifBtn.disabled=v;plusBtn.disabled=v},get(){return this._disabled!==false}});
@@ -652,7 +657,7 @@ async function processIncoming(t){const POOL=8;const queue=t.writeQueue;let acti
   }finally{clearInterval(watchdog);try{await flushBatch()}catch{}}
 }
 setStatus('Not connected');
-function enableLocalTestControls(){if(!LOCAL_TEST_MODE)return;messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;callBtn.disabled=false;screenBtn.disabled=false;screenPreset.disabled=false;statusText.textContent='Local test mode';pairHint.textContent='Test mode is on — messages stay on this device until you pair with a friend.'}
+function enableLocalTestControls(){if(!LOCAL_TEST_MODE)return;messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;callBtn.disabled=false;screenBtn.disabled=false;screenPreset.disabled=false;statusText.textContent='Local test mode';pairHint.textContent='Test mode is on — messages stay on this device until you pair with a friend.';const dmStatus=$('#dmFriendStatus');if(dmStatus)dmStatus.textContent='Test mode';if(typeof syncVoiceChrome==='function')syncVoiceChrome()}
 enableLocalTestControls();
 
 async function ss(key){if(window.pairSettings){try{return await window.pairSettings.get(key)}catch{}}try{return localStorage.getItem('pair.'+key)}catch{}}
@@ -690,7 +695,10 @@ function syncPanelBackdrop(){panelBackdrop.hidden=!!settingsPanel.hidden&&!conne
 function closePanels(){if(micTestStream)stopMicrophoneTest();connectCard.open=false;settingsPanel.hidden=true;document.body.classList.remove('settings-open');syncPanelBackdrop()}
 const openAddFriend=()=>{settingsPanel.hidden=true;document.body.classList.remove('settings-open');connectCard.open=true;syncPanelBackdrop();setTimeout(()=>signalIn.focus(),0)};
 $('#addFriend').onclick=openAddFriend;
-const sideAddFriend=$('#sideAddFriend');if(sideAddFriend)sideAddFriend.onclick=openAddFriend;
+['#sideAddFriend','#dmAddInline','#emptyAddFriend'].forEach(sel=>{const el=$(sel);if(el)el.onclick=openAddFriend});
+const headerCall=$('#headerCall');if(headerCall)headerCall.onclick=()=>{if(!callBtn.disabled)callBtn.click();else openAddFriend()};
+const headerScreen=$('#headerScreen');if(headerScreen)headerScreen.onclick=()=>{if(!screenBtn.disabled)screenBtn.click()};
+profileBtn.onclick=()=>openSettings(true);profileAdjust.onclick=()=>openSettings(true);
 connectCard.addEventListener('toggle',syncPanelBackdrop);panelBackdrop.onclick=closePanels;
 document.querySelectorAll('.theme-option').forEach(button=>button.onclick=()=>applyTheme(button.dataset.theme));
 (async()=>{applyTheme(await ss('theme'),false)})();
@@ -705,8 +713,10 @@ function renderParticipantNames(){
   yourNameEl.textContent=profileName;friendNameEl.textContent=friendName;displayNameInput.value=profileName;
   const userBarName=$('#userBarName');if(userBarName)userBarName.textContent=profileName;
   const dmFriendName=$('#dmFriendName');if(dmFriendName)dmFriendName.textContent=friendName;
-  const channelTitle=$('#channelTitle');if(channelTitle)channelTitle.textContent=friendName||'Pair';
-  const messagePlaceholder=friendName?`Message @${friendName}`:'Message your friend';
+  const channelTitle=$('#channelTitle');if(channelTitle)channelTitle.textContent=friendName||'Friend';
+  const emptyTitle=$('#emptyTitle');if(emptyTitle)emptyTitle.textContent=friendName||'Friend';
+  const emptyCopy=$('#emptyCopy');if(emptyCopy)emptyCopy.textContent=`This is the beginning of your direct message history with ${friendName||'Friend'}. Messages travel peer to peer.`;
+  const messagePlaceholder=friendName?`Message @${friendName}`:'Message @Friend';
   if(messageInput){messageInput.placeholder=messagePlaceholder;messageInput.setAttribute('aria-label',messagePlaceholder)}
 }
 function updateProfileName(value,{persist=true,share=true}={}){profileName=normalizeProfileName(value,'You');renderParticipantNames();if(persist)ssSet('profileName',profileName);if(share)announceProfile()}
@@ -728,8 +738,7 @@ function updateProfileFrame(sendUpdate=false){profileFrame=normalizeFrame({zoom:
 function openSettings(showPhotoEditor=false){connectCard.open=false;settingsPanel.hidden=false;document.body.classList.add('settings-open');syncPanelBackdrop();if(showPhotoEditor){openSettingsTab('profile');profileEditor.hidden=false}}
 $('#openSettings').onclick=()=>openSettings();$('#closeSettings').onclick=closePanels;
 const userBarSettings=$('#userBarSettings');if(userBarSettings)userBarSettings.onclick=()=>openSettings();
-const userBarProfile=$('#userBarProfile');if(userBarProfile)userBarProfile.onclick=()=>openSettings(true);
-profileBtn.onclick=()=>openSettings(true);profileAdjust.onclick=()=>openSettings(true);settingsChangePhoto.onclick=()=>profileInput.click();settingsAdjustPhoto.onclick=()=>{profileEditor.hidden=!profileEditor.hidden};settingsRemovePhoto.onclick=async()=>{profileAvatar='';renderProfile();profileEditor.hidden=true;await ssSet('profileAvatar',null);await ssSet('profilePhotoMode','none');announceProfile()};profileDone.onclick=()=>{profileEditor.hidden=true;updateProfileFrame(true)};[profileZoom,profileX,profileY].forEach(input=>input.oninput=()=>updateProfileFrame(false));[profileZoom,profileX,profileY].forEach(input=>input.onchange=()=>updateProfileFrame(true));profileInput.onchange=async()=>{const file=profileInput.files?.[0];profileInput.value='';if(!file)return;try{profileAvatar=await resizeProfile(file);renderProfile();await ssSet('profileAvatar',profileAvatar);await ssSet('profilePhotoMode','custom');announceProfile()}catch(e){alert(e.message||'Could not set profile photo')}};
+const userBarProfile=$('#userBarProfile');if(userBarProfile)userBarProfile.onclick=()=>openSettings(true);settingsChangePhoto.onclick=()=>profileInput.click();settingsAdjustPhoto.onclick=()=>{profileEditor.hidden=!profileEditor.hidden};settingsRemovePhoto.onclick=async()=>{profileAvatar='';renderProfile();profileEditor.hidden=true;await ssSet('profileAvatar',null);await ssSet('profilePhotoMode','none');announceProfile()};profileDone.onclick=()=>{profileEditor.hidden=true;updateProfileFrame(true)};[profileZoom,profileX,profileY].forEach(input=>input.oninput=()=>updateProfileFrame(false));[profileZoom,profileX,profileY].forEach(input=>input.onchange=()=>updateProfileFrame(true));profileInput.onchange=async()=>{const file=profileInput.files?.[0];profileInput.value='';if(!file)return;try{profileAvatar=await resizeProfile(file);renderProfile();await ssSet('profileAvatar',profileAvatar);await ssSet('profilePhotoMode','custom');announceProfile()}catch(e){alert(e.message||'Could not set profile photo')}};
 (async()=>{updateProfileName(await ss('profileName'),{persist:false,share:false})})();displayNameInput.onchange=()=>updateProfileName(displayNameInput.value);
 (async()=>{inputDeviceId=(await ss('inputDevice'))||'default';outputDeviceId=(await ss('outputDevice'))||'default';voiceProcessingEnabled=(await ss('voiceProcessing'))==='on';voiceInputModeValue=(await ss('voiceInputMode'))==='ptt'?'ptt':'voice';const savedPttKey=await ss('pushToTalkKey');pushToTalkKey=typeof savedPttKey==='string'&&savedPttKey.length<32?savedPttKey:'Space';const savedPttDelay=Number(await ss('pushToTalkDelay'));pushToTalkDelay=Number.isFinite(savedPttDelay)?Math.max(0,Math.min(1000,savedPttDelay)):0;soundEnabled=(await ss('soundEffects'))!=='off';profileSharing=(await ss('shareProfile'))!=='off';rememberInviteCode=(await ss('rememberInvite'))!=='off';const motion=(await ss('reduceMotion'))==='on';const hardware=(await ss('hardwareAcceleration'))!=='off';if(!rememberInviteCode){signalIn.value='';ssSet('savedInviteCode',null)}voiceProcessing.checked=voiceProcessingEnabled;updatePushToTalkUI();soundEffects.checked=soundEnabled;shareProfile.checked=profileSharing;rememberInvite.checked=rememberInviteCode;reduceMotion.checked=motion;hardwareAcceleration.checked=hardware;document.documentElement.dataset.reduceMotion=String(motion);hardwareHint.textContent='Hardware acceleration is '+(hardware?'enabled':'disabled')+' for the next start.';await restoreScreenShareSettings();await refreshAudioDevices();await applyOutputDevice()})();signalIn.addEventListener('input',()=>{if(!rememberInviteCode)ssSet('savedInviteCode',null)});
 (async()=>{const savedServer=await ss('signalServer');const savedRoom=await ss('roomCode');const savedInvite=await ss('savedInviteCode');if(savedServer)$('#signalServer').value=savedServer;if(savedRoom)$('#roomCode').value=savedRoom;if(typeof savedInvite==='string'&&savedInvite.length<=MAX_SIGNAL_SIZE)signalIn.value=savedInvite;['signalServer','roomCode'].forEach(id=>$('#'+id).addEventListener('input',()=>ssSet(id==='signalServer'?'signalServer':'roomCode',$('#'+id).value.trim())));signalIn.addEventListener('input',()=>ssSet('savedInviteCode',signalIn.value.trim()));const savedVol=await ss('volume');if(savedVol!==null){const v=parseFloat(savedVol);if(v>=0&&v<=1)setCallVolume(Math.round(v*100),false)}const savedFrame=await ss('profileFrame');try{if(savedFrame)profileFrame=normalizeFrame(JSON.parse(savedFrame))}catch{};profileZoom.value=profileFrame.zoom;profileX.value=profileFrame.x;profileY.value=profileFrame.y;const savedAvatar=await ss('profileAvatar');if(validProfileData(savedAvatar)){profileAvatar=savedAvatar;renderProfile();announceProfile()}})();
@@ -860,7 +869,7 @@ async function startLocalTestCall(){
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints());
-    callActive=true;callStart=Date.now();callBtn.textContent='End call';callBtn.title='End local mic test';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';applyMicTransmission();setParticipant(participantYou,true);playSound('ring');callStatus.textContent='Testing microphone locally';callStatus.className='call-status live';
+    callActive=true;callStart=Date.now();callBtn.textContent='Leave';callBtn.title='End local mic test';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';applyMicTransmission();setParticipant(participantYou,true);playSound('ring');callStatus.textContent='Testing microphone locally';callStatus.className='call-status live';syncVoiceChrome();
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);callTimerEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0')},1000);
   }catch(e){callStatus.textContent='Mic test unavailable';callStatus.className='call-status'}finally{callStarting=false}
 }
@@ -896,12 +905,13 @@ async function startCall(){
     setupPermanentAudioSink();
     // endCall/disconnectRoom may have run during a nested await; if pc is gone bail.
     if(!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
-    callActive=true;callStart=Date.now();setRemoteCallAudio(true);callBtn.textContent='End call';callBtn.title='End voice call';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';muteBtn.title='Mute microphone';applyMicTransmission();
-    try{remoteAudio.volume=0}catch{};setCallVolume(volumeSlider.value,false);volumeSlider.hidden=false;volumeValue.hidden=false;
+    callActive=true;callStart=Date.now();setRemoteCallAudio(true);callBtn.textContent='Leave';callBtn.title='Leave voice call';callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';muteBtn.title='Mute microphone';applyMicTransmission();
+    try{remoteAudio.volume=0}catch{};setCallVolume(volumeSlider.value,false);
     setParticipant(participantYou,true);logCallEvent('You joined the call');
     playSound('ring');try{send({t:'call-ring'})}catch{}
     callStatus.textContent='Voice live';callStatus.className='call-status live';
-    callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0')},1000);
+    callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0');if(voiceConnectionDetail)voiceConnectionDetail.textContent=callTimerEl.textContent+' · Pair Voice'},1000);
+    syncVoiceChrome();
   }catch(e){try{send({t:'call-end'})}catch{};endCall(true);const m=String(e?.message||e||'');if(/not\s*found/i.test(m))callStatus.textContent='No mic found — check your microphone connection';else if(/permission|denied|not\s*allowed/i.test(m))callStatus.textContent='Mic access blocked — allow microphone in browser/app settings';else callStatus.textContent='Mic error — '+(e?.message||e);callStatus.className='call-status';
   }finally{callStarting=false}
 }
@@ -925,31 +935,83 @@ async function endCall(silent){
   // null the srcObject and ontrack never fires again for the same transceiver,
   // permanently killing audio for the session.
   callActive=false;micMuted=false;setRemoteCallAudio(false);
-  callBtn.textContent='Start call';callBtn.title='Start voice call';muteBtn.hidden=true;volumeSlider.hidden=true;volumeValue.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
+  callBtn.textContent='Join';callBtn.title='Join voice call';muteBtn.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
   if(!silent){callBtn.disabled=!pc&&!LOCAL_TEST_MODE;playSound('leave');try{send({t:'call-end'})}catch{}}
+  syncVoiceChrome();
 }
 function toggleMute(){
   if(!localStream)return;
   micMuted=!micMuted;
   applyMicTransmission();
   if(micMuted){muteBtn.textContent='Unmute';muteBtn.title='Unmute microphone'}else if(voiceInputModeValue!=='ptt'){muteBtn.textContent='Mute';muteBtn.title='Mute microphone'}
+  syncVoiceChrome();
 }
 callBtn.onclick=()=>{if(callActive)endCall(false);else{try{remoteAudio.muted=false;remoteAudio.play()}catch{};setupPermanentAudioSink();startCall()}};
 muteBtn.onclick=toggleMute;
 const userBarMute=$('#userBarMute');
-if(userBarMute){
-  const syncUserBarMute=()=>{
-    userBarMute.hidden=muteBtn.hidden;
-    userBarMute.textContent=micMuted?'🔇':'🎤';
+const userBarDeafen=$('#userBarDeafen');
+const userBarShare=$('#userBarShare');
+const voiceConnection=$('#voiceConnection');
+const voiceDisconnect=$('#voiceDisconnect');
+const voiceConnectionDetail=$('#voiceConnectionDetail');
+let deafened=false,volumeBeforeDeafen=50;
+function syncVoiceChrome(){
+  const sharing=!!(typeof screenActive!=='undefined'&&screenActive)||!remoteScreen?.hidden;
+  voicePanel?.classList.toggle('is-live',!!callActive);
+  voicePanel?.classList.toggle('is-sharing',sharing);
+  if(voiceConnection){
+    voiceConnection.hidden=!callActive;
+    if(voiceConnectionDetail){
+      const timer=callTimerEl?.textContent;
+      voiceConnectionDetail.textContent=timer?(timer+' · Pair Voice'):(callStatus?.textContent||'Pair Voice');
+    }
+  }
+  if(userBarMute){
+    userBarMute.disabled=!callActive||!localStream;
+    userBarMute.classList.toggle('is-muted',!!micMuted);
     userBarMute.title=muteBtn.title||(micMuted?'Unmute':'Mute');
-  };
-  muteBtn.addEventListener('click',()=>setTimeout(syncUserBarMute,0));
-  const muteObserver=new MutationObserver(syncUserBarMute);
-  muteObserver.observe(muteBtn,{attributes:true,attributeFilter:['hidden','title']});
-  userBarMute.onclick=()=>{toggleMute();syncUserBarMute()};
-  syncUserBarMute();
+    userBarMute.setAttribute('aria-label',userBarMute.title);
+  }
+  if(userBarDeafen){
+    userBarDeafen.classList.toggle('is-deafened',!!deafened);
+    userBarDeafen.title=deafened?'Undeafen':'Deafen';
+    userBarDeafen.setAttribute('aria-label',userBarDeafen.title);
+  }
+  if(userBarShare){
+    userBarShare.disabled=!!screenBtn?.disabled;
+    userBarShare.classList.toggle('is-sharing',!!(typeof screenActive!=='undefined'&&screenActive));
+    userBarShare.title=screenBtn?.title||'Share screen';
+    userBarShare.setAttribute('aria-label',userBarShare.title);
+  }
+  if(headerCall){
+    headerCall.disabled=false;
+    headerCall.title=callActive?'Leave voice':(callBtn?.disabled?'Add a friend to call':'Join voice');
+    headerCall.setAttribute('aria-label',headerCall.title);
+  }
+  if(headerScreen){
+    headerScreen.disabled=!!screenBtn?.disabled;
+    headerScreen.title=screenBtn?.title||'Share screen';
+    headerScreen.setAttribute('aria-label',headerScreen.title);
+  }
 }
-volumeSlider.oninput=()=>setCallVolume(volumeSlider.value);
+if(userBarMute){
+  muteBtn.addEventListener('click',()=>setTimeout(syncVoiceChrome,0));
+  const muteObserver=new MutationObserver(syncVoiceChrome);
+  muteObserver.observe(muteBtn,{attributes:true,attributeFilter:['hidden','title']});
+  userBarMute.onclick=()=>{if(!userBarMute.disabled)toggleMute()};
+}
+if(userBarDeafen){
+  userBarDeafen.onclick=()=>{
+    deafened=!deafened;
+    if(deafened){volumeBeforeDeafen=Number(volumeSlider.value)||50;setCallVolume(0,false)}
+    else setCallVolume(volumeBeforeDeafen,false);
+    syncVoiceChrome();
+  };
+}
+if(userBarShare)userBarShare.onclick=()=>{if(!screenBtn.disabled)screenBtn.click()};
+if(voiceDisconnect)voiceDisconnect.onclick=()=>{if(callActive)endCall(false)};
+syncVoiceChrome();
+volumeSlider.oninput=()=>{if(deafened){deafened=false;syncVoiceChrome()}setCallVolume(volumeSlider.value)};
 
 // --- Screen share -------------------------------------------------------------
 // Either peer can start/stop screen share, so either peer can drive a
@@ -1273,7 +1335,7 @@ const localScreenTile=makeScreenTile(screenPreview,'You', 'local'),remoteScreenT
 const screenViewBar=document.createElement('div');screenViewBar.className='screen-view-bar';screenViewBar.innerHTML='<button type="button" data-screen-view="grid" title="Grid view">▦ Grid</button><button type="button" data-screen-view="focus" title="Focus view">▣ Focus</button><button type="button" data-screen-fullscreen title="Fullscreen">⛶ Fullscreen</button>';screenVideos.after(screenViewBar);
 const gridViewButton=screenViewBar.querySelector('[data-screen-view="grid"]'),focusViewButton=screenViewBar.querySelector('[data-screen-view="focus"]'),fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]');
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
-function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden;if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-focus',screenView==='focus'&&hasLocal&&hasRemote);voicePanel.classList.toggle('screen-focus-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;gridViewButton.classList.toggle('active',screenView==='grid');focusViewButton.classList.toggle('active',screenView==='focus');fsBtn.hidden=!screenIsActive();fsBtn.textContent=(document.fullscreenElement||remoteScreenTile.classList.contains('fs')||localScreenTile.classList.contains('fs'))?'✕ Exit fullscreen':'⛶ Fullscreen'}
+function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,active=hasLocal||hasRemote;if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';voicePanel.classList.toggle('screen-sharing',active);voicePanel.classList.toggle('is-sharing',active||!!screenActive);voicePanel.classList.toggle('screen-focus',screenView==='focus'&&hasLocal&&hasRemote);voicePanel.classList.toggle('screen-focus-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;screenViewBar.hidden=!active;gridViewButton.hidden=!(hasLocal&&hasRemote);focusViewButton.hidden=!(hasLocal&&hasRemote);gridViewButton.classList.toggle('active',screenView==='grid');focusViewButton.classList.toggle('active',screenView==='focus');fsBtn.hidden=!active;fsBtn.textContent=(document.fullscreenElement||remoteScreenTile.classList.contains('fs')||localScreenTile.classList.contains('fs'))?'Exit fullscreen':'Fullscreen';if(typeof syncVoiceChrome==='function')syncVoiceChrome()}
 async function toggleRemoteFs(){const target=focusedScreen==='local'?localScreenTile:remoteScreenTile,other=target===localScreenTile?remoteScreenTile:localScreenTile;if(target.classList.contains('fs')){target.classList.remove('fs');document.body.classList.remove('screen-fullscreen');updateScreenLayout();return}if(document.fullscreenElement){try{await document.exitFullscreen()}catch{};return}try{await target.requestFullscreen({navigationUI:'hide'});target.classList.remove('fs');other.classList.remove('fs');document.body.classList.add('screen-fullscreen')}catch{target.classList.add('fs');other.classList.remove('fs');document.body.classList.add('screen-fullscreen');updateScreenLayout()}}
 function selectScreen(kind){focusedScreen=kind;if(!remoteScreen.hidden&&!screenPreview.hidden)screenView='focus';updateScreenLayout()}
 screenVideos.addEventListener('click',event=>{if(event.target.closest('input,button,label'))return;const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;toggleRemoteFs()});
