@@ -1,10 +1,10 @@
 {
-  "version": "1.1.16",
-  "notes": "Isolated stereo computer sound for screen sharing, with Pair call audio kept out of the share. Includes more reliable audio negotiation and PipeWire capture setup.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.16/pair-p2p-1.1.16.tar.gz",
-  "linuxSha256": "9ce4b13005f6574da884ba5b4ca0704f7469fa30993275035c93bbb887650c5a",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.16/Pair-1.1.16.AppImage",
-  "linuxAppImageSha256": "1c1499e205ccc295ae768829d99e953f5efcef98440efe366d88034b9dd9630d",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.16/Pair.Setup.1.1.16.exe",
-  "winSha256": "6acad8b99505ebc5247095a08dea63487e2d18c39210eb0fdc813b3dfacf91dc"
+  "version": "1.1.17",
+  "notes": "Fixes the incoming-call audio race and strengthens Linux screen-share audio isolation.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.17/pair-p2p-1.1.17.tar.gz",
+  "linuxSha256": "2b2afcf2a76f39d0cd5cb2b7ac27b51c8d275a7163ce06ba74b443859db3220f",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.17/Pair-1.1.17.AppImage",
+  "linuxAppImageSha256": "0eca889e65a6972ad762527b917167efa37e21bb736ddffac2964203bfa44815",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.17/Pair.Setup.1.1.17.exe",
+  "winSha256": "8e40343de896ba0a953154f6b66fb8270cdb1630f1feae2470ec9d6d6d86048a"
 }
