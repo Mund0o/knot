@@ -297,13 +297,17 @@ app.whenReady().then(() => {
   });
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
+  // System audio is deliberately not granted here. Chromium "loopback" captures
+  // the full render mix (including Pair's own call playback) and reintroduces
+  // echo into the screenshare. Pair attaches cleaned system audio from the
+  // native process-loopback addon / PipeWire share sink instead.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const useId = pendingSourceId;
     pendingSourceId = null;
     const src = useId ? pendingSources.find(s => s.id === useId) : null;
     if (src) {
-      callback({ video: src, audio: request.audioRequested ? 'loopback' : undefined });
-    } else callback({ video: undefined, audio: undefined });
+      callback({ video: src });
+    } else callback({ video: undefined });
   });
   createWindow();
   startAutoUpdater();
