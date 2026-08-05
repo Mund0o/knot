@@ -489,7 +489,7 @@ function setupPeer(){
           ]);
         }
       }
-      logCallEvent('Screen audio received');
+      logCallEvent('Screen audio received');screenStatus.textContent='Friend sharing · audio received';
       const play=()=>{if(remoteScreen.volume>0)remoteScreen.muted=false;const p=remoteScreen.play();if(p?.catch)p.catch(()=>{})};play();
       if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
@@ -1175,9 +1175,9 @@ async function startScreenShare(){
         }catch{}
         if(!await renegotiate())throw new Error('audio negotiation did not start');
         if(gen!==screenGen||!screenActive||!pc)throw new Error('screen share ended during audio negotiation');
-        logCallEvent('Computer sound sharing started');
+        logCallEvent('Computer sound sharing started');screenStatus.textContent='Sharing · computer sound live';
       }catch(e){
-        console.warn('[AUDIO] addTrack failed:',e);
+        console.warn('[AUDIO] addTrack failed:',e);if(gen===screenGen&&screenActive)screenStatus.textContent='Sharing · computer sound failed';
         const sender=screenSenders.find(s=>s.track===audioTrack);
         if(sender){try{pc?.removeTrack(sender)}catch{};screenSenders=screenSenders.filter(s=>s!==sender)}
         discardShareAudio();
