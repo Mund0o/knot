@@ -228,49 +228,43 @@ private:
 
   void process(BYTE* data,UINT32 frames){
     totalProcessed+=frames;
-    diag();
-    int ch=mixFormat->nChannels;
-    int sr=(int)mixFormat->nSamplesPerSec;
-    std::vector<float> captured(frames);
+    const int ch=mixFormat&&mixFormat->nChannels>0?mixFormat->nChannels:2;
+    const int outCh=2;
+    // Process-loopback already excludes Pair's process tree, so call playback is
+    // not in this mix. Keep a full stereo pass-through for music/game audio
+    // instead of collapsing to mono or running a soft canceller that can
+    // smear desktop sound.
+    float* buf=(float*)calloc((size_t)frames*(size_t)outCh,sizeof(float));
+    if(!buf)return;
     if(mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT){
       float* f=(float*)data;
-      for(UINT32 i=0;i<frames;i++){float s=0;for(int c=0;c<ch;c++)s+=f[i*ch+c];captured[i]=s/ch;}
+      for(UINT32 i=0;i<frames;i++){
+        float L=f[i*ch+0];
+        float R=ch>1?f[i*ch+1]:L;
+        buf[i*outCh+0]=L;
+        buf[i*outCh+1]=R;
+      }
     }else if(mixFormat->wBitsPerSample==16){
       INT16* ps=(INT16*)data;
-      for(UINT32 i=0;i<frames;i++){float s=0;for(int c=0;c<ch;c++)s+=ps[i*ch+c];captured[i]=s/(ch*32768.0f);}
+      for(UINT32 i=0;i<frames;i++){
+        float L=ps[i*ch+0]/32768.0f;
+        float R=ch>1?ps[i*ch+1]/32768.0f:L;
+        buf[i*outCh+0]=L;
+        buf[i*outCh+1]=R;
+      }
     }else{
       INT32* pl=(INT32*)data;
-      for(UINT32 i=0;i<frames;i++){float s=0;for(int c=0;c<ch;c++)s+=pl[i*ch+c];captured[i]=s/(ch*2147483648.0f);}
-    }
-
-    int delay=bestDelay;
-    std::vector<float> clean(frames);
-    {
-      std::lock_guard<std::mutex> lk(refMutex);
-      if(refWritten>(uint64_t)(delay+frames)){
-        updateDelay(captured.data(),frames,sr);
-        delay=bestDelay;
-        for(UINT32 i=0;i<frames;i++){
-          float r=refRing[(refWritten-delay+i)%RING_SIZE];
-          float c=captured[i];
-          clean[i]=c-estimatedGain*r;
-          if(fabsf(r)>0.001f){
-            float num=c*r,den=r*r+1e-10f;
-            estimatedGain=0.998f*estimatedGain+0.002f*num/den;
-            if(estimatedGain<0)estimatedGain=0;
-          }
-        }
-      }else{
-        memcpy(clean.data(),captured.data(),frames*sizeof(float));
-        emitErr("[AEC] bypass: no ref data yet");
+      for(UINT32 i=0;i<frames;i++){
+        float L=pl[i*ch+0]/2147483648.0f;
+        float R=ch>1?pl[i*ch+1]/2147483648.0f:L;
+        buf[i*outCh+0]=L;
+        buf[i*outCh+1]=R;
       }
     }
 
-    float* buf=(float*)calloc(frames,sizeof(float));
-    memcpy(buf,clean.data(),frames*sizeof(float));
     UINT32 fCopy=frames;
     auto status=dataCb.NonBlockingCall([buf,fCopy](Napi::Env e,Napi::Function cb){
-      auto ab=Napi::ArrayBuffer::New(e,buf,fCopy*sizeof(float),[](Napi::Env, void* data){std::free(data);});
+      auto ab=Napi::ArrayBuffer::New(e,buf,(size_t)fCopy*2*sizeof(float),[](Napi::Env, void* data){std::free(data);});
       cb.Call({ab,Napi::Number::New(e,(double)fCopy)});
     });
     if(status!=napi_ok){
