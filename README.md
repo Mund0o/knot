@@ -115,9 +115,8 @@ npx wrangler deploy
 No build output directory or static-assets directory is needed. The checked-in
 `wrangler.jsonc` points directly to `worker/index.js`, preventing Wrangler from
 trying to upload the Electron repository or `node_modules` as website assets.
-Pair defaults to `wss://pair.mundo.workers.dev`; use the same secret room code
-on both computers. If the Cloudflare account uses a different workers.dev
-subdomain, update the signaling address in Pair after deployment.
+Pair defaults to `wss://pair.benjaminu01.workers.dev`; use the same secret room
+code on both computers.
 
 ### Host signaling from your own PC
 
