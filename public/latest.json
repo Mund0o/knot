@@ -1,10 +1,10 @@
 {
-  "version": "1.1.24",
-  "notes": "Fixes 4K/60 and adds persistent screen-share audio diagnostics.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.24/pair-p2p-1.1.24.tar.gz",
-  "linuxSha256": "5a6412e2bac75267fd033ccf69a94d781496d83f0d1122ce05d7d9f460625814",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.24/Pair-1.1.24.AppImage",
-  "linuxAppImageSha256": "c88c8f8d5cd79e235ecd5b80d98604c009883727545f65b10d9906b2fa988610",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.24/Pair.Setup.1.1.24.exe",
-  "winSha256": "a6675f1b9db12271decddd91a502b174c5663a01abecffe7643be1d75e08cf16"
+  "version": "1.1.25",
+  "notes": "Adds simple five-digit invites through private hosted signaling, plus high-quality screen sharing and isolated computer audio.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.25/pair-p2p-1.1.25.tar.gz",
+  "linuxSha256": "8c7041a0da30f297a8ef2345982adb9610ae4a0554351d363f0149b73aa50c9f",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.25/Pair-1.1.25.AppImage",
+  "linuxAppImageSha256": "6582cddd3c7066252a02cd2fdf5c3dc97565bef5af9df6c553d5401760e09370",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.25/Pair.Setup.1.1.25.exe",
+  "winSha256": "82703d3c0d2445964b5211f838f4422f7fc381a48dfcc95458e6bd08f1f13ae6"
 }
