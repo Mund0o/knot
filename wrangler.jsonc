@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pair",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-08",
+  "observability": {
+    "enabled": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PAIR_ROOMS",
+        "class_name": "PairRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["PairRoom"]
+    }
+  ]
+}

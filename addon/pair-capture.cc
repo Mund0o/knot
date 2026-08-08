@@ -5,13 +5,11 @@
 #include <audioclient.h>
 #include <audioclientactivationparams.h>
 #include <propvarutil.h>
-#include <vector>
-#include <mutex>
 #include <thread>
 #include <atomic>
-#include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <cstdint>
 #include <string>
 
 // Windows process loopback lets us capture the system mix while excluding
@@ -51,13 +49,7 @@ public:
 
 class Capture {
 public:
-  std::vector<float> refRing;
-  std::mutex refMutex;
-  uint64_t refWritten=0;
-  float estimatedGain=0.5f;
-  int bestDelay=2048;
-  bool runningFlag=false;
-  static constexpr int RING_SIZE=96000;
+  std::atomic<bool> runningFlag{false};
 
   IMMDeviceEnumerator* enumerator=nullptr;
   IMMDevice* device=nullptr;
@@ -70,39 +62,35 @@ public:
   std::thread captureThread;
   Napi::ThreadSafeFunction dataCb,errCb;
 
-  Capture():refRing(RING_SIZE,0.0f){}
-  ~Capture(){stop();cleanup();}
+  Capture()=default;
+  ~Capture(){stop();}
 
-  void start(Napi::Function dataCbFn,Napi::Function errCbFn){
-    if(runningFlag)return;
+  void start(Napi::Function dataCbFn,Napi::Function errCbFn,DWORD targetPid,bool includeTarget){
+    if(runningFlag.load())return;
     dataCb=Napi::ThreadSafeFunction::New(
       dataCbFn.Env(),dataCbFn,Napi::String::New(dataCbFn.Env(),"data"),0,1
     );
     errCb=Napi::ThreadSafeFunction::New(
       errCbFn.Env(),errCbFn,Napi::String::New(errCbFn.Env(),"err"),0,1
     );
-    HRESULT hr=initWasapi();
+    HRESULT hr=initWasapi(targetPid,includeTarget);
     if(FAILED(hr)){
+      if(dataCb){dataCb.Release();dataCb=nullptr;}
+      if(errCb){errCb.Release();errCb=nullptr;}
+      cleanup();
       char m[128];sprintf(m,"WASAPI init failed: 0x%08lX",(unsigned long)hr);
       throw Napi::Error::New(dataCbFn.Env(),m);
     }
-    runningFlag=true;
+    runningFlag.store(true);
     captureThread=std::thread(&Capture::loop,this);
   }
 
   void stop(){
-    runningFlag=false;
+    runningFlag.store(false);
     if(captureThread.joinable())captureThread.join();
     if(dataCb){dataCb.Release();dataCb=nullptr;}
     if(errCb){errCb.Release();errCb=nullptr;}
-  }
-
-  void pushRef(float* data,size_t frames){
-    std::lock_guard<std::mutex> lk(refMutex);
-    for(size_t i=0;i<frames;i++){
-      refRing[(refWritten+i)%RING_SIZE]=data[i];
-    }
-    refWritten+=frames;
+    cleanup();
   }
 
   Napi::Object getFormat(Napi::Env env){
@@ -116,21 +104,22 @@ public:
   }
 
 private:
-  HRESULT initWasapi(){
+  HRESULT initWasapi(DWORD targetPid,bool includeTarget){
     HRESULT hr=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
     if(SUCCEEDED(hr))comInitialized=true;
     else if(hr!=RPC_E_CHANGED_MODE)return hr;
 
-    // Capture every Windows render stream except Pair and its child processes.
-    // Unlike endpoint loopback, this does not need an audio-device selection
-    // and therefore cannot feed the remote caller's Pair audio back to them.
+    // A window/application share captures its owning process and descendants,
+    // matching Discord's application-audio model. A full-display share captures
+    // every render stream except Pair and its descendants, so voice playback can
+    // never be sent back to the person watching.
     ActivationState state;
     state.event=CreateEvent(nullptr,FALSE,FALSE,nullptr);
     if(!state.event)return HRESULT_FROM_WIN32(GetLastError());
     AUDIOCLIENT_ACTIVATION_PARAMS params={};
     params.ActivationType=AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
-    params.ProcessLoopbackParams.TargetProcessId=GetCurrentProcessId();
-    params.ProcessLoopbackParams.ProcessLoopbackMode=PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
+    params.ProcessLoopbackParams.TargetProcessId=targetPid?targetPid:GetCurrentProcessId();
+    params.ProcessLoopbackParams.ProcessLoopbackMode=includeTarget?PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE:PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
     PROPVARIANT prop={};
     prop.vt=VT_BLOB;prop.blob.cbSize=sizeof(params);prop.blob.pBlobData=(BYTE*)&params;
     auto* handler=new ActivationHandler(&state);
@@ -166,68 +155,38 @@ private:
     hr=audioClient->SetEventHandle(captureEvent);
     if(FAILED(hr))return hr;
     hr=audioClient->GetService(__uuidof(IAudioCaptureClient),(void**)&captureClient);
-    return hr;
+    if(FAILED(hr))return hr;
+    // Start synchronously so an unavailable/invalid loopback endpoint makes the
+    // start IPC fail immediately. Reporting only the initialized format while a
+    // worker later fails to start produced a misleading silent "live" track.
+    return audioClient->Start();
   }
 
-  int diagCounter=0;
-  int totalProcessed=0;
   void loop(){
-    HRESULT hr=audioClient->Start();
-    if(FAILED(hr)){emitErr("start failed");return;}
-    while(runningFlag){
+    HRESULT hr=S_OK;
+    while(runningFlag.load()){
       if(WaitForSingleObject(captureEvent,500)!=WAIT_OBJECT_0)continue;
       UINT32 pktLen=0;
       hr=captureClient->GetNextPacketSize(&pktLen);
-      while(pktLen>0&&runningFlag){
+      if(FAILED(hr)){emitHr("GetNextPacketSize failed",hr);runningFlag.store(false);break;}
+      while(pktLen>0&&runningFlag.load()){
         BYTE* data=nullptr;UINT32 frames=0;DWORD flags=0;
         hr=captureClient->GetBuffer(&data,&frames,&flags,nullptr,nullptr);
-        if(FAILED(hr)||frames==0){if(FAILED(hr))break;captureClient->ReleaseBuffer(frames);hr=captureClient->GetNextPacketSize(&pktLen);continue;}
-        if(!(flags&AUDCLNT_BUFFERFLAGS_SILENT))process(data,frames);
+        if(FAILED(hr)){emitHr("GetBuffer failed",hr);runningFlag.store(false);break;}
+        if(frames==0){captureClient->ReleaseBuffer(0);hr=captureClient->GetNextPacketSize(&pktLen);if(FAILED(hr)){emitHr("GetNextPacketSize failed",hr);runningFlag.store(false);}continue;}
+        // Silent packets still prove that the loopback route is healthy. Emit
+        // zeroes for them so the renderer can attach its WebRTC audio track
+        // before desktop audio starts playing instead of falsely timing out.
+        process(data,frames,(flags&AUDCLNT_BUFFERFLAGS_SILENT)!=0);
         captureClient->ReleaseBuffer(frames);
         hr=captureClient->GetNextPacketSize(&pktLen);
+        if(FAILED(hr)){emitHr("GetNextPacketSize failed",hr);runningFlag.store(false);break;}
       }
     }
     audioClient->Stop();
   }
 
-  void updateDelay(float* captured,int frames,int sr){
-    if(refWritten<(uint64_t)(sr*0.05))return;
-    static int counter=0;
-    if(++counter%30!=0)return;
-
-    int maxD=std::min((int)(sr*0.15),RING_SIZE-frames-256);
-    int minD=(int)(sr*0.01);
-    if(minD<256)minD=256;
-    if(maxD<=minD)return;
-
-    float bestCorr=0;int bestD=bestDelay;
-    int n=std::min(frames,256);
-    for(int d=minD;d<maxD;d+=4){
-      float c=0,nc=0,nr=0;
-      for(int i=0;i<n;i++){
-        float cap=captured[i];
-        float ref=refRing[(refWritten-d+i)%RING_SIZE];
-        c+=cap*ref;nc+=cap*cap;nr+=ref*ref;
-      }
-      float denom=sqrtf(nc*nr);
-      if(denom>1e-10f&&c/denom>bestCorr){bestCorr=c/denom;bestD=d;}
-    }
-    if(bestCorr>0.05f)bestDelay=(bestDelay*3+bestD)/4;
-  }
-
-  void diag(){
-    diagCounter++;
-    if(diagCounter%100!=0)return;
-    char m[128];
-    {
-      std::lock_guard<std::mutex> lk(refMutex);
-      sprintf(m,"[AEC] diag: delay=%d gain=%.4f refWritten=%llu total=%d",bestDelay,estimatedGain,(unsigned long long)refWritten,totalProcessed);
-    }
-    errCb.NonBlockingCall([m](Napi::Env e,Napi::Function cb){cb.Call({Napi::String::New(e,m)});});
-  }
-
-  void process(BYTE* data,UINT32 frames){
-    totalProcessed+=frames;
+  void process(BYTE* data,UINT32 frames,bool silent=false){
     const int ch=mixFormat&&mixFormat->nChannels>0?mixFormat->nChannels:2;
     const int outCh=2;
     // Process-loopback already excludes Pair's process tree, so call playback is
@@ -236,7 +195,9 @@ private:
     // smear desktop sound.
     float* buf=(float*)calloc((size_t)frames*(size_t)outCh,sizeof(float));
     if(!buf)return;
-    if(mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT){
+    if(silent||!data){
+      // calloc already initialized the interleaved stereo output to silence.
+    }else if(mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT){
       float* f=(float*)data;
       for(UINT32 i=0;i<frames;i++){
         float L=f[i*ch+0];
@@ -279,38 +240,45 @@ private:
     });
   }
 
+  void emitHr(const char* operation,HRESULT hr){
+    char message[160];
+    sprintf(message,"%s: 0x%08lX",operation?operation:"capture failed",(unsigned long)hr);
+    emitErr(message);
+  }
+
   void cleanup(){
-    if(captureEvent)CloseHandle(captureEvent);
-    if(captureClient)captureClient->Release();
-    if(audioClient)audioClient->Release();
-    if(mixFormat)CoTaskMemFree(mixFormat);
-    if(device)device->Release();
-    if(enumerator)enumerator->Release();
-    if(comInitialized)CoUninitialize();
+    if(captureEvent){CloseHandle(captureEvent);captureEvent=nullptr;}
+    if(captureClient){captureClient->Release();captureClient=nullptr;}
+    if(audioClient){audioClient->Release();audioClient=nullptr;}
+    if(mixFormat){CoTaskMemFree(mixFormat);mixFormat=nullptr;}
+    if(device){device->Release();device=nullptr;}
+    if(enumerator){enumerator->Release();enumerator=nullptr;}
+    if(comInitialized){CoUninitialize();comInitialized=false;}
+    bufFrames=0;
   }
 };
 
 static Napi::Value Start(const Napi::CallbackInfo& info){
   auto* cap=static_cast<Capture*>(info.Data());
   if(!info[0].IsFunction()||!info[1].IsFunction())throw Napi::Error::New(info.Env(),"args: dataCallback, errorCallback");
-  cap->start(info[0].As<Napi::Function>(),info[1].As<Napi::Function>());
+  DWORD targetPid=info.Length()>2&&info[2].IsNumber()?(DWORD)info[2].As<Napi::Number>().Uint32Value():GetCurrentProcessId();
+  bool includeTarget=info.Length()>3&&info[3].IsBoolean()&&info[3].As<Napi::Boolean>().Value();
+  cap->start(info[0].As<Napi::Function>(),info[1].As<Napi::Function>(),targetPid,includeTarget);
   return info.Env().Undefined();
+}
+static Napi::Value WindowProcessId(const Napi::CallbackInfo& info){
+  if(info.Length()<1||!info[0].IsString())return Napi::Number::New(info.Env(),0);
+  const std::string id=info[0].As<Napi::String>().Utf8Value();
+  if(id.rfind("window:",0)!=0)return Napi::Number::New(info.Env(),0);
+  const size_t end=id.find(':',7);
+  const std::string raw=id.substr(7,end==std::string::npos?std::string::npos:end-7);
+  char* tail=nullptr;const unsigned long long value=std::strtoull(raw.c_str(),&tail,10);
+  if(!value||!tail||*tail)return Napi::Number::New(info.Env(),0);
+  DWORD pid=0;GetWindowThreadProcessId(reinterpret_cast<HWND>((uintptr_t)value),&pid);
+  return Napi::Number::New(info.Env(),(double)pid);
 }
 static Napi::Value Stop(const Napi::CallbackInfo& info){
   static_cast<Capture*>(info.Data())->stop();
-  return info.Env().Undefined();
-}
-static Napi::Value PushRef(const Napi::CallbackInfo& info){
-  float* data=nullptr;
-  size_t len=0;
-  if(info[0].IsBuffer()){
-    auto buf=info[0].As<Napi::Buffer<float>>();
-    data=buf.Data();len=buf.Length();
-  }else if(info[0].IsTypedArray()){
-    auto arr=info[0].As<Napi::Float32Array>();
-    data=arr.Data();len=arr.ElementLength();
-  }
-  if(data&&len>0)static_cast<Capture*>(info.Data())->pushRef(data,len);
   return info.Env().Undefined();
 }
 static Napi::Value GetFormat(const Napi::CallbackInfo& info){
@@ -320,8 +288,8 @@ static Napi::Object Init(Napi::Env env,Napi::Object exports){
   auto* cap=new Capture();
   exports.Set("start",Napi::Function::New(env,Start,"start",cap));
   exports.Set("stop",Napi::Function::New(env,Stop,"stop",cap));
-  exports.Set("pushReference",Napi::Function::New(env,PushRef,"pushReference",cap));
   exports.Set("getFormat",Napi::Function::New(env,GetFormat,"getFormat",cap));
+  exports.Set("windowProcessId",Napi::Function::New(env,WindowProcessId,"windowProcessId"));
   napi_add_env_cleanup_hook(env,[](void* d){delete static_cast<Capture*>(d);},cap);
   return exports;
 }

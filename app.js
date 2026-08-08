@@ -4,24 +4,26 @@ const updateBanner=$('#updateBanner'),updateTitle=$('#updateTitle'),updateDetail
 function renderUpdateStatus(status){if(!updateBanner||!status)return;clearTimeout(updateHideTimer);const state=String(status.state||'idle');updateBanner.className='update-banner update-'+state;updateTitle.textContent=status.message||'Checking for updates…';updateDetails.textContent=status.version?'Pair '+status.version:'';updateBanner.hidden=state==='idle'||state==='current';if(state==='current')updateHideTimer=setTimeout(()=>{updateBanner.hidden=true},1200)}
 if(window.pairUpdates){window.pairUpdates.getStatus().then(renderUpdateStatus).catch(()=>{});window.pairUpdates.onStatus(renderUpdateStatus)}
 let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promise.resolve(),pairSignalBusy=false,pairReplyAccepted=false;let CHUNK=1024*1024;const MAX=200*1024**3;
-const SCREEN_PRESETS={'480p30':{width:{ideal:854,max:854},height:{ideal:480,max:480},frameRate:{ideal:30,max:30}},'720p30':{width:{ideal:1280,max:1280},height:{ideal:720,max:720},frameRate:{ideal:30,max:30}},'720p60':{width:{ideal:1280,max:1280},height:{ideal:720,max:720},frameRate:{ideal:60,max:60}},'1080p30':{width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:30,max:30}},'1080p60':{width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:60,max:60}},'1440p60':{width:{ideal:2560,max:2560},height:{ideal:1440,max:1440},frameRate:{ideal:60,max:60}},'4k60':{width:{ideal:3840,max:3840},height:{ideal:2160,max:2160},frameRate:{ideal:60,max:60}}};
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
 let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0,reconnectCall=false;
 // Screen share: video via getDisplayMedia; system audio only via native
 // process-loopback / PipeWire so Pair's own call playback is never re-captured.
-let screenNative=false,screenRefCtx=null,screenRefNode=null,screenOutCtx=null,screenOutNode=null,screenOutDest=null,screenCleanBuf=null,screenCleanWP=0,screenCleanRP=0,screenCleanAvail=0,screenCaptureCleanup=null;
+let screenNative=false,screenOutCtx=null,screenOutDest=null,screenCaptureCleanup=null;
 // Direct handle to the audio transceiver created in setupPeer, so startCall can
 // always reuse it (never add a second m-line). Nulled on disconnect/teardown.
 let audioTransceiver=null;
 // Keep the interface fully usable while this build is being tested without a
 // second device. Network-only actions stay local and are clearly labelled.
-const LOCAL_TEST_MODE=true;
+// Local-only controls are opt-in for development. Packaged builds must never
+// present themselves as a test client or enable call/share actions before a
+// real peer connection exists.
+const LOCAL_TEST_MODE=new URLSearchParams(location.search).get('testMode')==='1';
 // Per-connection sound flags so the chimes don't double/triple: chat+files both
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
 let connectSoundDone=false,friendLeftNotified=false,friendInCall=false,friendPresenceTimer=null,selfInCall=false,selfPresenceTimer=null;
 let screenTransceiver=null,screenActive=false,screenStarting=false,screenStream=null,screenGen=0,screenSenders=[],screenStatsTimer=null,screenStatsLast=null,remoteScreenExpected=false,screenAudioDebug='';
-const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio'),connectCard=$('#connectCard'),addFriendBtn=$('#addFriend'),panelBackdrop=$('#panelBackdrop'),profileBtn=$('#profileBtn'),profileInput=$('#profileInput'),profileAdjust=$('#profileAdjust'),profileEditor=$('#profileEditor'),profileZoom=$('#profileZoom'),profileX=$('#profileX'),profileY=$('#profileY'),profileDone=$('#profileDone'),friendAvatar=$('#friendAvatar'),voicePanel=$('#voicePanel'),settingsPanel=$('#settingsPanel'),settingsAvatar=$('#settingsAvatar'),settingsChangePhoto=$('#settingsChangePhoto'),settingsAdjustPhoto=$('#settingsAdjustPhoto'),settingsRemovePhoto=$('#settingsRemovePhoto'),displayNameInput=$('#displayName'),yourNameEl=$('#yourName'),friendNameEl=$('#friendName'),inputDevice=$('#inputDevice'),outputDevice=$('#outputDevice'),voiceProcessing=$('#voiceProcessing'),voiceInputMode=$('#voiceInputMode'),pushToTalkSettings=$('#pushToTalkSettings'),pushToTalkKeyButton=$('#pushToTalkKey'),pushToTalkDelayInput=$('#pushToTalkDelay'),pushToTalkDelayValue=$('#pushToTalkDelayValue'),deviceHint=$('#deviceHint'),testMicrophone=$('#testMicrophone'),reduceMotion=$('#reduceMotion'),soundEffects=$('#soundEffects'),shareProfile=$('#shareProfile'),rememberInvite=$('#rememberInvite'),hardwareAcceleration=$('#hardwareAcceleration'),hardwareHint=$('#hardwareHint');
+const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio'),connectCard=$('#connectCard'),addFriendBtn=$('#addFriend'),panelBackdrop=$('#panelBackdrop'),profileBtn=$('#profileBtn'),profileInput=$('#profileInput'),profileAdjust=$('#profileAdjust'),profileEditor=$('#profileEditor'),profileZoom=$('#profileZoom'),profileX=$('#profileX'),profileY=$('#profileY'),profileDone=$('#profileDone'),friendAvatar=$('#friendAvatar'),voicePanel=$('#voicePanel'),roomTitle=$('#roomTitle'),settingsPanel=$('#settingsPanel'),settingsAvatar=$('#settingsAvatar'),settingsChangePhoto=$('#settingsChangePhoto'),settingsAdjustPhoto=$('#settingsAdjustPhoto'),settingsRemovePhoto=$('#settingsRemovePhoto'),displayNameInput=$('#displayName'),yourNameEl=$('#yourName'),friendNameEl=$('#friendName'),inputDevice=$('#inputDevice'),outputDevice=$('#outputDevice'),voiceProcessing=$('#voiceProcessing'),voiceInputMode=$('#voiceInputMode'),pushToTalkSettings=$('#pushToTalkSettings'),pushToTalkKeyButton=$('#pushToTalkKey'),pushToTalkDelayInput=$('#pushToTalkDelay'),pushToTalkDelayValue=$('#pushToTalkDelayValue'),deviceHint=$('#deviceHint'),testMicrophone=$('#testMicrophone'),reduceMotion=$('#reduceMotion'),soundEffects=$('#soundEffects'),shareProfile=$('#shareProfile'),rememberInvite=$('#rememberInvite'),hardwareAcceleration=$('#hardwareAcceleration'),hardwareHint=$('#hardwareHint');
 let profileAvatar='',profileFrame={zoom:100,x:50,y:50},profileIdentity=makeProfileIdentity(),profileName='You',friendName='Friend',inputDeviceId='default',outputDeviceId='default',voiceProcessingEnabled=false,voiceInputModeValue='voice',pushToTalkKey='Space',pushToTalkDelay=0,pushToTalkHeld=false,pushToTalkCapturing=false,pushToTalkReleaseTimer=null,soundEnabled=true,profileSharing=true,rememberInviteCode=true,micTestStream=null,micTestSource=null,micTestGain=null;
 // A 5 MiB source GIF expands to roughly 6.7 MiB as a data URL. This remains
 // below Pair's negotiated data-channel limit while allowing proper animations.
@@ -41,8 +43,9 @@ document.addEventListener('pointerdown',warmAudio,{once:true});
 document.addEventListener('keydown',warmAudio,{once:true});
 function tone(ctx,freq,start,dur,type='sine',gain=0.18){const o=ctx.createOscillator(),g=ctx.createGain();o.type=type;o.frequency.setValueAtTime(freq,ctx.currentTime+start);g.gain.setValueAtTime(0,ctx.currentTime+start);g.gain.linearRampToValueAtTime(gain,ctx.currentTime+start+0.02);g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+start+dur);o.connect(g).connect(ctx.destination);o.start(ctx.currentTime+start);o.stop(ctx.currentTime+start+dur+0.02)}
 function setParticipant(el,on){if(el===participantFriend){setFriendPresence(on,{sound:false});return}if(el===participantYou){setSelfPresence(on);return}const dot=el.querySelector('.indicator');if(dot)dot.classList.toggle('on',on)}
+function syncVoiceStage(){voicePanel.classList.toggle('call-active',!!(callActive||friendInCall))}
 function setFriendPresence(on,{animate=true,sound=true}={}){
-  const wasPresent=friendInCall;friendInCall=on;const dot=participantFriend.querySelector('.indicator');if(dot)dot.classList.toggle('on',on);
+  const wasPresent=friendInCall;friendInCall=on;syncVoiceStage();const dot=participantFriend.querySelector('.indicator');if(dot)dot.classList.toggle('on',on);
   if(friendPresenceTimer){clearTimeout(friendPresenceTimer);friendPresenceTimer=null}
   if(on){
     participantFriend.classList.remove('is-absent','is-leaving');participantFriend.removeAttribute('aria-hidden');
@@ -55,7 +58,7 @@ function setFriendPresence(on,{animate=true,sound=true}={}){
   if(sound)playSound('friend-leave');
 }
 function setSelfPresence(on){
-  const wasPresent=selfInCall;selfInCall=on;const dot=participantYou.querySelector('.indicator');if(dot)dot.classList.toggle('on',on);
+  const wasPresent=selfInCall;selfInCall=on;syncVoiceStage();const dot=participantYou.querySelector('.indicator');if(dot)dot.classList.toggle('on',on);
   if(selfPresenceTimer){clearTimeout(selfPresenceTimer);selfPresenceTimer=null}
   if(on){participantYou.classList.remove('is-absent','is-leaving');participantYou.removeAttribute('aria-hidden');if(!wasPresent){participantYou.classList.remove('is-entering');void participantYou.offsetWidth;participantYou.classList.add('is-entering')}return}
   if(!wasPresent){participantYou.classList.remove('is-entering','is-leaving');participantYou.classList.add('is-absent');participantYou.setAttribute('aria-hidden','true');return}
@@ -502,13 +505,15 @@ function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.in
 // that ignore those parameters from silently collapsing a high-motion share to
 // the old 16 Mbps ceiling.
 function patchVideoSdp(sdp){
-  sdp=sdp.replace(/\r\n/g,'\n');
-  return sdp.replace(/^m=video .*\n(?:[^m].*\n)*/gm,m=>{
-    let section=m;
-    section=section.replace(/\nb=AS:\d+/g,'');
-    section=section.replace(/\na=x-google-(?:min|max)-bitrate:\d+/g,'');
-    return section+'a=x-google-max-bitrate:140000\n';
-  });
+  const eol=sdp.includes('\r\n')?'\r\n':'\n';
+  const cap=Math.round(Math.max(4,Math.min(160,Number(screenBitrateMbps)||120))*1000000);
+  return sdp.split(/(?=^m=)/m).map(section=>{
+    if(!section.startsWith('m=video '))return section;
+    const lines=section.split(/\r?\n/).filter(line=>!/^b=(?:AS|TIAS):/i.test(line)&&!/^a=x-google-(?:min|max)-bitrate:/i.test(line));
+    const connection=lines.findIndex(line=>line.startsWith('c='));
+    lines.splice(connection>=0?connection+1:1,0,'b=TIAS:'+cap);
+    return lines.join(eol);
+  }).join('');
 }
 function patchSdp(sdp){return patchVideoSdp(patchOpusSdp(sdp))}
 $('#createOffer').onclick=async()=>{try{if(pc||signaling)disconnectRoom();pairSignalBusy=false;pairReplyAccepted=false;processSignal.disabled=false;role='offer';signalIn.value='';ssSet('savedInviteCode',null);setOutgoingCode('');processSignal.textContent='Finish connection';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Invite ready. Copy it, send it to your friend, then paste their reply in step 2.'}catch(e){pairHint.textContent='Could not create invite: '+(e?.message||e)}};
@@ -662,17 +667,19 @@ enableLocalTestControls();
 
 async function ss(key){if(window.pairSettings){try{return await window.pairSettings.get(key)}catch{}}try{return localStorage.getItem('pair.'+key)}catch{}}
 async function ssSet(key,val){if(window.pairSettings){try{await window.pairSettings.set(key,val);return}catch{}}try{if(val==null)localStorage.removeItem('pair.'+key);else localStorage.setItem('pair.'+key,val)}catch{}}
-let screenCursor='always',screenContentHint='motion',screenBitrateMbps=20,screenCodec='auto',shareResolution=1080,shareFrameRate=30;
+let screenCursor='always',screenContentHint='motion',screenBitrateMbps=120,screenCodec='auto',shareResolution='source',shareFrameRate=60;
+function syncScreenPreset(){const value=`${shareResolution}p${shareFrameRate}`.replace('sourcep','source');if([...screenPreset.options].some(option=>option.value===value))screenPreset.value=value}
 function openSettingsTab(name){document.querySelectorAll('.settings-tab').forEach(tab=>{const active=tab.dataset.settingsTab===name;tab.classList.toggle('active',active);tab.setAttribute('aria-selected',String(active))});document.querySelectorAll('.settings-page').forEach(page=>{const active=page.dataset.settingsPage===name;page.classList.toggle('active',active);page.hidden=!active})}
 function addScreenShareSettings(){
   const tab=document.createElement('button');tab.type='button';tab.className='settings-tab';tab.dataset.settingsTab='screen';tab.setAttribute('role','tab');tab.setAttribute('aria-selected','false');tab.textContent='Screen sharing';
   const page=document.createElement('section');page.className='settings-section settings-page';page.dataset.settingsPage='screen';page.setAttribute('role','tabpanel');page.hidden=true;
-  page.innerHTML='<div><h3>Screen sharing</h3><p>Set your preferred capture behavior before starting a share. Changes apply to your next share.</p></div><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">20 Mbps</output></span><input id="screenBitrateSetting" type="range" min="2" max="120" value="20" step="1" /></label><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic (recommended)</option><option value="H264">H.264</option><option value="H265">H.265 / HEVC</option><option value="VP9">VP9</option><option value="AV1">AV1</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — games and video</option><option value="detail">Detail — text and documents</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Codec support depends on both devices. Automatic is the most compatible choice.</p>';
+  page.innerHTML='<div><h3>Screen sharing</h3><p>Pair preserves source resolution and frame rate until the network or encoder reaches a real limit.</p></div><label class="settings-field"><span>Resolution</span><select id="screenResolutionSetting"><option value="source">Source — sharpest</option><option value="2160">4K</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option></select></label><label class="settings-field"><span>Frame rate</span><select id="screenFrameRateSetting"><option value="60">60 fps</option><option value="30">30 fps</option></select></label><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">120 Mbps</output></span><input id="screenBitrateSetting" type="range" min="4" max="160" value="120" step="1" /></label><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic — hardware-friendly</option><option value="H264">H.264</option><option value="H265">H.265 / HEVC</option><option value="VP9">VP9</option><option value="AV1">AV1</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — games and video</option><option value="detail">Detail — text and documents</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Automatic starts with H.264 for broad hardware encoding, then negotiates compatible fallbacks. Pair still adapts below the ceiling when the connection cannot sustain it.</p><div class="settings-inline-actions"><button id="testScreenAudio" type="button">Test isolated computer audio</button></div><p id="screenAudioTestStatus" class="settings-hint" aria-live="polite">Checks the OS isolation route directly; it does not depend on microphone-device enumeration.</p>';
   document.querySelector('.settings-tabs').append(tab);document.querySelector('.settings-pages').append(page);tab.onclick=()=>openSettingsTab('screen');
-  const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),codec=$('#screenCodecSetting'),contentHint=$('#screenContentHintSetting'),cursor=$('#screenCursorSetting');
-  const updateBitrate=()=>{screenBitrateMbps=Math.max(2,Math.min(120,Number(bitrate.value)||20));bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';ssSet('screenBitrate',String(screenBitrateMbps))};
-  bitrate.oninput=updateBitrate;enableRangeDrag(bitrate);codec.onchange=()=>{screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};
-  return async()=>{const b=Number(await ss('screenBitrate'));screenBitrateMbps=Number.isFinite(b)&&b>=2&&b<=120?b:20;bitrate.value=String(screenBitrateMbps);bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/118*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';const v=await ss('screenCodec');screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(v)?v:'auto';codec.value=screenCodec;const c=await ss('screenCursor');screenCursor=['always','motion','never'].includes(c)?c:'always';cursor.value=screenCursor;const h=await ss('screenContentHint');screenContentHint=h==='detail'?'detail':'motion';contentHint.value=screenContentHint};
+  const resolution=$('#screenResolutionSetting'),frameRate=$('#screenFrameRateSetting'),bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),codec=$('#screenCodecSetting'),contentHint=$('#screenContentHintSetting'),cursor=$('#screenCursorSetting'),audioTest=$('#testScreenAudio'),audioTestStatus=$('#screenAudioTestStatus');
+  const updateBitrate=()=>{screenBitrateMbps=Math.max(4,Math.min(160,Number(bitrate.value)||120));bitrate.style.setProperty('--range-fill',((screenBitrateMbps-4)/156*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';ssSet('screenBitrate',String(screenBitrateMbps))};
+  resolution.onchange=()=>{shareResolution=['source','720','1080','1440','2160'].includes(resolution.value)?resolution.value:'source';syncScreenPreset();ssSet('shareResolution',shareResolution)};frameRate.onchange=()=>{shareFrameRate=Number(frameRate.value)===30?30:60;syncScreenPreset();ssSet('shareFrameRate',String(shareFrameRate))};bitrate.oninput=updateBitrate;enableRangeDrag(bitrate);codec.onchange=()=>{screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};
+  audioTest.onclick=()=>testScreenAudioIsolation(audioTest,audioTestStatus);
+  return async()=>{const b=Number(await ss('screenBitrate'));screenBitrateMbps=Number.isFinite(b)&&b>=4&&b<=160?b:120;bitrate.value=String(screenBitrateMbps);bitrate.style.setProperty('--range-fill',((screenBitrateMbps-4)/156*100)+'%');bitrateValue.textContent=screenBitrateMbps+' Mbps';const v=await ss('screenCodec');screenCodec=['auto','H264','H265','VP9','AV1','VP8'].includes(v)?v:'auto';codec.value=screenCodec;const c=await ss('screenCursor');screenCursor=['always','motion','never'].includes(c)?c:'always';cursor.value=screenCursor;const h=await ss('screenContentHint');screenContentHint=h==='detail'?'detail':'motion';contentHint.value=screenContentHint;const savedResolution=await ss('shareResolution');shareResolution=['source','720','1080','1440','2160'].includes(savedResolution)?savedResolution:'source';resolution.value=shareResolution;const savedFps=Number(await ss('shareFrameRate'));shareFrameRate=savedFps===30?30:60;frameRate.value=String(shareFrameRate);syncScreenPreset()};
 }
 const restoreScreenShareSettings=addScreenShareSettings();
 document.querySelectorAll('.settings-tab').forEach(tab=>tab.onclick=()=>openSettingsTab(tab.dataset.settingsTab));
@@ -704,7 +711,7 @@ function setAvatar(el,data){if(!el)return;const safe=validProfileData(data)?data
 function normalizeFrame(frame){return {zoom:Math.max(40,Math.min(180,Number(frame?.zoom)||100)),x:Math.max(0,Math.min(100,Number(frame?.x??50))),y:Math.max(0,Math.min(100,Number(frame?.y??50)))}}
 function validProfileIdentity(value){return typeof value==='string'&&/^[a-z0-9]{12,32}$/i.test(value)}
 function normalizeProfileName(value,fallback){if(typeof value!=='string')return fallback;const name=value.replace(/[\u0000-\u001f\u007f]/g,'').replace(/\s+/g,' ').trim().slice(0,32);return name||fallback}
-function renderParticipantNames(){yourNameEl.textContent=profileName;friendNameEl.textContent=friendName;displayNameInput.value=profileName}
+function renderParticipantNames(){yourNameEl.textContent=profileName;friendNameEl.textContent=friendName;if(roomTitle)roomTitle.textContent=friendName&&friendName!=='Friend'?friendName:'Private room';displayNameInput.value=profileName}
 function updateProfileName(value,{persist=true,share=true}={}){profileName=normalizeProfileName(value,'You');renderParticipantNames();if(persist)ssSet('profileName',profileName);if(share)announceProfile()}
 function handleProfileNameMessage(event){try{if(typeof event.data!=='string')return;const message=JSON.parse(event.data);if(message?.t!=='profile-name')return;friendName=normalizeProfileName(message.v,'Friend');renderParticipantNames()}catch{}}
 function makeProfileIdentity(){const bytes=crypto.getRandomValues(new Uint8Array(9));return [...bytes].map(v=>v.toString(36).padStart(2,'0')).join('')}
@@ -733,24 +740,26 @@ profileBtn.onclick=()=>openSettings(true);profileAdjust.onclick=()=>openSettings
 
 let signaling;
 function secureSignalAddress(address){try{const u=new URL(address);const loopback=['localhost','127.0.0.1','[::1]','::1'].includes(u.hostname);return u.protocol==='wss:'||(u.protocol==='ws:'&&loopback)?u.href:null}catch{return null}}
+function roomSignalAddress(address,room){const safe=secureSignalAddress(address);if(!safe)return null;const u=new URL(safe);u.searchParams.set('room',String(room).trim().toUpperCase());return u.href}
 async function automaticPair(kind){
   // Tear down any prior session so a second Host/Join click (or host→leave→host)
   // doesn't leak an old pc/signaling whose handlers fire stale signals.
   reconnectCall=callActive;if(pc||signaling)disconnectRoom();
-  role=kind; const address=secureSignalAddress($('#signalServer').value.trim()); const room=$('#roomCode').value.trim();
-  if(!address)return pairHint.textContent='Use wss:// for remote signaling (ws:// is allowed only on localhost), or use direct pairing instead.';
+  role=kind; const baseAddress=secureSignalAddress($('#signalServer').value.trim()); const room=$('#roomCode').value.trim();
+  if(!baseAddress)return pairHint.textContent='Use wss:// for remote signaling (ws:// is allowed only on localhost), or use direct pairing instead.';
   if(room.length<16)return pairHint.textContent='Use a room code with at least 16 characters.';
+  const address=roomSignalAddress(baseAddress,room);
   pairHint.textContent='Connecting to signaling server…'; signaling=new WebSocket(address);
   signaling.onopen=()=>{try{signaling.send(JSON.stringify({type:'join',room}))}catch{}pairHint.textContent='Waiting for your friend in room '+room.toUpperCase()+'…'};
   signaling.onerror=()=>pairHint.textContent='Could not reach the signaling server. Check the address and firewall.';
   signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);
-    if(message.type==='full'){pairHint.textContent='That room already has two people.';return}
+    if(message.type==='full'){pairHint.textContent='That room already has two people.';try{signaling?.close()}catch{}signaling=null;return}
     if(message.type==='peer-ready'&&role==='host'){
       reconnectCall=callActive;setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
       const offer=await pc.createOffer();if(!pc)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
       logCallEvent('Diag: offer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
       signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
-      openStreamRelay(address,room);pairHint.textContent='Offer sent. Connecting…';
+      openStreamRelay(baseAddress,room);pairHint.textContent='Offer sent. Connecting…';
       // If the friend never answers (wrong role, different room, or an old build
       // without TURN), don't hang silently — tell them what to check.
       setTimeout(()=>{if(pc&&pc.connectionState!=='connected'){pairHint.textContent='No answer from your friend after 20s. Make sure exactly ONE of you clicked Host and the other clicked Join, you are in the SAME room code, and both are on the latest version (v1.0.0+ with TURN).'}},20000)
@@ -775,7 +784,7 @@ async function automaticPair(kind){
         const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
         logCallEvent('Diag: answer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
         signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
-        openStreamRelay(address,room);pairHint.textContent='Answer sent. Connecting…'
+        openStreamRelay(baseAddress,room);pairHint.textContent='Answer sent. Connecting…'
       }else if(remote.kind==='answer'&&role==='host'){
         logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
         await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;if(!await derive(pc._kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}
@@ -785,7 +794,7 @@ async function automaticPair(kind){
         logCallEvent('Diag: audio currentDir='+cd);
         // If the friend's answer didn't include an audio sender, startCall will
         // add a transceiver and renegotiate instead of relying on the unmatched one.
-        openStreamRelay(address,room);pairHint.textContent='Secure connection established.'
+        openStreamRelay(baseAddress,room);pairHint.textContent='Secure connection established.'
       }else if(remote.kind==='reneg-offer'){
         // Either peer can initiate screen share, so both roles must be able to
         // answer a reneg-offer.
@@ -802,7 +811,7 @@ async function automaticPair(kind){
 }
 // Open the separate relay socket used to move file bytes. Same host + room as
 // the signaling socket; the server relays binary frames to the other peer.
-function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(address);streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
+function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(roomSignalAddress(address,room+':stream'));streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
 $('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
 function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}
   // Tear down an active share before closing the peer connection so WASAPI
@@ -911,7 +920,7 @@ async function endCall(silent){
   // (disconnectRoom), NOT on endCall. A temporary ICE drop would otherwise
   // null the srcObject and ontrack never fires again for the same transceiver,
   // permanently killing audio for the session.
-  callActive=false;micMuted=false;setRemoteCallAudio(false);
+  callActive=false;micMuted=false;syncVoiceStage();setRemoteCallAudio(false);
   callBtn.textContent='Start call';callBtn.title='Start voice call';muteBtn.hidden=true;volumeSlider.hidden=true;volumeValue.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
   if(!silent){callBtn.disabled=!pc&&!LOCAL_TEST_MODE;playSound('leave');try{send({t:'call-end'})}catch{}}
 }
@@ -987,7 +996,7 @@ async function setupNativeScreenCapture(){
     return null;
   }
 
-  let ctx,dest,addonData=false,aecTimedOut=false;
+  let ctx,dest,addonData=false,captureReady=false,captureClosed=false,captureFailure='',outputTrack=null;
   try{
     ctx=new AudioContext({sampleRate:48000});
     if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
@@ -996,7 +1005,7 @@ async function setupNativeScreenCapture(){
     const RS=96000;const cleanBuf=new Float32Array(RS*2);
     let wp=0,avail=0;
     const unsubClean=window.pairCapture.onCleanAudio((buf,frames)=>{
-      if(aecTimedOut)return;
+      if(captureClosed)return;
       addonData=true;
       const arr=new Float32Array(buf);
       // Prefer interleaved stereo from the native addon. Older builds emit mono
@@ -1015,16 +1024,32 @@ async function setupNativeScreenCapture(){
         avail++;
       }
     });
-    const unsubError=window.pairCapture.onError(msg=>console.warn('[AUDIO] capture error:',msg));
+    const unsubError=window.pairCapture.onError(msg=>{
+      captureFailure=String(msg||'native capture failed');
+      console.warn('[AUDIO] capture error:',captureFailure);
+      // A failure after attachment must not leave a silent track labelled as
+      // healthy. End it, release native capture, and expose the actual stage in
+      // the same live status used for video quality diagnostics.
+      if(outputTrack&&outputTrack.readyState==='live'){
+        try{outputTrack.stop()}catch{}
+        screenAudioDebug=' · sound capture stopped';
+        if(screenActive)screenStatus.textContent='Sharing'+screenAudioDebug;
+        queueMicrotask(()=>cleanupNativeScreenCapture());
+      }
+    });
+    // The format notification means WASAPI initialized successfully. Do not
+    // require audible samples to be playing during this short startup window;
+    // an idle but valid loopback stream should still be attached to WebRTC.
+    const unsubFormat=window.pairCapture.onFormat?.(fmt=>{if(fmt&&fmt.available!==false)captureReady=true});
     window.pairCapture.start();
-    // Attach as soon as the first clean packets arrive so share audio starts
-    // with the video instead of waiting on a fixed multi-second delay.
+    // Attach as soon as WASAPI is ready or the first packet arrives so share
+    // audio starts with the video instead of waiting on audible desktop sound.
     const deadline=Date.now()+2500;
-    while(!addonData&&Date.now()<deadline)await new Promise(r=>setTimeout(r,40));
-    if(!addonData){
-      console.warn('[AUDIO] isolated desktop capture produced no samples; sharing video only');
-      aecTimedOut=true;
-      if(unsubClean)unsubClean();if(unsubError)unsubError();
+    while(!captureReady&&!addonData&&!captureFailure&&Date.now()<deadline)await new Promise(r=>setTimeout(r,40));
+    if(captureFailure||(!captureReady&&!addonData)){
+      console.warn('[AUDIO] isolated desktop capture did not initialize; sharing video only',captureFailure);
+      captureClosed=true;
+      if(unsubClean)unsubClean();if(unsubError)unsubError();if(unsubFormat)unsubFormat();
       window.pairCapture.stop();
       if(ctx)try{ctx.close()}catch{}
       return null;
@@ -1046,10 +1071,10 @@ async function setupNativeScreenCapture(){
     op.connect(dest);
     screenOutCtx=ctx;screenOutDest=dest;
     screenNative=true;
-    const t=dest.stream.getAudioTracks()[0];
-    try{if(t)t.contentHint='music'}catch{}
-    screenCaptureCleanup=()=>{if(unsubClean)unsubClean();if(unsubError)unsubError();window.pairCapture.stop();try{op.disconnect()}catch{}};
-    return t||null;
+    outputTrack=dest.stream.getAudioTracks()[0];
+    try{if(outputTrack)outputTrack.contentHint='music'}catch{}
+    screenCaptureCleanup=()=>{if(unsubClean)unsubClean();if(unsubError)unsubError();if(unsubFormat)unsubFormat();window.pairCapture.stop();try{op.disconnect()}catch{}};
+    return outputTrack||null;
   }catch(e){
     console.warn('[AUDIO] isolated desktop capture failed:',e?.message||e);
     if(ctx)try{ctx.close()}catch{}
@@ -1063,24 +1088,116 @@ function cleanupNativeScreenCapture(){
   if(screenOutDest){screenOutDest=null}
   if(screenOutCtx){try{screenOutCtx.close()}catch{};screenOutCtx=null}
 }
+async function testScreenAudioIsolation(button,status){
+  if(screenActive||screenStarting){status.dataset.state='error';status.textContent='Stop the current screen share before testing its audio route.';return}
+  button.disabled=true;status.dataset.state='testing';status.textContent='Testing the isolated OS audio route…';
+  const unsubs=[];
+  try{
+    if(window.pairEnv?.platform==='linux'){
+      let chunks=0,bytes=0,error='';
+      unsubs.push(window.pairEnv.onLinuxShareAudio?.(buf=>{chunks++;bytes+=buf?.byteLength||0}));
+      unsubs.push(window.pairEnv.onLinuxShareAudioError?.(message=>{error=String(message||'capture failed')}));
+      const route=await window.pairEnv.startLinuxShareAudio?.();
+      if(!route)throw new Error('PipeWire isolation route could not be created');
+      const deadline=Date.now()+2000;while(!chunks&&!error&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,40));
+      if(error)throw new Error(error);if(!chunks)throw new Error('PipeWire monitor returned no PCM packets');
+      status.dataset.state='ready';status.textContent=`Ready — isolated 48 kHz stereo route delivered ${chunks} packet${chunks===1?'':'s'} (${bytes.toLocaleString()} bytes).`;
+    }else if(window.pairEnv?.platform==='win32'){
+      let format=null,frames=0,error='';
+      unsubs.push(window.pairCapture?.onFormat?.(value=>{if(value?.available!==false)format=value}));
+      unsubs.push(window.pairCapture?.onCleanAudio?.((_buf,count)=>{frames+=Number(count)||0}));
+      unsubs.push(window.pairCapture?.onError?.(message=>{error=String(message||'capture failed')}));
+      window.pairCapture?.start?.();
+      const deadline=Date.now()+2500;while(!format&&!frames&&!error&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,40));
+      if(error)throw new Error(error);if(!format&&!frames)throw new Error('WASAPI process-loopback did not initialize');
+      status.dataset.state='ready';status.textContent=`Ready — WASAPI process isolation initialized${format?.sampleRate?' at '+format.sampleRate.toLocaleString()+' Hz':''}${format?.channels?' · '+format.channels+' channels':''}.`;
+    }else throw new Error('isolated computer-audio capture is available in the Windows and Linux apps');
+  }catch(error){
+    const message=String(error?.message||error||'unknown error').replace(/\s+/g,' ').slice(0,240);
+    status.dataset.state='error';status.textContent='Unavailable — '+message+'. Screen video remains safe; Pair will not fall back to an echoing whole-system mix.';
+  }finally{
+    if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+    else try{window.pairCapture?.stop?.()}catch{}
+    unsubs.forEach(unsub=>{try{unsub?.()}catch{}});button.disabled=false;
+  }
+}
 async function linuxShareAudioTrack(){
-  const share=await window.pairEnv?.startLinuxShareAudio?.();if(!share)return null;
-  const label=typeof share==='string'?share:share.label||'Pair Share Audio';
-  // PipeWire may expose this as “Monitor of Pair Share Audio”, so match both
-  // the friendly label and the stable Pair/Share words rather than one exact
-  // desktop-specific spelling.
-  // Electron can redact input labels until getUserMedia has been granted once.
-  // Open and immediately stop the default input only to establish that grant;
-  // it is never added to the share. Without this, the Pair Share monitor is
-  // present but impossible to select on a first share or a fresh profile.
-  try{const permissionProbe=await navigator.mediaDevices.getUserMedia({audio:true});permissionProbe.getTracks().forEach(t=>t.stop())}catch(e){console.warn('[AUDIO] unable to reveal PipeWire inputs:',e?.message||e)}
-  let inputs=0,lastError='';for(let attempt=0;attempt<80;attempt++){const devices=await navigator.mediaDevices.enumerateDevices();inputs=devices.filter(d=>d.kind==='audioinput').length;const device=devices.find(d=>d.kind==='audioinput'&&(d.label.includes(label)||(/pair/i.test(d.label)&&/share/i.test(d.label))));if(device){try{const stream=await navigator.mediaDevices.getUserMedia({audio:{deviceId:{exact:device.deviceId},channelCount:{ideal:2},sampleRate:{ideal:48000},echoCancellation:false,noiseSuppression:false,autoGainControl:false}});const track=stream.getAudioTracks()[0]||null;if(track){track.enabled=true;return track}}catch(e){lastError=String(e?.name||e?.message||'capture rejected');console.warn('[AUDIO] Pair Share Audio device failed:',e)}}await new Promise(resolve=>setTimeout(resolve,150))}
-  screenAudioDebug=' · monitor unavailable ('+inputs+' inputs'+(lastError?', '+lastError:'')+')';console.warn('[AUDIO] Pair Share Audio monitor was not exposed by PipeWire');window.pairEnv?.stopLinuxShareAudio?.();return null;
+  if(!window.pairEnv?.startLinuxShareAudio||!window.pairEnv?.onLinuxShareAudio)return null;
+  let ctx,dest,op,unsubData,unsubError,received=false,captureError='';
+  try{
+    ctx=new AudioContext({sampleRate:48000});
+    if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
+    dest=ctx.createMediaStreamDestination();dest.channelCount=2;
+    const RS=96000,pcm=new Float32Array(RS*2);let wp=0,avail=0;
+    unsubData=window.pairEnv.onLinuxShareAudio(buf=>{
+      const arr=new Float32Array(buf);received=true;
+      const frames=Math.floor(arr.length/2);
+      for(let i=0;i<frames;i++){
+        // When the renderer falls behind, discard the oldest frame instead of
+        // freezing capture until the entire two-second ring drains.
+        if(avail===RS)avail--;
+        pcm[wp*2]=arr[i*2];pcm[wp*2+1]=arr[i*2+1];wp=(wp+1)%RS;avail++;
+      }
+    });
+    unsubError=window.pairEnv.onLinuxShareAudioError?.(message=>{captureError=String(message||'capture failed');console.warn('[AUDIO] PipeWire capture error:',captureError)});
+    const share=await window.pairEnv.startLinuxShareAudio();if(!share)throw new Error('PipeWire share route could not be created');
+    const deadline=Date.now()+2500;while(!received&&!captureError&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,40));
+    if(!received)throw new Error(captureError||'PipeWire monitor produced no samples');
+    const B=1024;op=ctx.createScriptProcessor(B,0,2);
+    op.onaudioprocess=e=>{
+      const L=e.outputBuffer.getChannelData(0),R=e.outputBuffer.getChannelData(1);
+      if(avail<L.length){L.fill(0);R.fill(0);return}
+      const rp=(wp-avail+RS)%RS;
+      for(let i=0;i<L.length;i++){const idx=((rp+i)%RS)*2;L[i]=pcm[idx];R[i]=pcm[idx+1]}
+      avail-=L.length;
+    };
+    op.connect(dest);screenOutCtx=ctx;screenOutDest=dest;screenNative=true;
+    const track=dest.stream.getAudioTracks()[0]||null;try{if(track)track.contentHint='music'}catch{}
+    screenCaptureCleanup=()=>{if(unsubData)unsubData();if(unsubError)unsubError();window.pairEnv.stopLinuxShareAudio?.();try{op.disconnect()}catch{}};
+    return track;
+  }catch(e){
+    console.warn('[AUDIO] direct PipeWire capture failed:',e?.message||e);
+    screenAudioDebug=' · PipeWire capture unavailable';
+    if(unsubData)unsubData();if(unsubError)unsubError();try{op?.disconnect()}catch{};try{ctx?.close()}catch{};window.pairEnv.stopLinuxShareAudio?.();return null;
+  }
 }
 function startScreenStats(sender){
   if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;
-  const sample=async()=>{try{if(!screenActive)return;const reports=await sender.getStats();let out;reports.forEach(r=>{if(r.type==='outbound-rtp'&&(r.kind==='video'||r.mediaType==='video')&&!r.isRemote)out=r});if(!out)return;const now=performance.now();let mbps='…';if(screenStatsLast&&now>screenStatsLast.at){mbps=(((out.bytesSent-screenStatsLast.bytes)*8)/(now-screenStatsLast.at)/1000).toFixed(1)}screenStatsLast={bytes:out.bytesSent,at:now};const fps=Math.round(out.framesPerSecond||0),w=out.frameWidth||0,h=out.frameHeight||0;const status='Sharing'+(w&&h?' · '+w+'×'+h:'')+(fps?' · '+fps+'fps':'')+(mbps!=='…'?' · '+mbps+' Mbps':'')+screenAudioDebug;screenStatus.textContent=status;screenBtn.title=status}catch{}};
+  const sample=async()=>{try{if(!screenActive)return;const reports=await sender.getStats();let out;reports.forEach(r=>{if(r.type==='outbound-rtp'&&(r.kind==='video'||r.mediaType==='video')&&!r.isRemote)out=r});if(!out)return;const now=performance.now();let mbps='…';if(screenStatsLast&&now>screenStatsLast.at){mbps=(((out.bytesSent-screenStatsLast.bytes)*8)/(now-screenStatsLast.at)/1000).toFixed(1)}screenStatsLast={bytes:out.bytesSent,at:now};const fps=Math.round(out.framesPerSecond||0),w=out.frameWidth||0,h=out.frameHeight||0,codec=reports.get(out.codecId)?.mimeType?.replace(/^video\//i,'')||'';const reason=out.qualityLimitationReason,limit=reason==='bandwidth'?' · network adapting':reason==='cpu'?' · encoder limited':reason&&reason!=='none'?' · quality adapting':'';const status='Sharing'+(w&&h?' · '+w+'×'+h:'')+(fps?' · '+fps+'fps':'')+(mbps!=='…'?' · '+mbps+' Mbps':'')+(codec?' · '+codec:'')+limit+screenAudioDebug;screenStatus.textContent=status;screenBtn.title=status}catch{}};
   sample();screenStatsTimer=setInterval(sample,2000);
+}
+function orderedScreenCodecs(caps){
+  const requested=screenCodec==='auto'?['H264','VP9','VP8','AV1','H265']:[screenCodec,'H264','VP9','VP8','AV1','H265'];
+  const order=[...new Set(requested.map(name=>name.toUpperCase()))],seen=new Set(),result=[];
+  for(const name of order)for(const codec of caps.codecs||[]){if(codec.mimeType?.toUpperCase()!==`VIDEO/${name}`||seen.has(codec))continue;seen.add(codec);result.push(codec)}
+  // Keep retransmission and forward-error-correction codecs. Dropping these
+  // while forcing a preferred primary codec makes packet loss look like a
+  // video-quality problem even on an otherwise fast connection.
+  for(const codec of caps.codecs||[]){if(!seen.has(codec)&&/^video\/(?:rtx|red|ulpfec|flexfec)/i.test(codec.mimeType||'')){seen.add(codec);result.push(codec)}}
+  return result;
+}
+function targetScreenBitrate(width,height,fps){
+  const pixels=Math.max(1,(Number(width)||1920)*(Number(height)||1080)),motion=Math.max(.5,(Number(fps)||60)/60);
+  // About 32 Mbps for 1080p60, 56 Mbps for 1440p60 and 104 Mbps for 4K60.
+  // This is a ceiling, not a forced rate: WebRTC still backs off for congestion.
+  const sourceTarget=8+24*(pixels/(1920*1080))*Math.pow(motion,.8);
+  return Math.round(Math.min(screenBitrateMbps,Math.max(8,sourceTarget))*1000000);
+}
+async function configureScreenVideoSender(sender,track,fps){
+  const settings=track.getSettings?.()||{},maxBitrate=targetScreenBitrate(settings.width,settings.height,fps);
+  const p=sender.getParameters();if(!p.encodings||!p.encodings.length)p.encodings=[{}];
+  p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=fps;p.encodings[0].scaleResolutionDownBy=1;p.encodings[0].priority='high';
+  if('networkPriority' in p.encodings[0])p.encodings[0].networkPriority='high';
+  // Source fidelity prevents Chromium from silently scaling a 1440p/4K share
+  // down. When capacity is tight it may reduce quantizer quality or drop input
+  // frames, which the live diagnostic exposes instead of hiding the downgrade.
+  p.degradationPreference='maintain-framerate-and-resolution';
+  try{await sender.setParameters(p)}catch(e){
+    // Older WebRTC builds may reject priority while accepting the core quality
+    // controls. Retry with a fresh transaction object and the portable fields.
+    const fallback=sender.getParameters();if(!fallback.encodings||!fallback.encodings.length)fallback.encodings=[{}];fallback.encodings[0].maxBitrate=maxBitrate;fallback.encodings[0].maxFramerate=fps;fallback.encodings[0].scaleResolutionDownBy=1;fallback.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(fallback);console.warn('[VIDEO] source-fidelity parameters partially unsupported:',e?.message||e)
+  }
+  console.log('[VIDEO] source='+((settings.width||'?')+'×'+(settings.height||'?'))+' target='+(maxBitrate/1e6).toFixed(1)+'Mbps '+fps+'fps');
 }
 async function startScreenShare(){
   if(screenActive||screenStarting||!pc)return;
@@ -1088,16 +1205,16 @@ async function startScreenShare(){
   const gen=++screenGen;
   // Show source picker in Electron app (in browser getDisplayMedia shows native picker)
   try{
-  if(window.pairEnv?.getSources){
+  if(window.pairEnv?.getSources&&!window.pairEnv.useSystemPicker){
     const sources=await window.pairEnv.getSources();
     if(!sources.length||gen!==screenGen){screenStatus.textContent='No sources';return}
     const id=await new Promise(resolve=>{
       const o=document.createElement('div');o.className='screen-source-modal';
       const b=document.createElement('div');b.className='screen-source-dialog';
-      b.innerHTML='<h3>Select what to share</h3><div class="share-start-options"><label>Resolution<select id="shareResolution"><option value="720">720p</option><option value="1080" selected>1080p</option><option value="1440">1440p</option><option value="2160">4K</option></select></label><label>Frame rate<select id="shareFrameRate"><option value="30" selected>30 fps</option><option value="60">60 fps</option></select></label><label class="share-audio-option"><input id="shareSystemAudio" type="checkbox" checked /> Share computer sound<span class="share-audio-hint">Desktop apps and games — not the voice call</span></label></div>';
+      b.innerHTML='<h3>Select what to share</h3><div class="share-start-options"><label>Resolution<select id="shareResolution"><option value="source" selected>Source — sharpest</option><option value="2160">4K</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option></select></label><label>Frame rate<select id="shareFrameRate"><option value="60" selected>60 fps</option><option value="30">30 fps</option></select></label><label class="share-audio-option"><input id="shareSystemAudio" type="checkbox" checked /> Share computer sound<span class="share-audio-hint">Desktop apps and games — Pair voice is always excluded</span></label></div>';
       const resolution=b.querySelector('#shareResolution'),frameRate=b.querySelector('#shareFrameRate'),audio=b.querySelector('#shareSystemAudio');resolution.value=String(shareResolution);frameRate.value=String(shareFrameRate);audio.checked=screenAudioOn;
       const g=document.createElement('div');g.className='screen-source-grid';
-      sources.forEach(s=>{const btn=document.createElement('button');btn.type='button';btn.className='screen-source-option';const img=document.createElement('img');img.src=s.thumbnail;img.alt='';const name=document.createElement('span');name.textContent=s.name;btn.append(img,name);btn.onclick=()=>{shareResolution=Number(resolution.value)||1080;shareFrameRate=Number(frameRate.value)||30;screenAudioOn=audio.checked;resolve(s.id);o.remove()};g.appendChild(btn)});
+      sources.forEach(s=>{const btn=document.createElement('button');btn.type='button';btn.className='screen-source-option';const img=document.createElement('img');img.src=s.thumbnail;img.alt='';const name=document.createElement('span');name.textContent=s.name;btn.append(img,name);btn.onclick=()=>{shareResolution=['source','720','1080','1440','2160'].includes(resolution.value)?resolution.value:'source';shareFrameRate=Number(frameRate.value)===30?30:60;screenAudioOn=audio.checked;syncScreenPreset();ssSet('shareResolution',shareResolution);ssSet('shareFrameRate',String(shareFrameRate));resolve(s.id);o.remove()};g.appendChild(btn)});
       const c=document.createElement('button');c.className='screen-source-cancel';c.textContent='Cancel';c.onclick=()=>{resolve(null);o.remove()};
       b.appendChild(g);b.appendChild(c);o.appendChild(b);document.body.appendChild(o);
     });
@@ -1105,8 +1222,8 @@ async function startScreenShare(){
     window.pairEnv.setPendingSource(id);
   }
   try{
-    const heights={720:720,1080:1080,1440:1440,2160:2160},height=heights[shareResolution]||1080,width=Math.round(height*16/9),fps=shareFrameRate===60?60:30;
-    const v={width:{ideal:width,max:width},height:{ideal:height,max:height},frameRate:{ideal:fps,max:fps}};
+    const heights={720:720,1080:1080,1440:1440,2160:2160},height=heights[shareResolution],width=height?Math.round(height*16/9):null,fps=shareFrameRate===30?30:60;
+    const v={frameRate:{ideal:fps,max:fps}};if(width&&height){v.width={ideal:width,max:width};v.height={ideal:height,max:height}}
     v.cursor=screenCursor;
     const constraints={video:v};
     // Never request Chromium's full-mix loopback. That path includes Pair voice
@@ -1186,8 +1303,8 @@ async function startScreenShare(){
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender);if(tr){const caps=RTCRtpSender.getCapabilities('video');if(caps){const names=screenCodec==='auto'?['AV1','H265','H264','VP9','VP8']:[screenCodec,'H264','VP9','VP8'];const cs=names.map(name=>caps.codecs.find(c=>c.mimeType===`video/${name}`)).filter(Boolean);if(cs.length)tr.setCodecPreferences(cs)}}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
-    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];const maxBitrate=Math.round(Math.max(2,Math.min(120,screenBitrateMbps))*1000000);p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].maxFramerate=fps;p.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';await sender.setParameters(p);console.log('[VIDEO] bitrate='+(maxBitrate/1e6)+'Mbps '+fps+'fps '+p.degradationPreference)}else console.warn('[VIDEO] no params')}catch(e){console.warn('[VIDEO] setParams err:',e)}
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender),caps=RTCRtpSender.getCapabilities('video');if(tr&&caps){const codecs=orderedScreenCodecs(caps);if(codecs.length)tr.setCodecPreferences(codecs)}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
+    try{await configureScreenVideoSender(sender,track,fps)}catch(e){console.warn('[VIDEO] setParams err:',e)}
     if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;screenAudioDebug=screenAudioOn?' · starting sound capture':' · sound off';
     screenPreview.muted=true;
@@ -1225,13 +1342,14 @@ async function stopScreenShare(fromEnd){
   if(!fromEnd){screenStatus.textContent='Not sharing';try{send({t:'screen-end'})}catch{};logCallEvent('You stopped screen sharing')}
 }
 screenBtn.onclick=()=>{if(screenActive||screenStarting)stopScreenShare();else if(!pc&&LOCAL_TEST_MODE){screenStatus.textContent='Pair with a friend to start screen sharing';screenStatus.className='screen-status';}else startScreenShare()};
-screenPreset.onchange=async()=>{if(screenActive||screenStarting){await stopScreenShare();await startScreenShare()}};
+screenPreset.onchange=async()=>{const match=screenPreset.value.match(/^(source|720p|1080p|1440p|2160p)(30|60)$/);if(!match)return;shareResolution=match[1].replace(/p$/,'');shareFrameRate=Number(match[2]);ssSet('shareResolution',shareResolution);ssSet('shareFrameRate',String(shareFrameRate));if(screenActive||screenStarting){await stopScreenShare();await startScreenShare()}};
 // Screen share computer-sound toggle. Voice always stays on the call track;
 // this only controls whether desktop/game sound rides with the share.
 let screenAudioOn=true;
 const audioToggleBtn=document.createElement('button');audioToggleBtn.textContent='Sound on';audioToggleBtn.className='audio-toggle is-on';
 audioToggleBtn.title='Share computer sound with the screen (not the voice call)';
 audioToggleBtn.onclick=()=>{screenAudioOn=!screenAudioOn;audioToggleBtn.textContent=screenAudioOn?'Sound on':'Sound off';audioToggleBtn.classList.toggle('is-on',screenAudioOn);audioToggleBtn.title=screenAudioOn?'Share computer sound with the screen (not the voice call)':'Computer sound will not be shared'};screenBtn.parentElement.insertBefore(audioToggleBtn,screenStatus);
+const syncAudioToggleAvailability=()=>{audioToggleBtn.disabled=screenBtn.disabled};new MutationObserver(syncAudioToggleAvailability).observe(screenBtn,{attributes:true,attributeFilter:['disabled']});syncAudioToggleAvailability();
 // Volume slider for the remote screen share audio, shown on right-click.
 const screenVolWrap=document.createElement('div');screenVolWrap.className='screen-volume';
 const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Volume';
@@ -1242,18 +1360,18 @@ enableRangeDrag(screenVol);
 (async()=>{try{const saved=await ss('screenVol');if(saved!==null){const v=parseFloat(saved);if(v>=0&&v<=1){remoteScreen.volume=v;remoteScreen.muted=v===0;screenVol.value=Math.round(v*100)}}}catch{}})()
 screenVolWrap.appendChild(screenVolLabel);screenVolWrap.appendChild(screenVol);remoteScreen.parentElement.appendChild(screenVolWrap);
 remoteScreen.addEventListener('contextmenu',e=>{e.preventDefault();screenVolWrap.style.display=screenVolWrap.style.display==='none'?'flex':'none';screenVolWrap.style.alignItems='center'});
-document.addEventListener('click',e=>{if(!screenVolWrap.contains(e.target)&&e.target!==remoteScreen)screenVolWrap.style.display='none'});
+document.addEventListener('click',e=>{if(!screenVolWrap.contains(e.target)&&e.target!==remoteScreen&&!e.target.closest?.('[data-screen-volume]'))screenVolWrap.style.display='none'});
 const screenVideos=screenPreview.parentElement;let screenExpanded=false,focusedScreen='remote';
 function makeScreenTile(video,label,kind){const tile=document.createElement('article');tile.className='screen-tile '+kind;tile.dataset.screenTile=kind;const name=document.createElement('span');name.className='screen-tile-name';name.textContent=label;const avatar=document.createElement('span');avatar.className='screen-tile-avatar';avatar.textContent=kind==='local'?'Y':'F';tile.append(video,name,avatar);return tile}
 const localScreenTile=makeScreenTile(screenPreview,'You', 'local'),remoteScreenTile=makeScreenTile(remoteScreen,'Friend', 'remote');remoteScreenTile.appendChild(screenVolWrap);screenVideos.replaceChildren(localScreenTile,remoteScreenTile);
-const screenViewBar=document.createElement('div');screenViewBar.className='screen-view-bar';screenViewBar.innerHTML='<button type="button" data-screen-fullscreen title="Fullscreen" aria-label="Fullscreen">⛶</button>';screenVideos.after(screenViewBar);
-const fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=screenVideos.parentElement;screenStage.classList.add('screen-stage');let nativeShareFullscreen=false;
+const screenViewBar=document.createElement('div');screenViewBar.className='screen-view-bar';screenViewBar.innerHTML='<button type="button" data-screen-volume title="Screen volume" aria-label="Screen volume">♫</button><button type="button" data-screen-fullscreen title="Fullscreen" aria-label="Fullscreen">⛶</button>';screenVideos.after(screenViewBar);
+const screenVolumeBtn=screenViewBar.querySelector('[data-screen-volume]'),fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=screenVideos.parentElement;screenStage.classList.add('screen-stage');let nativeShareFullscreen=false;
 const screenAudioBadge=document.createElement('span');screenAudioBadge.className='screen-audio-badge';screenStage.appendChild(screenAudioBadge);const syncScreenAudioBadge=()=>{screenAudioBadge.textContent=screenStatus.textContent||'Sharing';screenAudioBadge.hidden=!screenIsActive()};new MutationObserver(syncScreenAudioBadge).observe(screenStatus,{childList:true,characterData:true,subtree:true});
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
-function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=!!document.fullscreenElement||screenStage.classList.contains('fs');if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-expanded',screenExpanded&&(hasLocal||hasRemote));screenStage.classList.toggle('screen-expanded-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;fsBtn.hidden=!screenExpanded||!screenIsActive();fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen';syncScreenAudioBadge()}
+function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=!!document.fullscreenElement||screenStage.classList.contains('fs');if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-expanded',screenExpanded&&(hasLocal||hasRemote));screenStage.classList.toggle('screen-expanded-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;screenViewBar.hidden=!screenIsActive();fsBtn.hidden=!screenExpanded||!screenIsActive();fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen';syncScreenAudioBadge()}
 function returnToSharePreview(){screenStage.classList.remove('fs');document.body.classList.remove('screen-fullscreen');screenExpanded=false;updateScreenLayout()}
 function toggleRemoteFs(){if(screenStage.classList.contains('fs')||document.fullscreenElement){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else if(nativeShareFullscreen)window.pairEnv?.toggleFullscreen?.();nativeShareFullscreen=false;returnToSharePreview();return}screenStage.classList.add('fs');document.body.classList.add('screen-fullscreen');nativeShareFullscreen=!!window.pairEnv?.toggleFullscreen;window.pairEnv?.toggleFullscreen?.();updateScreenLayout()}
 screenVideos.addEventListener('click',event=>{if(event.target.closest('input,button,label'))return;const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;if(!screenExpanded)screenExpanded=true;try{if(remoteScreen.volume>0)remoteScreen.muted=false;remoteScreen.play().catch(()=>{})}catch{}updateScreenLayout()});
-screenViewBar.onclick=event=>{if(event.target.closest('[data-screen-fullscreen]'))toggleRemoteFs()};
+screenViewBar.onclick=event=>{if(event.target.closest('[data-screen-volume]')){screenVolWrap.style.display=screenVolWrap.style.display==='flex'?'none':'flex';screenVolWrap.style.alignItems='center'}else if(event.target.closest('[data-screen-fullscreen]'))toggleRemoteFs()};
 const screenLayoutObserver=new MutationObserver(updateScreenLayout);screenLayoutObserver.observe(screenPreview,{attributes:true,attributeFilter:['hidden']});screenLayoutObserver.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});updateScreenLayout();
 window.pairEnv?.onFullscreenChange?.(isFullscreen=>{nativeShareFullscreen=!!isFullscreen;if(!isFullscreen)returnToSharePreview()});document.addEventListener('fullscreenchange',()=>{const is=!!document.fullscreenElement;document.body.classList.toggle('screen-fullscreen',is);if(!is)returnToSharePreview();else updateScreenLayout()});document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(document.fullscreenElement||screenStage.classList.contains('fs'))toggleRemoteFs();else if(screenExpanded)returnToSharePreview()});

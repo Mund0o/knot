@@ -27,8 +27,9 @@ Applications menu; open it from there thereafter with no terminal command.
 
 Run these commands from a Windows machine with Node.js and Visual Studio Build
 Tools installed. The first command recompiles the optional WASAPI capture addon
-against Pair's current Electron version; the installer still works with its
-JavaScript audio fallback if that addon is unavailable.
+against Pair's current Electron version. The installer still works if that
+addon is unavailable, but screen sharing stays video-only rather than using a
+whole-system loopback that could send the viewer's voice back to them.
 
 ```powershell
 npm install
@@ -45,6 +46,35 @@ AppImage to the matching GitHub release before committing/pushing
 Every packaged build checks `public/latest.json` as it opens. If the manifest
 has a newer version, Pair downloads the appropriate package, verifies its
 SHA-256 checksum, installs it, and restarts automatically.
+
+## Screen sharing architecture
+
+Pair sends screen video, computer sound, and voice as separate WebRTC tracks.
+Screen capture defaults to source resolution at 60 fps, prefers H.264 for broad
+hardware encoding, retains retransmission/FEC codecs, and uses a
+resolution-aware bitrate ceiling (32 Mbps at 1080p60 and up to roughly 104 Mbps
+at 4K60 by default). Live sender statistics show the delivered resolution,
+frame rate, bitrate, codec, and whether the network or encoder is limiting the
+stream.
+
+Screen sharing settings include **Test isolated computer audio**. It exercises
+the same OS route used by a real share and reports the capture stage, format,
+and packet delivery directly instead of inferring availability from Chromium's
+microphone-device list.
+
+Computer sound never uses Chromium's whole-render-mix loopback:
+
+- On Windows, application/window shares capture only the selected process tree.
+  Full-display shares capture all render streams except Pair and its children.
+  This uses the Windows process-loopback API available on Windows 10 build
+  20348 and newer.
+- On Linux/PipeWire, Pair creates a temporary share sink, keeps every Pair
+  process on the real output, routes other applications through the share sink,
+  and captures its monitor directly as stereo 48 kHz PCM. The original default
+  output and moved streams are restored when sharing stops or capture fails.
+
+This process isolation prevents Pair's incoming voice audio from entering the
+screen share, so the viewer does not hear their own voice.
 
 ## Run in a browser (optional)
 
@@ -68,7 +98,28 @@ direct connection; those require a TURN relay supplied by the people using it.
 
 ## Optional self-hosted signaling
 
-## Host signaling from your own PC
+### Cloudflare Worker (recommended)
+
+The repository includes a Cloudflare Worker backed by a Durable Object. Each
+private room is coordinated by one Durable Object and accepts at most two
+people. The service only relays ephemeral WebRTC setup messages (plus encrypted
+file fallback frames); it does not receive decrypted chats, calls, or screen
+shares.
+
+Cloudflare's Git build command is:
+
+```bash
+npx wrangler deploy
+```
+
+No build output directory or static-assets directory is needed. The checked-in
+`wrangler.jsonc` points directly to `worker/index.js`, preventing Wrangler from
+trying to upload the Electron repository or `node_modules` as website assets.
+Pair defaults to `wss://pair.mundo.workers.dev`; use the same secret room code
+on both computers. If the Cloudflare account uses a different workers.dev
+subdomain, update the signaling address in Pair after deployment.
+
+### Host signaling from your own PC
 
 Pair no longer starts a signaling server automatically. Direct pairing above is
 the normal connection path. If you deliberately want room-code signaling for a

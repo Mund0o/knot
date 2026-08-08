@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('pairUpdates', {
 // Read-only environment info exposed to the sandboxed renderer.
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
+  useSystemPicker: process.platform === 'linux' && !!process.env.WAYLAND_DISPLAY,
   isApp: true,
   iceServers: turnServersFromEnvironment(),
   toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
@@ -62,18 +63,28 @@ contextBridge.exposeInMainWorld('pairEnv', {
   setPendingSource: id => ipcRenderer.send('pair:setPendingSource', id),
   startLinuxShareAudio: () => ipcRenderer.invoke('pair:startLinuxShareAudio'),
   stopLinuxShareAudio: () => ipcRenderer.send('pair:stopLinuxShareAudio'),
+  onLinuxShareAudio: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, samples) => cb(samples);
+    ipcRenderer.on('pair:linuxShareAudio', listener);
+    return () => ipcRenderer.removeListener('pair:linuxShareAudio', listener);
+  },
+  onLinuxShareAudioError: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, message) => cb(message);
+    ipcRenderer.on('pair:linuxShareAudioError', listener);
+    return () => ipcRenderer.removeListener('pair:linuxShareAudioError', listener);
+  },
   relaunch: () => ipcRenderer.send('pair:relaunch')
 });
 
-// Native WASAPI loopback capture with echo cancellation bridge.
-// The renderer sends reference audio (Pair's voice) and receives clean audio.
+// Native WASAPI process-loopback bridge. The OS includes only the selected app
+// or excludes Pair's process tree, so Pair voice never enters these samples.
 // Only available when the native addon is built and loaded.
 contextBridge.exposeInMainWorld('pairCapture', {
   start: () => ipcRenderer.send('pair:startCapture'),
   stop: () => ipcRenderer.send('pair:stopCapture'),
-  // Send reference audio samples (Float32Array) to the native addon for cancellation.
-  pushReference: buf => ipcRenderer.send('pair:captureRef', buf),
-  // Register for clean audio data from the native addon.
+  // Register for isolated desktop/application audio data from the native addon.
   onCleanAudio: cb => {
     if (typeof cb !== 'function') return () => {};
     const listener = (_e, buf, frames) => cb(buf, frames);

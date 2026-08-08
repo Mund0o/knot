@@ -17,8 +17,8 @@
       <div class="app-content">
       <header class="topbar">
         <div class="brand-lockup">
-          <p class="eyebrow">DIRECT MESSAGES</p>
-          <h1>Pair<span>.</span></h1>
+          <p class="eyebrow">DIRECT MESSAGE</p>
+          <h1 id="roomTitle">Private room</h1>
         </div>
         <div class="app-actions">
           <div class="connection"><i id="statusDot"></i><span id="statusText">Not connected</span></div>
@@ -43,10 +43,10 @@
       <div class="workspace-view">
       <details id="connectCard" class="pair-card card connect-drawer">
         <summary><span>Add a friend</span><small>Direct pairing</small></summary>
-        <div class="section-heading"><div><p class="eyebrow">01 / CONNECT</p><h2>Connect directly</h2></div><span class="lock">E2EE</span></div>
-        <p class="muted">No account or server is needed. Exchange the two pairing codes with your friend; chat, calls, and files then travel peer to peer.</p>
+        <div class="section-heading"><div><p class="eyebrow">01 / CONNECT</p><h2>Connect with your friend</h2></div><span class="lock">E2EE</span></div>
+        <p class="muted">Pair signaling gets both computers into the same private room. Chat, calls, and screen sharing then use an encrypted peer connection.</p>
         <div class="primary-pair manual-direct">
-          <div class="auto-title"><div><p class="eyebrow">RECOMMENDED</p><h3>Direct pairing</h3></div><span class="status-note">NO SERVER</span></div>
+          <div class="auto-title"><div><p class="eyebrow">BACKUP</p><h3>Manual pairing codes</h3></div><span class="status-note">NO SERVER</span></div>
           <div class="pair-grid pairing-steps">
             <div class="pair-step">
               <span class="step-number">1</span>
@@ -65,12 +65,12 @@
           </div>
           <p id="pairHint" class="pair-hint">Create an invite, or paste one from your friend. Pasted invites stay saved on this device.</p>
         </div>
-        <details class="manual-pair">
-          <summary>Optional: use your own signaling server</summary>
-          <p class="hint">Only use this when you deliberately run a signaling service. It can make initial pairing easier, but it is not required for direct pairing.</p>
+        <details class="manual-pair" open>
+          <summary>Pair signaling · recommended</summary>
+          <p class="hint">Use the hosted Pair service and the same private room code on both computers. Signaling finds your friend; calls and messages remain end-to-end encrypted.</p>
           <div class="auto-pair">
           <div class="auto-grid">
-            <div class="auto-field"><label for="signalServer">Signaling address</label><input id="signalServer" value="" placeholder="wss://your-server.example" aria-label="Signaling server address" /></div>
+            <div class="auto-field"><label for="signalServer">Signaling address</label><input id="signalServer" value="wss://pair.mundo.workers.dev" placeholder="wss://pair.mundo.workers.dev" aria-label="Signaling server address" /></div>
             <div class="auto-field"><label for="roomCode">Room code</label><input id="roomCode" value="" placeholder="16+ character secret" aria-label="Room code" /></div>
             <button id="hostRoom" class="primary">Host room</button><button id="joinRoom">Join room</button><button id="leaveRoom" hidden>Leave room</button>
           </div>
@@ -100,14 +100,16 @@
               <div class="screen-controls">
                 <button id="screenBtn" disabled title="Share screen">Share screen</button>
                 <select id="screenPreset" class="preset-select" disabled aria-label="Screen share quality">
-                  <option value="1080p30">1080p 30fps</option>
+                  <option value="source60">Source 60fps</option>
+                  <option value="source30">Source 30fps</option>
+                  <option value="2160p60">4K 60fps</option>
+                  <option value="2160p30">4K 30fps</option>
+                  <option value="1440p60">1440p 60fps</option>
+                  <option value="1440p30">1440p 30fps</option>
                   <option value="1080p60">1080p 60fps</option>
+                  <option value="1080p30">1080p 30fps</option>
                   <option value="720p60">720p 60fps</option>
                   <option value="720p30">720p 30fps</option>
-                  <option value="480p30">480p 30fps</option>
-                  <option value="1440p60">1440p 60fps</option>
-                  <option value="4k60">4K 60fps</option>
-                  <option value="custom">Custom</option>
                 </select>
                 <span id="screenStatus" class="screen-status">Not sharing</span>
               </div>

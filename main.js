@@ -6,6 +6,7 @@ const { execFileSync, spawn } = require('child_process');
 let mainWin = null;
 let pendingSourceId = null;
 let pendingSources = [];
+let activeShareSourceId = null;
 let linuxShareAudio = null;
 function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
 function pipewireOk(command, args) { try { execFileSync(command, args, { stdio: 'ignore' }); return true; } catch { return false; } }
@@ -40,7 +41,7 @@ function keepPairAudioOutOfLinuxShare(sink) {
     if (pid && pairPids.has(pid) && currentSink !== sink) pipewireOk('pactl', ['move-sink-input', id, sink]);
   }
 }
-function startLinuxShareAudio() {
+function startLinuxShareAudio(webContents) {
   if (process.platform !== 'linux') return null;
   if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source };
   if (!/PipeWire/i.test(pipewire('pactl', ['info']))) return null;
@@ -54,9 +55,41 @@ function startLinuxShareAudio() {
   keepPairAudioOutOfLinuxShare(original);
   const moved = moveExistingLinuxAudio(sink);
   pipewire('pactl', ['set-default-sink', sink]);
-  const loop = spawn('pw-loopback', ['-n', 'Pair Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: 'ignore', detached: true });
+  const loop = spawn('pw-loopback', ['-n', 'Pair Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
   loop.unref();
-  const state = { original, sink, module, loop, moved, label: 'Pair Share Audio', source: `${sink}.monitor`, watch: null, audits: [] };
+  // Capture the monitor directly instead of asking Chromium to expose it as a
+  // microphone. Chromium's Linux device enumeration can omit virtual monitor
+  // sources even though PipeWire created them successfully, which used to make
+  // a healthy share route appear as "sound unavailable".
+  const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const state = { original, sink, module, loop, capture, moved, label: 'Pair Share Audio', source: `${sink}.monitor`, watch: null, audits: [] };
+  const failCaptureRoute = message => {
+    if (linuxShareAudio !== state) return;
+    if (webContents && !webContents.isDestroyed()) try { webContents.send('pair:linuxShareAudioError', message); } catch {}
+    // Restore the user's real output immediately if either half of the route
+    // dies. Leaving the default pointed at the temporary sink would make every
+    // newly opened app appear muted after a capture failure.
+    stopLinuxShareAudio();
+  };
+  capture.stdout.on('data', chunk => {
+    if (linuxShareAudio !== state || !webContents || webContents.isDestroyed()) return;
+    // Copy the exact Buffer window. Sending `chunk.buffer` directly can include
+    // unrelated bytes from Node's pooled backing allocation.
+    const samples = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
+    try { webContents.send('pair:linuxShareAudio', samples); } catch {}
+  });
+  let captureError = '';
+  capture.stderr.setEncoding('utf8');
+  capture.stderr.on('data', text => { captureError = (captureError + text).slice(-1000); });
+  let loopError = '';
+  loop.stderr.setEncoding('utf8');
+  loop.stderr.on('data', text => { loopError = (loopError + text).slice(-1000); });
+  capture.on('error', error => failCaptureRoute(error.message));
+  capture.on('exit', code => {
+    if (linuxShareAudio === state) failCaptureRoute(captureError.trim() || `parec exited with code ${code ?? 'unknown'}`);
+  });
+  loop.on('error', error => failCaptureRoute(`PipeWire playback failed: ${error.message}`));
+  loop.on('exit', code => { if (linuxShareAudio === state) failCaptureRoute(loopError.trim() || `PipeWire playback exited with code ${code ?? 'unknown'}`); });
   // New Electron audio streams can be created after the default sink changes.
   // PULSE_SINK handles the normal case; subscribe to Pulse/PipeWire events as
   // a second line of defence so a just-created Pair stream is moved to the real
@@ -81,6 +114,7 @@ function stopLinuxShareAudio() {
   linuxShareAudio = null;
   if (state.watch) try { state.watch.kill(); } catch {}
   for (const audit of state.audits || []) clearTimeout(audit);
+  if (state.capture) try { state.capture.kill(); } catch {}
   try { state.loop.kill(); } catch {}
   pipewire('pactl', ['set-default-sink', state.original]);
   for (const input of state.moved || []) pipewireOk('pactl', ['move-sink-input', input.id, input.sink]);
@@ -90,7 +124,7 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareFrameRate']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
@@ -151,7 +185,7 @@ ipcMain.handle('pair:getSources', async event => {
 });
 ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
 ipcMain.on('pair:setPendingSource', (event, id) => { if (isPairRenderer(event) && typeof id === 'string') pendingSourceId = id; });
-ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio() : null);
+ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio(event.sender) : null);
 ipcMain.on('pair:stopLinuxShareAudio', event => { if (isPairRenderer(event)) stopLinuxShareAudio(); });
 
 // Leave Chromium's graphics stack at its platform defaults. That avoids
@@ -356,16 +390,17 @@ app.whenReady().then(() => {
   // Without this handler the API throws "Not supported".
   // System audio is deliberately not granted here. Chromium "loopback" captures
   // the full render mix (including Pair's own call playback) and reintroduces
-  // echo into the screenshare. Pair attaches cleaned system audio from the
+  // echo into the screenshare. Pair attaches isolated system audio from the
   // native process-loopback addon / PipeWire share sink instead.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const useId = pendingSourceId;
     pendingSourceId = null;
     const src = useId ? pendingSources.find(s => s.id === useId) : null;
     if (src) {
+      activeShareSourceId = src.id;
       callback({ video: src });
     } else callback({ video: undefined });
-  });
+  }, { useSystemPicker: process.platform === 'linux' && !!process.env.WAYLAND_DISPLAY });
   createWindow();
   startAutoUpdater();
   app.on('activate', () => {
@@ -380,8 +415,8 @@ app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// --- Native WASAPI loopback capture with echo cancellation ---
-// Loads the C++ addon that captures system audio and cancels Pair's voice output.
+// --- Native WASAPI process-loopback capture ---
+// Loads the C++ addon that isolates app/desktop audio at the OS process level.
 // The addon is built by 'node-gyp rebuild --directory=addon' which outputs to
 // addon/build/Release/pair-capture.node.
 let nativeCapture = null;
@@ -418,6 +453,15 @@ function startNativeCapture(win) {
   console.log('native capture: starting...');
   let cbCount=0;
   try {
+    // Discord-style application shares capture the selected process and its
+    // children. Full-display shares capture the desktop but exclude Pair's
+    // process tree, which prevents the watcher hearing their returned voice.
+    let targetPid = process.pid, includeTarget = false;
+    if (activeShareSourceId?.startsWith('window:') && typeof addon.windowProcessId === 'function') {
+      const selectedPid = Number(addon.windowProcessId(activeShareSourceId));
+      if (Number.isInteger(selectedPid) && selectedPid > 0 && selectedPid !== process.pid) { targetPid = selectedPid; includeTarget = true; }
+    }
+    console.log('native capture target:', includeTarget ? `include process tree ${targetPid}` : `exclude Pair process tree ${targetPid}`);
     addon.start(
       (buf, frames) => {
         cbCount++;
@@ -429,7 +473,13 @@ function startNativeCapture(win) {
       (errMsg) => {
         console.warn('native capture err:', errMsg);
         if (win && !win.isDestroyed()) win.send('pair:captureError', errMsg);
-      }
+        // Fatal native errors end the worker. Join and release its WASAPI/TSFN
+        // resources after this TSFN callback returns, so a later share can start
+        // a fresh instance without releasing the callback while it is executing.
+        setImmediate(() => { try { addon.stop(); } catch {} addon._running = false; });
+      },
+      targetPid,
+      includeTarget
     );
     addon._running = true;
     const fmt = addon.getFormat();
@@ -438,14 +488,17 @@ function startNativeCapture(win) {
   } catch(e) {
     console.warn('native capture start failed:', e.message);
     addon._running = false;
+    activeShareSourceId = null;
     if (win && !win.isDestroyed()) win.send('pair:captureError', 'Start failed: '+e.message);
   }
 }
 function stopNativeCapture() {
   const addon = nativeCapture;
-  if (!addon || !addon._running) return;
-  try { addon.stop(); } catch {}
-  addon._running = false;
+  if (addon && addon._running) {
+    try { addon.stop(); } catch {}
+    addon._running = false;
+  }
+  activeShareSourceId = null;
 }
 ipcMain.on('pair:startCapture', (event) => {
   if (!isPairRenderer(event)) return;
@@ -456,15 +509,4 @@ ipcMain.on('pair:stopCapture', event => {
   if (!isPairRenderer(event)) return;
   console.log('native capture: IPC stopCapture');
   stopNativeCapture();
-});
-let refCount=0;
-ipcMain.on('pair:captureRef', (event, buf) => {
-  if (!isPairRenderer(event) || !buf || buf.byteLength > MAX_IPC_CHUNK) return;
-  refCount++;
-  if(refCount%50===0)console.log('native capture: ref #'+refCount+' bytes='+(buf?.byteLength||buf?.length));
-  const addon = nativeCapture;
-  if (!addon || !addon._running) { if(refCount===1)console.warn('native capture: ref sent but addon not running'); return; }
-  // IPC delivers ArrayBuffer; addon expects a Node.js Buffer
-  const b = Buffer.from(buf);
-  try { addon.pushReference(b); } catch (e) { console.warn('pushReference error:', e); }
 });
