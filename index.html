@@ -42,18 +42,17 @@
 
       <div class="workspace-view">
       <details id="connectCard" class="pair-card card connect-drawer">
-        <summary><span>Add a friend</span><small>Pair signaling</small></summary>
+        <summary><span>Add a friend</span><small>Invite code</small></summary>
         <div class="section-heading"><div><p class="eyebrow">01 / CONNECT</p><h2>Connect with your friend</h2></div><span class="lock">E2EE</span></div>
-        <p class="muted">Pair signaling gets both computers into the same private room. Chat, calls, and screen sharing then use an encrypted peer connection.</p>
-        <p id="pairHint" class="pair-hint">Enter the same private room code on both computers. One person hosts and the other joins.</p>
+        <p class="muted">Create a five-digit code and send it to your friend. Pair handles the connection privately in the background.</p>
+        <p id="pairHint" class="pair-hint">Create a code, or enter the five digits your friend sent you.</p>
         <details class="manual-pair" open>
-          <summary>Pair signaling · recommended</summary>
-          <p class="hint">Use the hosted Pair service and the same private room code on both computers. Signaling finds your friend; calls and messages remain end-to-end encrypted.</p>
+          <summary>Five-digit invite · recommended</summary>
+          <p class="hint">One person creates and shares the code. The other enters it and joins. Calls and messages remain end-to-end encrypted.</p>
           <div class="auto-pair">
           <div class="auto-grid">
-            <div class="auto-field"><label for="signalServer">Signaling address</label><input id="signalServer" value="wss://pair.benjaminu01.workers.dev" placeholder="wss://pair.benjaminu01.workers.dev" aria-label="Signaling server address" /></div>
-            <div class="auto-field"><label for="roomCode">Room code</label><input id="roomCode" value="" placeholder="16+ character secret" aria-label="Room code" /></div>
-            <button id="hostRoom" class="primary">Host room</button><button id="joinRoom">Join room</button><button id="leaveRoom" hidden>Leave room</button>
+            <div class="auto-field"><label for="roomCode">Invite code</label><input id="roomCode" value="" placeholder="12345" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" autocomplete="one-time-code" aria-label="Five-digit invite code" /></div>
+            <button id="hostRoom" class="primary">Create code</button><button id="joinRoom">Join with code</button><button id="leaveRoom" hidden>Leave</button>
           </div>
           </div>
         </details>

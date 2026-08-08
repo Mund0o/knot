@@ -6,7 +6,7 @@ function normalizeRoom(value) {
   const room = String(value || '').trim().toUpperCase();
   const parts = room.split(':');
   const [base, suffix] = parts;
-  if (parts.length > 2 || !/^[A-Z0-9_-]{16,64}$/.test(base)) return '';
+  if (parts.length > 2 || !/^(?:\d{5}|[A-Z0-9_-]{16,64})$/.test(base)) return '';
   if (suffix !== undefined && suffix !== 'STREAM') return '';
   return suffix ? `${base}:STREAM` : base;
 }
@@ -38,7 +38,7 @@ export default {
     }
 
     const room = normalizeRoom(url.searchParams.get('room'));
-    if (!room) return jsonResponse({ error: 'room must be a 16-64 character secret' }, 400);
+    if (!room) return jsonResponse({ error: 'invalid invite code' }, 400);
 
     const id = env.PAIR_ROOMS.idFromName(room);
     const stub = env.PAIR_ROOMS.get(id);

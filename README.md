@@ -115,8 +115,10 @@ npx wrangler deploy
 No build output directory or static-assets directory is needed. The checked-in
 `wrangler.jsonc` points directly to `worker/index.js`, preventing Wrangler from
 trying to upload the Electron repository or `node_modules` as website assets.
-Pair defaults to `wss://pair.benjaminu01.workers.dev`; use the same secret room
-code on both computers.
+The app keeps the Worker address internal. The host creates a five-digit invite
+code and the friend enters it; neither person has to type or see a WebSocket
+address. Longer legacy room codes remain accepted by the Worker for older app
+versions.
 
 ### Host signaling from your own PC
 

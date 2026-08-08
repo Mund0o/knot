@@ -728,7 +728,7 @@ $('#openSettings').onclick=()=>openSettings();$('#closeSettings').onclick=closeP
 profileBtn.onclick=()=>openSettings(true);profileAdjust.onclick=()=>openSettings(true);settingsChangePhoto.onclick=()=>profileInput.click();settingsAdjustPhoto.onclick=()=>{profileEditor.hidden=!profileEditor.hidden};settingsRemovePhoto.onclick=async()=>{profileAvatar='';renderProfile();profileEditor.hidden=true;await ssSet('profileAvatar',null);await ssSet('profilePhotoMode','none');announceProfile()};profileDone.onclick=()=>{profileEditor.hidden=true;updateProfileFrame(true)};[profileZoom,profileX,profileY].forEach(input=>input.oninput=()=>updateProfileFrame(false));[profileZoom,profileX,profileY].forEach(input=>input.onchange=()=>updateProfileFrame(true));profileInput.onchange=async()=>{const file=profileInput.files?.[0];profileInput.value='';if(!file)return;try{profileAvatar=await resizeProfile(file);renderProfile();await ssSet('profileAvatar',profileAvatar);await ssSet('profilePhotoMode','custom');announceProfile()}catch(e){alert(e.message||'Could not set profile photo')}};
 (async()=>{updateProfileName(await ss('profileName'),{persist:false,share:false})})();displayNameInput.onchange=()=>updateProfileName(displayNameInput.value);
 (async()=>{inputDeviceId=(await ss('inputDevice'))||'default';outputDeviceId=(await ss('outputDevice'))||'default';voiceProcessingEnabled=(await ss('voiceProcessing'))==='on';voiceInputModeValue=(await ss('voiceInputMode'))==='ptt'?'ptt':'voice';const savedPttKey=await ss('pushToTalkKey');pushToTalkKey=typeof savedPttKey==='string'&&savedPttKey.length<32?savedPttKey:'Space';const savedPttDelay=Number(await ss('pushToTalkDelay'));pushToTalkDelay=Number.isFinite(savedPttDelay)?Math.max(0,Math.min(1000,savedPttDelay)):0;soundEnabled=(await ss('soundEffects'))!=='off';profileSharing=(await ss('shareProfile'))!=='off';rememberInviteCode=(await ss('rememberInvite'))!=='off';const motion=(await ss('reduceMotion'))==='on';const hardware=(await ss('hardwareAcceleration'))!=='off';if(!rememberInviteCode){signalIn.value='';ssSet('savedInviteCode',null)}voiceProcessing.checked=voiceProcessingEnabled;updatePushToTalkUI();soundEffects.checked=soundEnabled;shareProfile.checked=profileSharing;rememberInvite.checked=rememberInviteCode;reduceMotion.checked=motion;hardwareAcceleration.checked=hardware;document.documentElement.dataset.reduceMotion=String(motion);hardwareHint.textContent='Hardware acceleration is '+(hardware?'enabled':'disabled')+' for the next start.';await restoreScreenShareSettings();await refreshAudioDevices();await applyOutputDevice()})();signalIn.addEventListener('input',()=>{if(!rememberInviteCode)ssSet('savedInviteCode',null)});
-(async()=>{const savedServer=await ss('signalServer');const savedRoom=await ss('roomCode');const savedInvite=await ss('savedInviteCode');if(savedServer)$('#signalServer').value=savedServer;if(savedRoom)$('#roomCode').value=savedRoom;if(typeof savedInvite==='string'&&savedInvite.length<=MAX_SIGNAL_SIZE)signalIn.value=savedInvite;['signalServer','roomCode'].forEach(id=>$('#'+id).addEventListener('input',()=>ssSet(id==='signalServer'?'signalServer':'roomCode',$('#'+id).value.trim())));signalIn.addEventListener('input',()=>ssSet('savedInviteCode',signalIn.value.trim()));const savedVol=await ss('volume');if(savedVol!==null){const v=parseFloat(savedVol);if(v>=0&&v<=1)setCallVolume(Math.round(v*100),false)}const savedFrame=await ss('profileFrame');try{if(savedFrame)profileFrame=normalizeFrame(JSON.parse(savedFrame))}catch{};profileZoom.value=profileFrame.zoom;profileX.value=profileFrame.x;profileY.value=profileFrame.y;const savedAvatar=await ss('profileAvatar');if(validProfileData(savedAvatar)){profileAvatar=savedAvatar;renderProfile();announceProfile()}})();
+(async()=>{const savedRoom=await ss('roomCode');const savedInvite=await ss('savedInviteCode');if(/^\d{5}$/.test(savedRoom||''))$('#roomCode').value=savedRoom;if(typeof savedInvite==='string'&&savedInvite.length<=MAX_SIGNAL_SIZE)signalIn.value=savedInvite;$('#roomCode').addEventListener('input',()=>{const code=$('#roomCode').value.replace(/\D/g,'').slice(0,5);$('#roomCode').value=code;ssSet('roomCode',code)});signalIn.addEventListener('input',()=>ssSet('savedInviteCode',signalIn.value.trim()));const savedVol=await ss('volume');if(savedVol!==null){const v=parseFloat(savedVol);if(v>=0&&v<=1)setCallVolume(Math.round(v*100),false)}const savedFrame=await ss('profileFrame');try{if(savedFrame)profileFrame=normalizeFrame(JSON.parse(savedFrame))}catch{};profileZoom.value=profileFrame.zoom;profileX.value=profileFrame.x;profileY.value=profileFrame.y;const savedAvatar=await ss('profileAvatar');if(validProfileData(savedAvatar)){profileAvatar=savedAvatar;renderProfile();announceProfile()}})();
 // Every installation gets a stable generated look until the owner chooses a
 // photo. The compact identity is only used to derive the avatar color.
 (async()=>{const savedIdentity=await ss('profileIdentity');profileIdentity=validProfileIdentity(savedIdentity)?savedIdentity:makeProfileIdentity();renderProfile();if(profileIdentity!==savedIdentity)ssSet('profileIdentity',profileIdentity)})();
@@ -739,21 +739,22 @@ profileBtn.onclick=()=>openSettings(true);profileAdjust.onclick=()=>openSettings
   // independent of the signaling server. No action needed here.
 
 let signaling;
+const PAIR_SIGNAL_SERVER='wss://pair.pair-private-link.workers.dev';
 function secureSignalAddress(address){try{const u=new URL(address);const loopback=['localhost','127.0.0.1','[::1]','::1'].includes(u.hostname);return u.protocol==='wss:'||(u.protocol==='ws:'&&loopback)?u.href:null}catch{return null}}
 function roomSignalAddress(address,room){const safe=secureSignalAddress(address);if(!safe)return null;const u=new URL(safe);u.searchParams.set('room',String(room).trim().toUpperCase());return u.href}
+function makeInviteCode(){const range=90000,limit=Math.floor(0x100000000/range)*range,words=new Uint32Array(1);do{crypto.getRandomValues(words)}while(words[0]>=limit);return String(10000+(words[0]%range))}
 async function automaticPair(kind){
   // Tear down any prior session so a second Host/Join click (or host→leave→host)
   // doesn't leak an old pc/signaling whose handlers fire stale signals.
   reconnectCall=callActive;if(pc||signaling)disconnectRoom();
-  role=kind; const baseAddress=secureSignalAddress($('#signalServer').value.trim()); const room=$('#roomCode').value.trim();
-  if(!baseAddress)return pairHint.textContent='Use wss:// for remote signaling (ws:// is allowed only on localhost), or use direct pairing instead.';
-  if(room.length<16)return pairHint.textContent='Use a room code with at least 16 characters.';
+  role=kind; const baseAddress=PAIR_SIGNAL_SERVER; const room=$('#roomCode').value.trim();
+  if(!/^\d{5}$/.test(room))return pairHint.textContent='Enter the five-digit invite code.';
   const address=roomSignalAddress(baseAddress,room);
   pairHint.textContent='Connecting to signaling server…'; signaling=new WebSocket(address);
-  signaling.onopen=()=>{try{signaling.send(JSON.stringify({type:'join',room}))}catch{}pairHint.textContent='Waiting for your friend in room '+room.toUpperCase()+'…'};
-  signaling.onerror=()=>pairHint.textContent='Could not reach the signaling server. Check the address and firewall.';
+  signaling.onopen=()=>{try{signaling.send(JSON.stringify({type:'join',room}))}catch{}pairHint.textContent=kind==='host'?'Invite code '+room+' is ready — send it to your friend.':'Joining with invite code '+room+'…'};
+  signaling.onerror=()=>pairHint.textContent='Could not reach Pair signaling. Check your internet connection.';
   signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);
-    if(message.type==='full'){pairHint.textContent='That room already has two people.';try{signaling?.close()}catch{}signaling=null;return}
+    if(message.type==='full'){pairHint.textContent='That invite code is already in use. Create a new code or check the number.';try{signaling?.close()}catch{}signaling=null;return}
     if(message.type==='peer-ready'&&role==='host'){
       reconnectCall=callActive;setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
       const offer=await pc.createOffer();if(!pc)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
@@ -762,7 +763,7 @@ async function automaticPair(kind){
       openStreamRelay(baseAddress,room);pairHint.textContent='Offer sent. Connecting…';
       // If the friend never answers (wrong role, different room, or an old build
       // without TURN), don't hang silently — tell them what to check.
-      setTimeout(()=>{if(pc&&pc.connectionState!=='connected'){pairHint.textContent='No answer from your friend after 20s. Make sure exactly ONE of you clicked Host and the other clicked Join, you are in the SAME room code, and both are on the latest version (v1.0.0+ with TURN).'}},20000)
+      setTimeout(()=>{if(pc&&pc.connectionState!=='connected'){pairHint.textContent='No answer after 20s. Check that your friend entered '+room+' and clicked Join.'}},20000)
     }
     if(message.type==='signal'){const remote=message.payload;
       // Both clicked Host: each receives the other's offer but role==='host', so
@@ -812,7 +813,7 @@ async function automaticPair(kind){
 // Open the separate relay socket used to move file bytes. Same host + room as
 // the signaling socket; the server relays binary frames to the other peer.
 function openStreamRelay(address,room){streamServer=address;streamRoom=room;try{if(streamWs){try{streamWs.onopen=null;streamWs.onerror=null;streamWs.onmessage=null;streamWs.close()}catch{}}streamWs=new WebSocket(roomSignalAddress(address,room+':stream'));streamWs.onopen=()=>{try{streamWs.send(JSON.stringify({type:'join',room:room+':stream'}))}catch{};wire()};streamWs.onerror=()=>{if(!pc||pc.connectionState!=='connected')pairHint.textContent='Stream relay failed — transfers will use WebRTC';};streamWs.onclose=()=>{};}catch{streamWs=null;if(!pc||pc.connectionState!=='connected')pairHint.textContent='Could not open stream relay — transfers will use WebRTC'}}
-$('#hostRoom').onclick=()=>automaticPair('host'); $('#joinRoom').onclick=()=>automaticPair('join');
+$('#hostRoom').onclick=()=>{const code=makeInviteCode();$('#roomCode').value=code;ssSet('roomCode',code);automaticPair('host')}; $('#joinRoom').onclick=()=>automaticPair('join');
 function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}
   // Tear down an active share before closing the peer connection so WASAPI
   // capture and local MediaStream tracks do not keep running after leave.
