@@ -1,10 +1,10 @@
 {
-  "version": "1.1.37",
-  "notes": "Fixes Linux black screen capture, validates live video before sharing, and improves screen-share frame pacing.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.37/pair-p2p-1.1.37.tar.gz",
-  "linuxSha256": "e0a12b193656fc16564d364935d2f1b3fe3a76d42ba94ea8882a638586215f9b",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.37/Knot-1.1.37.AppImage",
-  "linuxAppImageSha256": "385a265c94f0c028d2fb14167cf4bfb92053520f2e1969604b18defb2b8900fe",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.37/Knot.Setup.1.1.37.exe",
-  "winSha256": "6331e1e3cc89cb83b8034e0fc055cee99213be7e0afc1186a791e6dcb954b4cf"
+  "version": "1.1.38",
+  "notes": "Fixes Linux/KDE black screen sharing and makes file transfers fail cleanly instead of hanging when a direct connection stalls.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.38/pair-p2p-1.1.38.tar.gz",
+  "linuxSha256": "3945249ebe8db718085f11031f39bcfc3e4e101e9f52ae94d2a4b97646b10ccb",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.38/Knot-1.1.38.AppImage",
+  "linuxAppImageSha256": "5912a969eb853ed9571527ed6e83f021743975c2af0d1538532c526ba44d1556",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.38/Knot.Setup.1.1.38.exe",
+  "winSha256": "3a90216583158ada31957a6e171bedc8ade86420944a0b89e4f0f715461d30c1"
 }
