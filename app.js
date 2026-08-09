@@ -1346,11 +1346,11 @@ function startScreenStats(sender){
   }catch{}};
   sample();screenStatsTimer=setInterval(sample,2000);
 }
-function orderedScreenCodecs(caps){
+function orderedScreenCodecs(caps,selectedCodec=screenCodec){
   // Linux Chromium commonly falls back to OpenH264 software encoding, which is
   // unable to keep up with 4K capture. VP9 avoids H.264's level constraints and
   // is also exposed by Intel's VA-API encoder when acceleration is available.
-  const gpuVendor=window.pairEnv?.primaryGpuVendor||'',automatic=window.pairEnv?.platform==='linux'&&gpuVendor==='0x10de'?['VP9','VP8','H264','AV1','H265']:['H264','VP9','VP8','AV1','H265'],configured=screenCodec;
+  const gpuVendor=window.pairEnv?.primaryGpuVendor||'',automatic=window.pairEnv?.platform==='linux'&&gpuVendor==='0x10de'?['VP9','VP8','H264','AV1','H265']:['H264','VP9','VP8','AV1','H265'],configured=selectedCodec;
   const requested=configured==='auto'?automatic:[configured,...automatic];
   const order=[...new Set(requested.map(name=>name.toUpperCase()))],seen=new Set(),result=[];
   for(const name of order)for(const codec of caps.codecs||[]){if(codec.mimeType?.toUpperCase()!==`VIDEO/${name}`||seen.has(codec))continue;seen.add(codec);result.push(codec)}
@@ -1364,8 +1364,7 @@ async function switchScreenCodec(codec){
   if(!pc||!screenActive)return false;
   const sender=screenSenders.find(value=>value.track?.kind==='video'),tr=sender&&pc.getTransceivers().find(value=>value.sender===sender),caps=RTCRtpSender.getCapabilities?.('video');
   if(!sender||!tr||!caps)return false;
-  const previous=screenCodec;screenCodec=codec;
-  try{const codecs=orderedScreenCodecs(caps);if(!codecs.length)throw new Error('compatible codec unavailable');tr.setCodecPreferences(codecs);if(!await renegotiate())throw new Error('codec renegotiation failed');screenStatus.textContent='Sharing · switched from AV1 to H.264 for compatibility';return true}catch(error){screenCodec=previous;console.warn('[VIDEO] codec fallback failed:',error);return false}
+  try{const codecs=orderedScreenCodecs(caps,codec);if(!codecs.length)throw new Error('compatible codec unavailable');tr.setCodecPreferences(codecs);if(!await renegotiate())throw new Error('codec renegotiation failed');screenStatus.textContent='Sharing · temporarily switched from AV1 to H.264 for compatibility';return true}catch(error){console.warn('[VIDEO] codec fallback failed:',error);return false}
 }
 function targetScreenBitrate(width,height,fps){
   const pixels=Math.max(1,(Number(width)||1920)*(Number(height)||1080)),motion=Math.max(.5,(Number(fps)||60)/60);
@@ -1543,7 +1542,10 @@ async function startScreenShare(){
     screenActive=true;screenAudioDebug=screenAudioOn?' · starting sound capture':' · sound off';
     startupStream=null;
     screenPreview.muted=true;
-    screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{};setTimeout(()=>{try{syncLocalScreenPreview()}catch{}},250)
+    // Playing a local 4K preview creates a second compositor/decode workload
+    // in the renderer. Keep the capture track independent and decode it only
+    // when the sharer explicitly opens their own preview.
+    screenPreview.srcObject=stream;screenPreview.hidden=false;syncLocalScreenPreview();
     screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';screenStatus.textContent='Sharing · '+captured.width+'×'+captured.height+(captured.fps?' · '+captured.fps+'fps':'');
     startScreenStats(sender);
     try{send({t:'screen-start'})}catch{};
@@ -1608,7 +1610,7 @@ const screenViewBar=document.createElement('div');screenViewBar.className='scree
 const screenVolumeBtn=screenViewBar.querySelector('[data-screen-volume]'),fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=screenVideos.parentElement;screenStage.classList.add('screen-stage');let nativeShareFullscreen=false;
 const screenAudioBadge=document.createElement('span');screenAudioBadge.className='screen-audio-badge';screenStage.appendChild(screenAudioBadge);const syncScreenAudioBadge=()=>{screenAudioBadge.textContent=screenStatus.textContent||'Sharing';screenAudioBadge.hidden=!screenIsActive()};new MutationObserver(syncScreenAudioBadge).observe(screenStatus,{childList:true,characterData:true,subtree:true});
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
-function syncLocalScreenPreview(){if(screenPreview.hidden||!screenPreview.srcObject||screenPreview.readyState<2)return;if(screenExpanded&&focusedScreen==='local')screenPreview.play().catch(()=>{});else screenPreview.pause()}
+function syncLocalScreenPreview(){if(screenPreview.hidden||!screenPreview.srcObject)return;if(screenExpanded&&focusedScreen==='local'&&screenPreview.readyState>=2)screenPreview.play().catch(()=>{});else screenPreview.pause()}
 function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=!!document.fullscreenElement||screenStage.classList.contains('fs');if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-expanded',screenExpanded&&(hasLocal||hasRemote));screenStage.classList.toggle('screen-expanded-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;screenViewBar.hidden=!screenIsActive();fsBtn.hidden=!screenExpanded||!screenIsActive();fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen';syncLocalScreenPreview();syncScreenAudioBadge();renderDmVoiceUI()}
 function returnToSharePreview(){screenStage.classList.remove('fs');document.body.classList.remove('screen-fullscreen');screenExpanded=false;updateScreenLayout()}
 function toggleRemoteFs(){if(screenStage.classList.contains('fs')||document.fullscreenElement){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else if(nativeShareFullscreen)window.pairEnv?.toggleFullscreen?.();nativeShareFullscreen=false;returnToSharePreview();return}screenStage.classList.add('fs');document.body.classList.add('screen-fullscreen');nativeShareFullscreen=!!window.pairEnv?.toggleFullscreen;window.pairEnv?.toggleFullscreen?.();updateScreenLayout()}
