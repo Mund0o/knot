@@ -25,6 +25,9 @@ if (!rendererSource.includes('pendingFrameDelete=pendingFrames.delete.bind') || 
 if (!rendererSource.includes('maxptime=20') || !rendererSource.includes('c.maxptime=20;c.ptime=10')) {
   throw new Error('Voice audio can still queue long Opus packets behind screen sharing');
 }
+if (!rendererSource.includes("configured=screenCodec==='AV1'?'H264':screenCodec")) {
+  throw new Error('Linux screen sharing can still negotiate the black-frame AV1 path');
+}
 
 function fail(error) {
   console.error('Navigation UI smoke test failed:', error?.stack || error);
