@@ -389,7 +389,7 @@ body{background:var(--background);background-attachment:fixed}.app-shell{display
 .presence-card>div>span{color:var(--subtle);font-size:10px}
 
 /* Resizable Discord-style navigation: P owns DMs; server icons stay in the rail. */
-.app-shell{--rail-width:72px;--social-sidebar-width:238px;grid-template-columns:var(--rail-width) var(--social-sidebar-width) minmax(0,1fr);transition:grid-template-columns .18s ease}
+.app-shell{--rail-width:72px;--social-sidebar-width:280px;grid-template-columns:var(--rail-width) var(--social-sidebar-width) minmax(0,1fr);transition:grid-template-columns .18s ease}
 .social-sidebar{position:sticky;overflow:visible}
 body.social-sidebar-collapsed .app-shell{grid-template-columns:var(--rail-width) 0 minmax(0,1fr)}
 body.social-sidebar-collapsed .social-sidebar{visibility:hidden;border-right:0;pointer-events:none}
@@ -411,3 +411,25 @@ body.social-sidebar-collapsed .sidebar-toggle{left:calc(var(--rail-width) - 12px
 .server-dialog-option>div{display:flex;flex-direction:column;gap:3px;margin-bottom:4px}.server-dialog-option strong{font-size:14px}.server-dialog-option span{color:var(--muted);font-size:11px;line-height:1.4}.server-dialog-option label{color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}.server-dialog-option input{width:100%;height:40px}.server-dialog-option button{margin-top:auto}
 @media(max-width:900px){.app-shell{--rail-width:60px}.sidebar-toggle{width:22px;left:calc(var(--rail-width) + var(--social-sidebar-width) - 11px)}body.social-sidebar-collapsed .sidebar-toggle{left:calc(var(--rail-width) - 11px)}}
 @media(max-width:670px){.app-shell{--rail-width:56px;grid-template-columns:var(--rail-width) minmax(0,1fr)}.sidebar-toggle,.sidebar-resize{display:none}.server-dialog-options{grid-template-columns:1fr}}
+
+/* Friends home follows the familiar conversation-list hierarchy. */
+#friendsNavigation{padding:0 0 8px}
+.dm-search{flex:0 0 auto;padding:12px;border-bottom:1px solid var(--stroke-quiet)}
+.dm-search input{width:100%;height:40px;padding:0 13px;border-color:transparent;border-radius:10px;background:var(--field);color:var(--text);font-size:12px;text-align:center}
+.dm-search input:focus{text-align:left}
+.dm-search input::placeholder{color:var(--muted);opacity:1}
+.friends-home{display:flex;width:calc(100% - 16px);min-height:44px;align-items:center;gap:13px;margin:9px 8px 5px;padding:0 13px;border:0;border-radius:9px;background:transparent;color:var(--muted);font-size:15px;font-weight:700;text-align:left}
+.friends-home svg{width:23px;height:23px;flex:0 0 auto;fill:currentColor}
+.friends-home:hover,.friends-home.active{border:0;background:var(--surface-hover);color:var(--text)}
+.dm-heading{display:flex;flex:0 0 auto;align-items:center;justify-content:space-between;margin-top:8px;padding:14px 14px 7px;border-top:1px solid var(--stroke-quiet);color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase}
+.dm-heading button{width:26px;min-width:26px;min-height:26px;padding:0;border:0;background:transparent;color:var(--muted);font-size:21px;font-weight:400}
+.dm-heading button:hover{border:0;background:var(--surface-hover);color:#fff}
+#friendList{padding:0 8px}
+#friendList .friend-entry{min-height:54px;gap:11px;padding:7px 9px;border-radius:10px}
+#friendList .friend-avatar{width:36px;height:36px;font-size:12px}
+#friendList .friend-avatar i{width:11px;height:11px;border-width:3px}
+#friendList .friend-copy{display:flex;min-width:0;flex:1;flex-direction:column;align-items:flex-start;gap:2px}
+#friendList .friend-copy strong{max-width:100%;overflow:hidden;color:var(--text);font-size:14px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
+#friendList .friend-copy small{color:var(--subtle);font-size:10px;font-weight:500}
+#friendList .friend-entry.active{background:var(--surface-hover)}
+#friendList .social-empty{padding:22px 12px;line-height:1.55}

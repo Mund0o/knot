@@ -16,7 +16,9 @@
       <aside id="socialSidebar" class="social-sidebar" aria-label="Friends and channels">
         <div id="sidebarResize" class="sidebar-resize" role="separator" aria-label="Resize friends and channels panel" aria-orientation="vertical" tabindex="0"></div>
         <section id="friendsNavigation" class="social-view">
-          <div class="social-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Friends</h2></div><button id="addFriend" class="social-add" type="button" aria-label="Add a friend" title="Add a friend">+</button></div>
+          <div class="dm-search"><label for="friendSearch" class="sr-only">Find a conversation</label><input id="friendSearch" type="search" autocomplete="off" placeholder="Find or start a conversation" /></div>
+          <button id="friendsHome" class="friends-home active" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 11a4 4 0 1 0-3.7-5.5A5 5 0 0 1 13 8a5 5 0 0 1-.9 2.9A7 7 0 0 1 18 18v1h4v-1a7 7 0 0 0-6-7ZM8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.9 0-7 2.2-7 5v1h14v-1c0-2.8-3.1-5-7-5Z"/></svg><span>Friends</span></button>
+          <div class="dm-heading"><span>Direct Messages</span><button id="addFriend" type="button" aria-label="Add a friend" title="Add a friend">+</button></div>
           <div id="friendList" class="friend-list"><p class="social-empty">Your friends will appear here.</p></div>
         </section>
         <section id="serverNavigation" class="social-view" hidden>
