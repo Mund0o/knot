@@ -1,10 +1,10 @@
 {
-  "version": "1.1.30",
-  "notes": "Focused server and DM call controls, retractable member list, and server identity persistence across updates.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/pair-p2p-1.1.30.tar.gz",
-  "linuxSha256": "69df3cc873204b975566e516e9cb49677572e33782a62c06f60ebc3cb9b9ce2a",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/Knot-1.1.30.AppImage",
-  "linuxAppImageSha256": "53f584d80f49cdf311357b3215e7eea164e8308264cfd891318f2503cbc09d7a",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/Knot.Setup.1.1.30.exe",
-  "winSha256": "3ac14dc6e4c4f74335b189974cc316456acc922ea52b8db00d68ef39d42056ec"
+  "version": "1.1.31",
+  "notes": "Fix screen sharing on Electron and Linux by applying quality constraints after display capture starts.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.31/pair-p2p-1.1.31.tar.gz",
+  "linuxSha256": "7dddcf2f5e4a4b2285c7d5700cbd869437f8c92df0846ffe58d85a481ab3de48",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.31/Knot-1.1.31.AppImage",
+  "linuxAppImageSha256": "2f413740783e00e6d6b3404e101f8e67d1b7ab23737f60d7e053f14ccbaa2393",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.31/Knot.Setup.1.1.31.exe",
+  "winSha256": "d97691af2ff97657cce41e54f72af8223dd9cfba7e6e60d9849a4bf893744173"
 }
