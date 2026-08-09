@@ -1,10 +1,10 @@
 {
-  "version": "1.1.29",
-  "notes": "Pair is now Knot, with a new interlocking-link app icon across the interface, Linux taskbar, Windows executable, and installers. Includes peer-synced server channel history and owner-only server editing.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.29/pair-p2p-1.1.29.tar.gz",
-  "linuxSha256": "a92d9c0622eafb845adde5906739089a9cf3ee1ab209b48878a117ae83ec0f03",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.29/Knot-1.1.29.AppImage",
-  "linuxAppImageSha256": "43453b189f83f11d0ce93a34ee2e176a7b43e777695334078fe3cd216662d324",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.29/Knot.Setup.1.1.29.exe",
-  "winSha256": "0c181fc25e335391f80dc24cd3fa271c9e1a797abe71bf153b62d64f7eca378a"
+  "version": "1.1.30",
+  "notes": "Focused server and DM call controls, retractable member list, and server identity persistence across updates.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/pair-p2p-1.1.30.tar.gz",
+  "linuxSha256": "dd2a756e3489463a5b32c69e87c9f364498f9305034804487fe5b91ae21bd150",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/Knot-1.1.30.AppImage",
+  "linuxAppImageSha256": "53f584d80f49cdf311357b3215e7eea164e8308264cfd891318f2503cbc09d7a",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/Knot.Setup.1.1.30.exe",
+  "winSha256": "79a0d3e1ca8aa1727444b72705ad22e23c160515ab1a5b8d54e521ab2a780323"
 }
