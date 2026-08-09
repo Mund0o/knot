@@ -461,6 +461,7 @@ function wire(){
         }
         if(value.t==='screen-start'){remoteScreenExpected=true;remoteScreenSuppressed=false;logCallEvent('Friend started screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';return}
         if(value.t==='screen-end'){logCallEvent('Friend stopped screen sharing');clearRemoteScreenShare();return}
+        if(value.t==='screen-codec-fallback'&&screenActive){await switchScreenCodec('H264');return}
         if(value.t==='reneg-offer'&&typeof value.sdp==='string'&&pc){
           if(renegPending&&(role==='join'||role==='answer')){renegotiating++;renegPending=false}
           await pc.setRemoteDescription({type:'offer',sdp:value.sdp});const answer=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});await waitIce();send({t:'reneg-answer',sdp:pc.localDescription.sdp});return;
@@ -548,7 +549,7 @@ function setupPeer(){
       if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
-    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;monitorSpeaking('dm-friend',stream);e.track.onended=()=>{stopSpeakingMonitor('dm-friend');if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){if(remoteScreenSuppressed){e.track.enabled=false;return}try{const receiver=pc.getReceivers().find(value=>value.track===e.track);if(receiver){receiver.playoutDelayHint=0;if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=0}}catch{}remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1;remoteScreen.play()}catch{};e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
+    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;monitorSpeaking('dm-friend',stream);e.track.onended=()=>{stopSpeakingMonitor('dm-friend');if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}logCallEvent('Friend left the call');callStatus.textContent='Friend left the call';callStatus.className='call-status'};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){if(remoteScreenSuppressed){e.track.enabled=false;return}try{const receiver=pc.getReceivers().find(value=>value.track===e.track);if(receiver){receiver.playoutDelayHint=.08;if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=60;setTimeout(async()=>{try{const stats=await receiver.getStats();let inbound;stats.forEach(report=>{if(report.type==='inbound-rtp'&&(report.kind==='video'||report.mediaType==='video'))inbound=report});if(inbound&&(inbound.bytesReceived||0)>12000&&(inbound.framesDecoded||0)===0&&chat?.readyState==='open'){screenStatus.textContent='AV1 decode failed — requesting compatible video';send({t:'screen-codec-fallback'})}}catch{}},4000)}}catch{}remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1;remoteScreen.play()}catch{};e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;pc?.removeEventListener('icegatheringstatechange',f);clearTimeout(timeout);resolve()};const f=()=>{if(pc?.iceGatheringState==='complete')finish()};const timeout=setTimeout(finish,5000);pc.addEventListener('icegatheringstatechange',f)})}
 function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=256000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=256000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('maxptime'))m+='; maxptime=20';else m=m.replace(/maxptime=\d+/,'maxptime=20');if(!m.includes('minptime'))m+='; minptime=10';else m=m.replace(/minptime=\d+/,'minptime=10');if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx=0';if(!m.includes('stereo'))m+='; stereo=1';else m=m.replace(/stereo=[01]/,'stereo=1');if(!m.includes('sprop-stereo'))m+='; sprop-stereo=1';else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo=1');return m})}
@@ -1313,12 +1314,14 @@ async function recoverOverloadedScreenSender(sender){
   if(screenRecoveryLevel>=2||!screenActive)return;
   screenRecoveryLevel++;
   const track=screenStream?.getVideoTracks?.()[0];
-  const width=screenRecoveryLevel===1?2560:1920,height=screenRecoveryLevel===1?1440:1080;
-  try{await track?.applyConstraints?.({width:{ideal:width,max:width},height:{ideal:height,max:height},frameRate:{ideal:60,max:60}})}catch{try{await track?.applyConstraints?.({frameRate:{ideal:60,max:60}})}catch{}}
+  // A quality selection is a promise, not a hint: never silently replace a
+  // requested 4K share with 1440p/1080p because a sample was slow. Congestion
+  // control may still limit the link, but resolution remains under the user's
+  // control in the share settings.
   try{await configureScreenVideoSender(sender,track,60)}catch{}
   screenStallSamples=0;
-  screenStatus.textContent='Sharing · smooth quality recovery '+height+'p60'+screenAudioDebug;
-  logCallEvent('Screen encoder overloaded — preserving 60fps at '+height+'p');
+  screenStatus.textContent='Sharing · keeping selected resolution'+screenAudioDebug;
+  logCallEvent('Screen encoder overloaded — keeping the selected resolution');
 }
 function startScreenStats(sender){
   if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;screenRecoveryLevel=0;screenStallSamples=0;
@@ -1346,10 +1349,7 @@ function orderedScreenCodecs(caps){
   // Linux Chromium commonly falls back to OpenH264 software encoding, which is
   // unable to keep up with 4K capture. VP9 avoids H.264's level constraints and
   // is also exposed by Intel's VA-API encoder when acceleration is available.
-  // Electron's AV1 negotiation can produce a healthy sender with a black
-  // receiver on mixed Linux AMD/NVIDIA peers. Prefer interoperable H.264/VP9
-  // until the native AV1 transport owns both encode and decode paths.
-  const gpuVendor=window.pairEnv?.primaryGpuVendor||'',automatic=window.pairEnv?.platform==='linux'&&gpuVendor==='0x10de'?['VP9','VP8','H264','H265']:['H264','VP9','VP8','H265'],configured=screenCodec==='AV1'?'H264':screenCodec;
+  const gpuVendor=window.pairEnv?.primaryGpuVendor||'',automatic=window.pairEnv?.platform==='linux'&&gpuVendor==='0x10de'?['VP9','VP8','H264','AV1','H265']:['H264','VP9','VP8','AV1','H265'],configured=screenCodec;
   const requested=configured==='auto'?automatic:[configured,...automatic];
   const order=[...new Set(requested.map(name=>name.toUpperCase()))],seen=new Set(),result=[];
   for(const name of order)for(const codec of caps.codecs||[]){if(codec.mimeType?.toUpperCase()!==`VIDEO/${name}`||seen.has(codec))continue;seen.add(codec);result.push(codec)}
@@ -1358,6 +1358,13 @@ function orderedScreenCodecs(caps){
   // video-quality problem even on an otherwise fast connection.
   for(const codec of caps.codecs||[]){if(!seen.has(codec)&&/^video\/(?:rtx|red|ulpfec|flexfec)/i.test(codec.mimeType||'')){seen.add(codec);result.push(codec)}}
   return result;
+}
+async function switchScreenCodec(codec){
+  if(!pc||!screenActive)return false;
+  const sender=screenSenders.find(value=>value.track?.kind==='video'),tr=sender&&pc.getTransceivers().find(value=>value.sender===sender),caps=RTCRtpSender.getCapabilities?.('video');
+  if(!sender||!tr||!caps)return false;
+  const previous=screenCodec;screenCodec=codec;
+  try{const codecs=orderedScreenCodecs(caps);if(!codecs.length)throw new Error('compatible codec unavailable');tr.setCodecPreferences(codecs);if(!await renegotiate())throw new Error('codec renegotiation failed');screenStatus.textContent='Sharing · switched from AV1 to H.264 for compatibility';return true}catch(error){screenCodec=previous;console.warn('[VIDEO] codec fallback failed:',error);return false}
 }
 function targetScreenBitrate(width,height,fps){
   const pixels=Math.max(1,(Number(width)||1920)*(Number(height)||1080)),motion=Math.max(.5,(Number(fps)||60)/60);
@@ -1373,14 +1380,14 @@ async function configureScreenVideoSender(sender,track,fps){
   const p=sender.getParameters();if(!p.encodings||!p.encodings.length)p.encodings=[{}];
   p.encodings[0].maxBitrate=maxBitrate;delete p.encodings[0].minBitrate;p.encodings[0].maxFramerate=fps;p.encodings[0].scaleResolutionDownBy=1;p.encodings[0].priority='high';
   if('networkPriority' in p.encodings[0])p.encodings[0].networkPriority='high';
-  // Motion shares feel broken when frames queue behind an overloaded encoder.
-  // Use the valid WebRTC motion preference: hold the requested frame rate and
-  // only adapt resolution if the actual encoder/network cannot keep up.
-  p.degradationPreference='maintain-framerate';
+  // Do not silently lower a selected 4K share. If a link cannot carry it,
+  // WebRTC may reduce cadence, but keeps the source detail rather than turning
+  // a 4K share into a soft 1080p image.
+  p.degradationPreference='maintain-resolution';
   try{await sender.setParameters(p)}catch(e){
     // Older WebRTC builds may reject priority while accepting the core quality
     // controls. Retry with a fresh transaction object and the portable fields.
-    const fallback=sender.getParameters();if(!fallback.encodings||!fallback.encodings.length)fallback.encodings=[{}];fallback.encodings[0].maxBitrate=maxBitrate;fallback.encodings[0].maxFramerate=fps;fallback.encodings[0].scaleResolutionDownBy=1;fallback.degradationPreference='maintain-framerate';await sender.setParameters(fallback);console.warn('[VIDEO] optional priority parameters unsupported; motion-first sender settings retained:',e?.message||e)
+    const fallback=sender.getParameters();if(!fallback.encodings||!fallback.encodings.length)fallback.encodings=[{}];fallback.encodings[0].maxBitrate=maxBitrate;fallback.encodings[0].maxFramerate=fps;fallback.encodings[0].scaleResolutionDownBy=1;fallback.degradationPreference='maintain-resolution';await sender.setParameters(fallback);console.warn('[VIDEO] optional priority parameters unsupported; resolution-first sender settings retained:',e?.message||e)
   }
   const applied=sender.getParameters(),encoding=applied.encodings?.[0]||{};
   if(encoding.scaleResolutionDownBy!==undefined&&encoding.scaleResolutionDownBy!==1)throw new Error('browser changed the requested screen scale');
