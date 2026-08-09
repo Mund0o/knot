@@ -811,10 +811,10 @@ async function startServerScreenShare(){
   serverScreenStarting=true;renderServerVoiceUI();
   try{
     if(!await chooseServerScreenSource())return;
-    const fps=shareFrameRate===30?30:60,heights={720:720,1080:1080,1440:1440,2160:2160},height=heights[shareResolution],width=height?Math.round(height*16/9):null,video={frameRate:{ideal:fps,max:fps},cursor:screenCursor};
-    if(width&&height){video.width={ideal:width,max:width};video.height={ideal:height,max:height}}
-    serverScreenStream=await navigator.mediaDevices.getDisplayMedia({video,audio:false});
+    const fps=shareFrameRate===30?30:60;
+    serverScreenStream=await navigator.mediaDevices.getDisplayMedia(displayCaptureRequest());
     const track=serverScreenStream.getVideoTracks()[0];if(!track)throw new Error('No screen was selected');
+    await tuneDisplayTrack(track);
     try{track.contentHint=screenContentHint}catch{}
     if(screenAudioOn){const audioTrack=window.pairEnv?.platform==='linux'?await linuxShareAudioTrack():await setupNativeScreenCapture();if(audioTrack)serverScreenStream.addTrack(audioTrack)}
     const preview=$('#serverVoiceScreenPreview');preview.srcObject=serverScreenStream;preview.hidden=false;preview.play().catch(()=>{});track.onended=()=>stopServerScreenShare();
@@ -1296,6 +1296,14 @@ async function configureScreenVideoSender(sender,track,fps){
   if(encoding.scaleResolutionDownBy!==undefined&&encoding.scaleResolutionDownBy!==1)throw new Error('browser changed the requested screen scale');
   console.log('[VIDEO] source='+((settings.width||'?')+'×'+(settings.height||'?'))+' ceiling='+(Number(encoding.maxBitrate||maxBitrate)/1e6).toFixed(1)+'Mbps '+fps+'fps degradation='+(applied.degradationPreference||'browser-default'));
 }
+function displayCaptureRequest(){return{video:true,audio:false}}
+async function tuneDisplayTrack(track){
+  if(!track?.applyConstraints)return;
+  const fps=shareFrameRate===30?30:60,heights={720:720,1080:1080,1440:1440,2160:2160},height=heights[shareResolution],width=height?Math.round(height*16/9):null,constraints={frameRate:{ideal:fps,max:fps}};
+  if(width&&height){constraints.width={ideal:width,max:width};constraints.height={ideal:height,max:height}}
+  try{if(navigator.mediaDevices.getSupportedConstraints?.().cursor)constraints.cursor=screenCursor}catch{}
+  try{await track.applyConstraints(constraints)}catch(error){console.warn('[VIDEO] display track constraints partially unsupported:',error?.message||error);try{await track.applyConstraints({frameRate:{ideal:fps,max:fps}})}catch{}}
+}
 async function startScreenShare(){
   if(screenActive||screenStarting||!pc)return;
   screenStarting=true;
@@ -1319,19 +1327,16 @@ async function startScreenShare(){
     window.pairEnv.setPendingSource(id);
   }
   try{
-    const heights={720:720,1080:1080,1440:1440,2160:2160},height=heights[shareResolution],width=height?Math.round(height*16/9):null,fps=shareFrameRate===30?30:60;
-    const v={frameRate:{ideal:fps,max:fps}};if(width&&height){v.width={ideal:width,max:width};v.height={ideal:height,max:height}}
-    v.cursor=screenCursor;
-    const constraints={video:v};
+    const fps=shareFrameRate===30?30:60;
     // Never request Chromium's full-mix loopback. That path includes Knot voice
     // playback. Computer sound is attached separately through isolated capture
     // so desktop/game audio can share while the call stays on the voice track.
-    constraints.audio=false;
-    const stream=await navigator.mediaDevices.getDisplayMedia(constraints);
+    const stream=await navigator.mediaDevices.getDisplayMedia(displayCaptureRequest());
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
     screenStream=stream;
     const track=stream.getVideoTracks()[0];
     if(!track){stream.getTracks().forEach(t=>t.stop());return}
+    await tuneDisplayTrack(track);
     // Desktop capture defaults to text/detail on some Chromium builds. Motion
     // tells the encoder to preserve changing game/action content instead.
     try{track.contentHint=screenContentHint}catch{}
