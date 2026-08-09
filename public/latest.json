@@ -1,10 +1,10 @@
 {
-  "version": "1.1.27",
-  "notes": "Redesigned direct messages with conversation search and live presence, plus a clear server Create/Join window, server rail, resizable sidebar, and full-width collapse mode.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.27/pair-p2p-1.1.27.tar.gz",
-  "linuxSha256": "cc97e574279caeabcd557214440050c6448cf71853f357c6ec55f564547af66f",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.27/Pair-1.1.27.AppImage",
-  "linuxAppImageSha256": "f01f733595665762a6f05b49cf54503688f530c2b1d2d1573672386adf44e0a0",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.27/Pair.Setup.1.1.27.exe",
-  "winSha256": "02fc14233487df1b0acd4fbc597f7fd51485ede874f528269f36e63488865440"
+  "version": "1.1.28",
+  "notes": "Server channel history now syncs directly between online members, with owner-only server and channel editing, managed channel ordering, and improved voice channel presence.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.28/pair-p2p-1.1.28.tar.gz",
+  "linuxSha256": "1c284adf8f828e1ecd6f1db74be83b5d6d401bd9d379a80fb781b88a9aea439e",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.28/Pair-1.1.28.AppImage",
+  "linuxAppImageSha256": "2b3f7fb441ef931bec489df2c5d37ffe45c9c61e75eef790bfff7dba6db17855",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.28/Pair.Setup.1.1.28.exe",
+  "winSha256": "148d58a36fe09b7215c7be5824ce9713cc600e1f1dcb2cfd15d98e05745bdda6"
 }
