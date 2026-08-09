@@ -430,14 +430,35 @@ app.whenReady().then(() => {
   // the full render mix (including Knot's own call playback) and reintroduces
   // echo into the screenshare. Knot attaches isolated system audio from the
   // native process-loopback addon / PipeWire share sink instead.
-  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-    const useId = pendingSourceId;
-    pendingSourceId = null;
-    const src = useId ? pendingSources.find(s => s.id === useId) : null;
-    if (src) {
+  session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+    try {
+      let src;
+      if (process.platform === 'linux') {
+        // On Wayland, getSources() owns the xdg-desktop-portal session. Fetch
+        // the selected source inside this request and consume it immediately;
+        // retaining a source from an earlier renderer IPC call makes KDE close
+        // its PipeWire target before Chromium imports it ("target not found").
+        const sources = await desktopCapturer.getSources({
+          types: ['screen', 'window'],
+          fetchWindowIcons: false,
+          thumbnailSize: { width: 0, height: 0 }
+        });
+        src = sources[0];
+      } else {
+        const useId = pendingSourceId;
+        src = useId ? pendingSources.find(source => source.id === useId) : null;
+      }
+      pendingSourceId = null;
+      pendingSources = [];
+      if (!src) return callback({ video: undefined });
       activeShareSourceId = src.id;
       callback({ video: src });
-    } else callback({ video: undefined });
+    } catch (error) {
+      console.log('[screen portal] source request failed:', error?.message || error);
+      pendingSourceId = null;
+      pendingSources = [];
+      callback({ video: undefined });
+    }
   }, { useSystemPicker: false });
   createWindow();
   startAutoUpdater();

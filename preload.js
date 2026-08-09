@@ -54,9 +54,9 @@ contextBridge.exposeInMainWorld('pairUpdates', {
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
   primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
-  // Electron's useSystemPicker option is not available on Linux. Wayland
-  // selection is provided by PipeWire when desktopCapturer.getSources runs.
-  useSystemPicker: false,
+  // Linux selection is handled by desktopCapturer inside the display-media
+  // request so the PipeWire portal source is consumed before it can expire.
+  useSystemPicker: process.platform === 'linux',
   isApp: true,
   iceServers: turnServersFromEnvironment(),
   toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
