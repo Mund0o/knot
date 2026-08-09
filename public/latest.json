@@ -1,10 +1,10 @@
 {
-  "version": "1.1.26",
-  "notes": "Real-time profiles and presence now update without a call, with consistent avatars across friends, servers, messages, and the account card.",
-  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.26/pair-p2p-1.1.26.tar.gz",
-  "linuxSha256": "f7866f0b335d2974dff3a6c75f2e21510283ce632ba48cc1af0d829f70a711ca",
-  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.26/Pair-1.1.26.AppImage",
-  "linuxAppImageSha256": "c25be62de0f0a96a69b2adc448cf3c2422728e41639630e4586bb03c29335a91",
-  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.26/Pair.Setup.1.1.26.exe",
-  "winSha256": "73030cc23e6c87f74d3d95f8b4fc582ff064f211cbaaf16a524c3b57657fe52c"
+  "version": "1.1.27",
+  "notes": "Redesigned direct messages with conversation search and live presence, plus a clear server Create/Join window, server rail, resizable sidebar, and full-width collapse mode.",
+  "linuxUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.27/pair-p2p-1.1.27.tar.gz",
+  "linuxSha256": "cc97e574279caeabcd557214440050c6448cf71853f357c6ec55f564547af66f",
+  "linuxAppImageUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.27/Pair-1.1.27.AppImage",
+  "linuxAppImageSha256": "f01f733595665762a6f05b49cf54503688f530c2b1d2d1573672386adf44e0a0",
+  "winUrl": "https://github.com/Mund0o/pair/releases/download/v1.1.27/Pair.Setup.1.1.27.exe",
+  "winSha256": "02fc14233487df1b0acd4fbc597f7fd51485ede874f528269f36e63488865440"
 }
