@@ -127,7 +127,7 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareFrameRate', 'directoryUserId', 'directoryToken', 'messageHistory']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareFrameRate', 'directoryUserId', 'directoryToken', 'messageHistory', 'serverMembersCollapsed']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
@@ -322,7 +322,23 @@ ipcMain.handle('pair:saveCancel', event => isPairRenderer(event) ? closeStream()
 // Defer app.getPath until first use (module-level call may throw before ready).
 let _sp = null;
 function sp() {
-  if (!_sp) _sp = path.join(app.getPath('userData'), 'settings.json');
+  if (!_sp) {
+    // Keep the Cloudflare identity in one product-name-independent location.
+    // Rebranding Pair to Knot changed Electron's default userData folder, which
+    // looked like every server disappeared because a new directory identity was
+    // generated. Updates now reuse this stable folder and migrate older builds.
+    const appData = app.getPath('appData');
+    const stableDir = path.join(appData, 'Knot');
+    _sp = path.join(stableDir, 'settings.json');
+    try {
+      fs.mkdirSync(stableDir, { recursive: true, mode: 0o700 });
+      if (!fs.existsSync(_sp)) {
+        const candidates = [app.getPath('userData'), path.join(appData, 'Pair'), path.join(appData, 'pair-p2p'), path.join(appData, 'pair')];
+        const legacy = [...new Set(candidates)].map(dir => path.join(dir, 'settings.json')).find(file => file !== _sp && fs.existsSync(file));
+        if (legacy) fs.copyFileSync(legacy, _sp);
+      }
+    } catch {}
+  }
   return _sp;
 }
 function readSettings() {
