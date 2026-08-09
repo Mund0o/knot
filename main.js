@@ -189,18 +189,15 @@ try {
   hardwareAccelerationEnabled = earlySettings.hardwareAcceleration !== 'off';
   if (!hardwareAccelerationEnabled) app.disableHardwareAcceleration();
 } catch {}
-// Chromium's Linux hardware encoder is opt-in. On dual-GPU machines it normally
-// probes only the display GPU, which can leave WebRTC using a software encoder
-// even when another render node has a working VA-API encoder. Prefer an Intel
-// media node when present; Chromium still renders Knot on the display GPU.
+// Keep PipeWire desktop capture enabled explicitly for native Wayland sessions.
+// Do not force a different render node for video encoding: capture surfaces on
+// NVIDIA/AMD display GPUs often cannot be imported by an Intel render node,
+// producing a black WebRTC stream with zero outbound bitrate on hybrid systems.
 if (process.platform === 'linux' && hardwareAccelerationEnabled) {
-  app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL');
-  try {
-    const intelRenderNode = fs.readdirSync('/sys/class/drm')
-      .filter(name => /^renderD\d+$/.test(name))
-      .find(name => fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim().toLowerCase() === '0x8086');
-    if (intelRenderNode) app.commandLine.appendSwitch('hardware-video-device-path', `/dev/dri/${intelRenderNode}`);
-  } catch {}
+  app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer,AcceleratedVideoEncoder,VaapiVideoEncoder');
+  // Electron/Chromium currently rejects Vulkan surfaces under native Wayland;
+  // falling back to GL avoids a captured DMABUF presenting as a black frame.
+  if (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('disable-features', 'Vulkan');
 }
 // Knot is serverless by default. `server.js` remains available through
 // `npm run signal` for people who deliberately operate their own signaling
@@ -372,7 +369,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      backgroundThrottling: true,
+      // Calls and the isolated PipeWire audio bridge must keep real-time timing
+      // when the shared game/window has focus instead of Knot.
+      backgroundThrottling: false,
       preload: path.join(__dirname, 'preload.js')
     }
   });

@@ -23,7 +23,7 @@ const LOCAL_TEST_MODE=new URLSearchParams(location.search).get('testMode')==='1'
 // Per-connection sound flags so the chimes don't double/triple: chat+files both
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
 let connectSoundDone=false,friendLeftNotified=false,friendInCall=false,friendPresenceTimer=null,selfInCall=false,selfPresenceTimer=null;
-let screenTransceiver=null,screenActive=false,screenStarting=false,screenStream=null,screenGen=0,screenSenders=[],screenStatsTimer=null,screenStatsLast=null,remoteScreenExpected=false,remoteScreenSuppressed=false,screenAudioDebug='';
+let screenTransceiver=null,screenActive=false,screenStarting=false,screenStream=null,screenGen=0,screenSenders=[],screenStatsTimer=null,screenStatsLast=null,screenRecoveryLevel=0,screenStallSamples=0,remoteScreenExpected=false,remoteScreenSuppressed=false,screenAudioDebug='';
 const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio'),connectCard=$('#connectCard'),addFriendBtn=$('#addFriend'),panelBackdrop=$('#panelBackdrop'),profileBtn=$('#profileBtn'),profileInput=$('#profileInput'),profileAdjust=$('#profileAdjust'),profileEditor=$('#profileEditor'),profileZoom=$('#profileZoom'),profileX=$('#profileX'),profileY=$('#profileY'),profileDone=$('#profileDone'),friendAvatar=$('#friendAvatar'),voicePanel=$('#voicePanel'),roomTitle=$('#roomTitle'),settingsPanel=$('#settingsPanel'),settingsAvatar=$('#settingsAvatar'),settingsChangePhoto=$('#settingsChangePhoto'),settingsAdjustPhoto=$('#settingsAdjustPhoto'),settingsRemovePhoto=$('#settingsRemovePhoto'),displayNameInput=$('#displayName'),yourNameEl=$('#yourName'),friendNameEl=$('#friendName'),inputDevice=$('#inputDevice'),outputDevice=$('#outputDevice'),voiceProcessing=$('#voiceProcessing'),voiceInputMode=$('#voiceInputMode'),pushToTalkSettings=$('#pushToTalkSettings'),pushToTalkKeyButton=$('#pushToTalkKey'),pushToTalkDelayInput=$('#pushToTalkDelay'),pushToTalkDelayValue=$('#pushToTalkDelayValue'),deviceHint=$('#deviceHint'),testMicrophone=$('#testMicrophone'),reduceMotion=$('#reduceMotion'),soundEffects=$('#soundEffects'),shareProfile=$('#shareProfile'),rememberInvite=$('#rememberInvite'),hardwareAcceleration=$('#hardwareAcceleration'),hardwareHint=$('#hardwareHint');
 let profileAvatar='',profileFrame={zoom:100,x:50,y:50},profileIdentity=makeProfileIdentity(),profileName='You',friendName='Friend',inputDeviceId='default',outputDeviceId='default',voiceProcessingEnabled=false,voiceInputModeValue='voice',pushToTalkKey='Space',pushToTalkDelay=0,pushToTalkHeld=false,pushToTalkCapturing=false,pushToTalkReleaseTimer=null,soundEnabled=true,profileSharing=true,rememberInviteCode=true,micTestStream=null,micTestSource=null,micTestGain=null;
 // A 5 MiB source GIF expands to roughly 6.7 MiB as a data URL. This remains
@@ -968,7 +968,7 @@ function disconnectRoom(){if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer
   screenStarting=false;
   if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
   screenActive=false;screenAudioDebug='';
-  if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;
+  if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;screenRecoveryLevel=0;screenStallSamples=0;
   cleanupNativeScreenCapture();
   if(screenStream){try{screenStream.getTracks().forEach(t=>t.stop())}catch{}screenStream=null}
   screenSenders=[];
@@ -1279,32 +1279,22 @@ async function linuxShareAudioTrack(){
     ctx=new AudioContext({sampleRate:48000});
     if(ctx.state==='suspended'){try{await ctx.resume()}catch{}}
     dest=ctx.createMediaStreamDestination();dest.channelCount=2;
-    const RS=96000,pcm=new Float32Array(RS*2);let wp=0,avail=0;
+    // ScriptProcessor callbacks run on the renderer main thread and glitch when
+    // a high-resolution share makes Chromium busy. The AudioWorklet owns its
+    // jitter buffer on the real-time audio thread, independent of UI/encoding.
+    await ctx.audioWorklet.addModule(new URL('screen-audio-worklet.js',location.href));
+    op=new AudioWorkletNode(ctx,'knot-screen-audio',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
     unsubData=window.pairEnv.onLinuxShareAudio(buf=>{
-      const arr=new Float32Array(buf);received=true;
-      const frames=Math.floor(arr.length/2);
-      for(let i=0;i<frames;i++){
-        // When the renderer falls behind, discard the oldest frame instead of
-        // freezing capture until the entire two-second ring drains.
-        if(avail===RS)avail--;
-        pcm[wp*2]=arr[i*2];pcm[wp*2+1]=arr[i*2+1];wp=(wp+1)%RS;avail++;
-      }
+      const arr=new Float32Array(buf);if(!arr.length)return;received=true;
+      try{op.port.postMessage(arr,[arr.buffer])}catch{op.port.postMessage(arr)}
     });
     unsubError=window.pairEnv.onLinuxShareAudioError?.(message=>{captureError=String(message||'capture failed');console.warn('[AUDIO] PipeWire capture error:',captureError)});
     const share=await window.pairEnv.startLinuxShareAudio();if(!share)throw new Error('PipeWire share route could not be created');
     const deadline=Date.now()+2500;while(!received&&!captureError&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,40));
     if(!received)throw new Error(captureError||'PipeWire monitor produced no samples');
-    const B=1024;op=ctx.createScriptProcessor(B,0,2);
-    op.onaudioprocess=e=>{
-      const L=e.outputBuffer.getChannelData(0),R=e.outputBuffer.getChannelData(1);
-      if(avail<L.length){L.fill(0);R.fill(0);return}
-      const rp=(wp-avail+RS)%RS;
-      for(let i=0;i<L.length;i++){const idx=((rp+i)%RS)*2;L[i]=pcm[idx];R[i]=pcm[idx+1]}
-      avail-=L.length;
-    };
     op.connect(dest);screenOutCtx=ctx;screenOutDest=dest;screenNative=true;
     const track=dest.stream.getAudioTracks()[0]||null;try{if(track)track.contentHint='music'}catch{}
-    screenCaptureCleanup=()=>{if(unsubData)unsubData();if(unsubError)unsubError();window.pairEnv.stopLinuxShareAudio?.();try{op.disconnect()}catch{}};
+    screenCaptureCleanup=()=>{if(unsubData)unsubData();if(unsubError)unsubError();window.pairEnv.stopLinuxShareAudio?.();try{op.port.close()}catch{}try{op.disconnect()}catch{}};
     return track;
   }catch(e){
     console.warn('[AUDIO] direct PipeWire capture failed:',e?.message||e);
@@ -1312,9 +1302,35 @@ async function linuxShareAudioTrack(){
     if(unsubData)unsubData();if(unsubError)unsubError();try{op?.disconnect()}catch{};try{ctx?.close()}catch{};window.pairEnv.stopLinuxShareAudio?.();return null;
   }
 }
+async function recoverOverloadedScreenSender(sender){
+  if(screenRecoveryLevel||!screenActive)return;
+  screenRecoveryLevel=1;
+  const track=screenStream?.getVideoTracks?.()[0];
+  try{await track?.applyConstraints?.({width:{ideal:1920,max:1920},height:{ideal:1080,max:1080},frameRate:{ideal:30,max:30}})}catch{try{await track?.applyConstraints?.({frameRate:{ideal:30,max:30}})}catch{}}
+  try{await configureScreenVideoSender(sender,track,30)}catch{}
+  screenStatus.textContent='Sharing · encoder recovery 1080p30'+screenAudioDebug;
+  logCallEvent('Screen encoder overloaded — switched to smooth 1080p30');
+}
 function startScreenStats(sender){
-  if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;
-  const sample=async()=>{try{if(!screenActive)return;const reports=await sender.getStats();let out,pair,source;reports.forEach(r=>{if(r.type==='outbound-rtp'&&(r.kind==='video'||r.mediaType==='video')&&!r.isRemote)out=r;if(r.type==='candidate-pair'&&r.state==='succeeded'&&(r.nominated||r.selected))pair=r;if(r.type==='media-source'&&(r.kind==='video'||r.mediaType==='video'))source=r});if(!out)return;const now=performance.now(),previous=screenStatsLast;let mbps='…',encodeMs='',measuredFps=0;if(previous&&now>previous.at){const elapsed=now-previous.at;mbps=(((out.bytesSent-previous.bytes)*8)/elapsed/1000).toFixed(1);const encoded=(out.framesEncoded||0)-(previous.framesEncoded||0),encode=(out.totalEncodeTime||0)-(previous.totalEncodeTime||0);measuredFps=Math.round(encoded*1000/elapsed);if(encoded>0&&encode>=0)encodeMs=(encode/encoded*1000).toFixed(1)}screenStatsLast={bytes:out.bytesSent,framesEncoded:out.framesEncoded||0,totalEncodeTime:out.totalEncodeTime||0,at:now};const fps=Math.round(out.framesPerSecond||measuredFps||0),sourceFps=Math.round(source?.framesPerSecond||0),w=out.frameWidth||source?.width||0,h=out.frameHeight||source?.height||0,codecReport=reports.get(out.codecId),codec=codecReport?.mimeType?.replace(/^video\//i,'')||'',encoder=String(out.encoderImplementation||'').trim().slice(0,32);const reason=out.qualityLimitationReason,remote=reports.get(out.remoteId),rtt=Number(remote?.roundTripTime??pair?.currentRoundTripTime),loss=Number(remote?.fractionLost),available=Number(pair?.availableOutgoingBitrate),target=Number(out.targetBitrate);const wants4k60=h>=2160&&w>=3840&&shareFrameRate>=60,is4k60=wants4k60&&fps>=55,slowCapture=wants4k60&&sourceFps>0&&sourceFps<55,slowEncoder=wants4k60&&previous&&!slowCapture&&fps<55;const limit=reason==='bandwidth'?' · network limited':reason==='cpu'||slowEncoder?' · encoder below 60fps':slowCapture?' · capture below 60fps':reason&&reason!=='none'?' · quality adapting':is4k60?' · 4K60 locked':'';const network=(Number.isFinite(rtt)?' · '+Math.round(rtt*1000)+'ms RTT':'')+(Number.isFinite(loss)&&loss>0?' · '+(loss*100).toFixed(1)+'% loss':'')+(Number.isFinite(available)&&available>0?' · '+(available/1e6).toFixed(0)+' Mbps available':'');const rate=mbps!=='…'?' · '+mbps+(Number.isFinite(target)&&target>0?'/'+(target/1e6).toFixed(0):'')+' Mbps':'';const encode=encodeMs?' · '+encodeMs+'ms encode':'';const status='Sharing'+(w&&h?' · '+w+'×'+h:'')+(fps?' · '+fps+'fps':'')+rate+(codec?' · '+codec:'')+(encoder?' '+encoder:'')+encode+network+limit+screenAudioDebug;screenStatus.textContent=status;screenBtn.title=status}catch{}};
+  if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;screenRecoveryLevel=0;screenStallSamples=0;
+  const sample=async()=>{try{
+    if(!screenActive)return;
+    const reports=await sender.getStats();let out,pair,source;
+    reports.forEach(report=>{if(report.type==='outbound-rtp'&&(report.kind==='video'||report.mediaType==='video')&&!report.isRemote)out=report;if(report.type==='candidate-pair'&&report.state==='succeeded'&&(report.nominated||report.selected))pair=report;if(report.type==='media-source'&&(report.kind==='video'||report.mediaType==='video'))source=report});
+    if(!out)return;
+    const now=performance.now(),previous=screenStatsLast;let mbps='…',encodeMs='',measuredFps=0,encodedDelta=0,byteDelta=0;
+    if(previous&&now>previous.at){const elapsed=now-previous.at;byteDelta=(out.bytesSent||0)-previous.bytes;mbps=(byteDelta*8/elapsed/1000).toFixed(1);encodedDelta=(out.framesEncoded||0)-previous.framesEncoded;const encode=(out.totalEncodeTime||0)-previous.totalEncodeTime;measuredFps=Math.round(encodedDelta*1000/elapsed);if(encodedDelta>0&&encode>=0)encodeMs=(encode/encodedDelta*1000).toFixed(1)}
+    screenStatsLast={bytes:out.bytesSent||0,framesEncoded:out.framesEncoded||0,totalEncodeTime:out.totalEncodeTime||0,at:now};
+    const fps=Math.round(out.framesPerSecond||measuredFps||0),sourceFps=Math.round(source?.framesPerSecond||0),w=out.frameWidth||source?.width||0,h=out.frameHeight||source?.height||0,codecReport=reports.get(out.codecId),codec=codecReport?.mimeType?.replace(/^video\//i,'')||'',encoder=String(out.encoderImplementation||'').trim().slice(0,32),reason=out.qualityLimitationReason,remote=reports.get(out.remoteId),rtt=Number(remote?.roundTripTime??pair?.currentRoundTripTime),loss=Number(remote?.fractionLost),available=Number(pair?.availableOutgoingBitrate),target=Number(out.targetBitrate);
+    const requestedFps=shareFrameRate===30?30:60,encoderMs=Number(encodeMs),stalled=!!previous&&(out.framesEncoded||0)===0&&encodedDelta===0&&byteDelta<1000,overloaded=!!previous&&(reason==='cpu'||(Number.isFinite(encoderMs)&&encoderMs>28&&fps<requestedFps*.7));
+    screenStallSamples=stalled||overloaded?screenStallSamples+1:0;
+    if(screenStallSamples>=2&&!screenRecoveryLevel)await recoverOverloadedScreenSender(sender);
+    const wants4k60=h>=2160&&w>=3840&&requestedFps>=60,is4k60=wants4k60&&fps>=55,slowCapture=wants4k60&&sourceFps>0&&sourceFps<55,slowEncoder=wants4k60&&previous&&!slowCapture&&fps<55;
+    const limit=screenRecoveryLevel?' · smooth fallback':reason==='bandwidth'?' · network limited':reason==='cpu'||slowEncoder?' · encoder below 60fps':slowCapture?' · capture below 60fps':reason&&reason!=='none'?' · quality adapting':is4k60?' · 4K60 locked':'';
+    const network=(Number.isFinite(rtt)?' · '+Math.round(rtt*1000)+'ms RTT':'')+(Number.isFinite(loss)&&loss>0?' · '+(loss*100).toFixed(1)+'% loss':'')+(Number.isFinite(available)&&available>0?' · '+(available/1e6).toFixed(0)+' Mbps available':'');
+    const rate=mbps!=='…'?' · '+mbps+(Number.isFinite(target)&&target>0?'/'+(target/1e6).toFixed(0):'')+' Mbps':'',encode=encodeMs?' · '+encodeMs+'ms encode':'';
+    const status='Sharing'+(w&&h?' · '+w+'×'+h:'')+(fps?' · '+fps+'fps':'')+rate+(codec?' · '+codec:'')+(encoder?' '+encoder:'')+encode+network+limit+screenAudioDebug;screenStatus.textContent=status;screenBtn.title=status;
+  }catch{}};
   sample();screenStatsTimer=setInterval(sample,2000);
 }
 function orderedScreenCodecs(caps){
@@ -1482,7 +1498,7 @@ async function startScreenShare(){
     if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;screenAudioDebug=screenAudioOn?' · starting sound capture':' · sound off';
     screenPreview.muted=true;
-    screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{}
+    screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{};setTimeout(()=>{try{syncLocalScreenPreview()}catch{}},250)
     screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';screenStatus.textContent='Sharing';
     startScreenStats(sender);
     try{send({t:'screen-start'})}catch{};
@@ -1503,7 +1519,7 @@ async function stopScreenShare(fromEnd){
   screenStarting=false;
   if(window.pairEnv?.platform==='linux')window.pairEnv.stopLinuxShareAudio?.();
   screenActive=false;screenAudioDebug='';
-  if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;
+  if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;screenRecoveryLevel=0;screenStallSamples=0;
   cleanupNativeScreenCapture();
   if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null}
   if(pc){
@@ -1547,7 +1563,8 @@ const screenViewBar=document.createElement('div');screenViewBar.className='scree
 const screenVolumeBtn=screenViewBar.querySelector('[data-screen-volume]'),fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=screenVideos.parentElement;screenStage.classList.add('screen-stage');let nativeShareFullscreen=false;
 const screenAudioBadge=document.createElement('span');screenAudioBadge.className='screen-audio-badge';screenStage.appendChild(screenAudioBadge);const syncScreenAudioBadge=()=>{screenAudioBadge.textContent=screenStatus.textContent||'Sharing';screenAudioBadge.hidden=!screenIsActive()};new MutationObserver(syncScreenAudioBadge).observe(screenStatus,{childList:true,characterData:true,subtree:true});
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
-function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=!!document.fullscreenElement||screenStage.classList.contains('fs');if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-expanded',screenExpanded&&(hasLocal||hasRemote));screenStage.classList.toggle('screen-expanded-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;screenViewBar.hidden=!screenIsActive();fsBtn.hidden=!screenExpanded||!screenIsActive();fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen';syncScreenAudioBadge();renderDmVoiceUI()}
+function syncLocalScreenPreview(){if(screenPreview.hidden||!screenPreview.srcObject||screenPreview.readyState<2)return;if(screenExpanded&&focusedScreen==='local')screenPreview.play().catch(()=>{});else screenPreview.pause()}
+function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=!!document.fullscreenElement||screenStage.classList.contains('fs');if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-expanded',screenExpanded&&(hasLocal||hasRemote));screenStage.classList.toggle('screen-expanded-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;screenViewBar.hidden=!screenIsActive();fsBtn.hidden=!screenExpanded||!screenIsActive();fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen';syncLocalScreenPreview();syncScreenAudioBadge();renderDmVoiceUI()}
 function returnToSharePreview(){screenStage.classList.remove('fs');document.body.classList.remove('screen-fullscreen');screenExpanded=false;updateScreenLayout()}
 function toggleRemoteFs(){if(screenStage.classList.contains('fs')||document.fullscreenElement){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else if(nativeShareFullscreen)window.pairEnv?.toggleFullscreen?.();nativeShareFullscreen=false;returnToSharePreview();return}screenStage.classList.add('fs');document.body.classList.add('screen-fullscreen');nativeShareFullscreen=!!window.pairEnv?.toggleFullscreen;window.pairEnv?.toggleFullscreen?.();updateScreenLayout()}
 screenVideos.addEventListener('click',event=>{if(event.target.closest('input,button,label'))return;const tile=event.target.closest('[data-screen-tile]');if(!tile)return;focusedScreen=tile.dataset.screenTile;if(!screenExpanded)screenExpanded=true;try{if(remoteScreen.volume>0)remoteScreen.muted=false;remoteScreen.play().catch(()=>{})}catch{}updateScreenLayout()});
