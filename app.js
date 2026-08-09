@@ -1341,7 +1341,7 @@ function orderedScreenCodecs(caps){
   // Linux Chromium commonly falls back to OpenH264 software encoding, which is
   // unable to keep up with 4K capture. VP9 avoids H.264's level constraints and
   // is also exposed by Intel's VA-API encoder when acceleration is available.
-  const automatic=window.pairEnv?.platform==='linux'?['VP9','H264','VP8','AV1','H265']:['H264','VP9','VP8','AV1','H265'];
+  const gpuVendor=window.pairEnv?.primaryGpuVendor||'',automatic=window.pairEnv?.platform==='linux'?(gpuVendor==='0x10de'?['VP8','H264','VP9','AV1','H265']:['H264','VP9','VP8','AV1','H265']):['H264','VP9','VP8','AV1','H265'];
   const requested=screenCodec==='auto'?automatic:[screenCodec,...automatic];
   const order=[...new Set(requested.map(name=>name.toUpperCase()))],seen=new Set(),result=[];
   for(const name of order)for(const codec of caps.codecs||[]){if(codec.mimeType?.toUpperCase()!==`VIDEO/${name}`||seen.has(codec))continue;seen.add(codec);result.push(codec)}

@@ -2,6 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const { app, BrowserWindow } = require('electron');
 
+const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+if (!mainSource.includes("appendSwitch('render-node-override', primaryGpu.renderNode)") || !mainSource.includes('/device/boot_vga')) {
+  throw new Error('Linux screen sharing is not pinned to the boot/display GPU');
+}
+
 function fail(error) {
   console.error('Navigation UI smoke test failed:', error?.stack || error);
   app.exit(1);

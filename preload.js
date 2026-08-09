@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('pairUpdates', {
 // Read-only environment info exposed to the sandboxed renderer.
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
+  primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
   // Electron's useSystemPicker option is not available on Linux. Wayland
   // selection is provided by PipeWire when desktopCapturer.getSources runs.
   useSystemPicker: false,
