@@ -620,8 +620,11 @@ const outTransfers=new Map();
 function setPeerPct(el,pct){const p=el.querySelector('.transfer-peer');if(!p)return;p.textContent='Friend: '+pct+'%';p.style.display='';}
 // Chunks that arrive on the relay before the matching 'start' is processed,
 // held per-seq so nothing is dropped or misrouted.
-const pendingFrames=new Map();const PENDING_FRAME_LIMIT=32*1024*1024,PENDING_FRAME_TTL=30000,ACTIVE_FRAME_LIMIT=64*1024*1024;let pendingFrameBytes=0;
-function dropPending(seq){const held=pendingFrames.get(seq);if(!held)return;for(const p of held)pendingFrameBytes-=p.len;pendingFrames.delete(seq);if(pendingFrameBytes<0)pendingFrameBytes=0}
+const pendingFrames=new Map(),pendingFrameDelete=pendingFrames.delete.bind(pendingFrames);const PENDING_FRAME_LIMIT=32*1024*1024,PENDING_FRAME_TTL=30000,ACTIVE_FRAME_LIMIT=64*1024*1024;let pendingFrameBytes=0;
+function dropPending(seq){const held=pendingFrames.get(seq);if(!held)return;for(const p of held)pendingFrameBytes-=p.len;pendingFrameDelete(seq);if(pendingFrameBytes<0)pendingFrameBytes=0}
+// Control-frame cancellation can arrive before its encrypted metadata. Keep
+// the byte budget correct even in that early-frame race.
+pendingFrames.delete=seq=>{if(!pendingFrames.has(seq))return false;dropPending(seq);return true};
 function clearPendingFrames(){pendingFrames.clear();pendingFrameBytes=0}
 const acceptCards=new Map();
 function showAcceptCard(meta,seq){const card=document.createElement('div');card.className='transfer accept-card';card.innerHTML='<div class="accept-top"><strong class="accept-name"></strong><span class="accept-size"></span></div><p class="accept-hint">Your friend wants to send you a file.</p><div class="accept-btns"><button class="accept-yes primary">Accept</button><button class="accept-no">Decline</button></div>';card.querySelector('.accept-name').textContent=meta.name;card.querySelector('.accept-size').textContent=' · '+format(meta.size);const yes=card.querySelector('.accept-yes'),no=card.querySelector('.accept-no');const msg=document.createElement('div');msg.className='message';const bub=document.createElement('div');bub.className='bubble';bub.append(card);const mta=document.createElement('div');mta.className='meta';mta.textContent=new Date().toLocaleTimeString();msg.append(bub,mta);messages.append(msg);messages.scrollTop=messages.scrollHeight;const resolve=new Promise(r=>{const done=v=>{if(acceptCards.get(seq)!==done)return;clearTimeout(acceptTimer);acceptCards.delete(seq);dropPending(seq);msg.remove();r(v)};const acceptTimer=setTimeout(()=>done(false),60000);acceptCards.set(seq,done);yes.onclick=()=>done(true);no.onclick=()=>done(false)});return resolve}

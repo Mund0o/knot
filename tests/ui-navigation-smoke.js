@@ -19,6 +19,9 @@ if (!mainSource.includes("if (process.platform === 'linux')") || !mainSource.inc
 if (!rendererSource.includes('FILE_DRAIN_TIMEOUT=45000') || !rendererSource.includes('direct connection stopped draining')) {
   throw new Error('File transfers can still wait forever on a stalled SCTP send buffer');
 }
+if (!rendererSource.includes('pendingFrameDelete=pendingFrames.delete.bind') || !rendererSource.includes('pendingFrames.delete=seq=>')) {
+  throw new Error('Canceled early file frames can still leak the pending-transfer budget');
+}
 
 function fail(error) {
   console.error('Navigation UI smoke test failed:', error?.stack || error);
