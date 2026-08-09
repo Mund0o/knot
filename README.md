@@ -1,6 +1,6 @@
-# Pair
+# Knot
 
-Pair is a small-group P2P communication app with saved friends, live presence,
+Knot is a small-group P2P communication app with saved friends, live presence,
 direct messages, and servers containing text and voice channels. It uses WebRTC
 data channels and media tracks for content transport. Direct messages also use
 Web Crypto ECDH + AES-GCM on top of WebRTC's DTLS encryption.
@@ -21,16 +21,16 @@ npm run dist
 ```
 
 The tarball and AppImage will be created in the `dist` folder. The AppImage is
-the recommended Linux format: Pair can replace it and restart itself after an
+the recommended Linux format: Knot can replace it and restart itself after an
 update. A tarball installation is also updated in place when its folder is
-writable. On its first graphical launch, Pair adds itself to your Linux
+writable. On its first graphical launch, Knot adds itself to your Linux
 Applications menu; open it from there thereafter with no terminal command.
 
 ## Build a Windows release
 
 Run these commands from a Windows machine with Node.js and Visual Studio Build
 Tools installed. The first command recompiles the optional WASAPI capture addon
-against Pair's current Electron version. The installer still works if that
+against Knot's current Electron version. The installer still works if that
 addon is unavailable, but screen sharing stays video-only rather than using a
 whole-system loopback that could send the viewer's voice back to them.
 
@@ -40,19 +40,19 @@ npm run rebuild:addon
 npm run dist:win
 ```
 
-The installer is created as `dist\Pair Setup <version>.exe`. To make a matched
+The installer is created as `dist\Knot Setup <version>.exe`. To make a matched
 Windows + Linux release and update manifest, run `npm run dist:all` followed by
 `npm run publish`. Upload the Windows installer, Linux tarball, and Linux
 AppImage to the matching GitHub release before committing/pushing
 `public/latest.json`.
 
 Every packaged build checks `public/latest.json` as it opens. If the manifest
-has a newer version, Pair downloads the appropriate package, verifies its
+has a newer version, Knot downloads the appropriate package, verifies its
 SHA-256 checksum, installs it, and restarts automatically.
 
 ## Screen sharing architecture
 
-Pair sends screen video, computer sound, and voice as separate WebRTC tracks.
+Knot sends screen video, computer sound, and voice as separate WebRTC tracks.
 Screen capture defaults to source resolution at 60 fps, prefers H.264 on
 Windows and VP9 on Linux, retains retransmission/FEC codecs, and uses a
 resolution-aware quality ceiling (about 40 Mbps at 1080p60, 72 Mbps at 1440p60,
@@ -73,15 +73,15 @@ microphone-device list.
 Computer sound never uses Chromium's whole-render-mix loopback:
 
 - On Windows, application/window shares capture only the selected process tree.
-  Full-display shares capture all render streams except Pair and its children.
+  Full-display shares capture all render streams except Knot and its children.
   This uses the Windows process-loopback API available on Windows 10 build
   20348 and newer.
-- On Linux/PipeWire, Pair creates a temporary share sink, keeps every Pair
+- On Linux/PipeWire, Knot creates a temporary share sink, keeps every Knot
   process on the real output, routes other applications through the share sink,
   and captures its monitor directly as stereo 48 kHz PCM. The original default
   output and moved streams are restored when sharing stops or capture fails.
 
-This process isolation prevents Pair's incoming voice audio from entering the
+This process isolation prevents Knot's incoming voice audio from entering the
 screen share, so the viewer does not hear their own voice.
 
 ## Run in a browser (optional)
@@ -100,7 +100,7 @@ Open `http://localhost:5173` in two browser windows. For a real friend-to-friend
 2. Person B pastes it, clicks **Create reply**, and sends the generated code back.
 3. Person A pastes the reply and clicks **Apply reply**.
 
-This uses no Pair server. It can connect directly when the two networks permit
+This uses no Knot server. It can connect directly when the two networks permit
 WebRTC peer-to-peer traffic. Some NAT/firewall combinations cannot accept a
 direct connection; those require a TURN relay supplied by the people using it.
 
@@ -131,7 +131,7 @@ desktop app's local settings file; offline content is not stored by Cloudflare.
 
 ### Host signaling from your own PC
 
-Pair no longer starts a signaling server automatically. Direct pairing above is
+Knot no longer starts a signaling server automatically. Direct pairing above is
 the normal connection path. If you deliberately want room-code signaling for a
 network you control, run it manually:
 
@@ -155,7 +155,7 @@ WebRTC cannot always connect two peers on different home networks directly — s
    - UDP `50100–50200` → internal `50100–50200` (the relay port range coturn uses; the 49152–49551 range is reserved by Windows)
 2. Start Docker Desktop, then double-click `coturn\start-coturn.bat` (or run `docker compose -f coturn\docker-compose.yml up -d`). coturn auto-restarts across reboots while Docker is running, so TURN stays available whenever either peer opens the app.
 3. Replace `YOUR_PUBLIC_IP`, `YOUR_LAN_IP`, and `CHANGE_THIS_TO_A_LONG_RANDOM_SECRET` in `turnserver.conf` before starting. Generate the password with a password manager or `openssl rand -hex 32`.
-4. Start Pair with the same relay credentials on both devices (the app deliberately has no baked-in TURN password):
+4. Start Knot with the same relay credentials on both devices (the app deliberately has no baked-in TURN password):
 
 ```bash
 PAIR_TURN='[{"urls":["turn:YOUR_HOST:3481?transport=udp","turn:YOUR_HOST:3481?transport=tcp"],"username":"pair","credential":"YOUR_SECRET"}]' npm start
@@ -167,7 +167,7 @@ To verify it's reachable from outside your network, run from any other machine:
 docker logs pair-coturn          # local: should show no errors and several "allocate" lines after a call
 ```
 
-To rotate the credential later: edit `coturn\turnserver.conf` (`user=pair:...` line), restart coturn, then start Pair with a matching `PAIR_TURN` value on both devices. No rebuild is needed:
+To rotate the credential later: edit `coturn\turnserver.conf` (`user=pair:...` line), restart coturn, then start Knot with a matching `PAIR_TURN` value on both devices. No rebuild is needed:
 
 ```bash
 set PAIR_TURN=[{"urls":"turn:YOUR_HOST:3481","username":"pair","credential":"YOUR_SECRET"}]
@@ -177,6 +177,6 @@ TURN only relays already-encrypted WebRTC bytes (DTLS-SRTP); it cannot read any 
 
 ## Large files
 
-Files are sliced into chunks, encrypted independently, and streamed with a 128 MB in-flight window plus concurrent encrypt/decrypt work so a single direct wired peer can keep a fast SCTP link saturated. The whole file is never loaded into memory during sending. Receiving very large files requires a Chromium browser with the File System Access API (or the Pair app's disk streaming); otherwise the fallback collects chunks in memory and is suitable only for smaller files. The 200 GiB limit is enforced on both send and receive.
+Files are sliced into chunks, encrypted independently, and streamed with a 128 MB in-flight window plus concurrent encrypt/decrypt work so a single direct wired peer can keep a fast SCTP link saturated. The whole file is never loaded into memory during sending. Receiving very large files requires a Chromium browser with the File System Access API (or the Knot app's disk streaming); otherwise the fallback collects chunks in memory and is suitable only for smaller files. The 200 GiB limit is enforced on both send and receive.
 
 This is an MVP, not a production security audit. Before relying on it for sensitive data, add authenticated device identity/fingerprint verification, replay protection, a robust signaling UX, TURN support, and audited cryptographic protocol implementations.

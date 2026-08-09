@@ -2,6 +2,9 @@ const path = require('path');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
 const { execFileSync, spawn } = require('child_process');
+const APP_ICON = path.join(__dirname, 'build', 'icon.png');
+
+app.setName('Knot');
 
 let mainWin = null;
 let pendingSourceId = null;
@@ -21,7 +24,7 @@ function moveExistingLinuxAudio(sink) {
   const details = pipewire('pactl', ['list', 'sink-inputs']); const moved = [];
   for (const parts of pipewire('pactl', ['list', 'short', 'sink-inputs']).split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2)) {
     const [id, currentSink] = parts, block = details.match(new RegExp(`Sink Input #${id}\\n([\\s\\S]*?)(?=\\nSink Input #|$)`))?.[1] || '', pid = Number(block.match(/application\.process\.id\s*=\s*"(\d+)"/)?.[1]);
-    // Only move known non-Pair processes. Pair and all Electron child processes
+    // Only move known non-Knot processes. Knot and all Electron child processes
     // remain on the real output, so their call playback is never share audio.
     if (!pid || pairPids.has(pid) || !sinkNames.get(currentSink)) continue;
     if (pipewireOk('pactl', ['move-sink-input', id, sink])) moved.push({ id, sink: sinkNames.get(currentSink) });
@@ -35,7 +38,7 @@ function keepPairAudioOutOfLinuxShare(sink) {
   for (const [id, currentSink] of inputs) {
     const block = details.match(new RegExp(`Sink Input #${id}\\n([\\s\\S]*?)(?=\\nSink Input #|$)`))?.[1] || '';
     const pid = Number(block.match(/application\.process\.id\s*=\s*"(\d+)"/)?.[1]);
-    // PULSE_SINK already directs future Pair streams to `sink`. Move any
+    // PULSE_SINK already directs future Knot streams to `sink`. Move any
     // existing child stream as well, so an Electron/AudioContext stream that
     // was created before the share cannot leak call or screen playback into it.
     if (pid && pairPids.has(pid) && currentSink !== sink) pipewireOk('pactl', ['move-sink-input', id, sink]);
@@ -50,19 +53,19 @@ function startLinuxShareAudio(webContents) {
   const sink = `pair_share_${process.pid}`;
   const module = pipewire('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Pair_Share_Audio']);
   if (!module) return null;
-  // Pair's renderer inherits PULSE_SINK before it is created, so its own voice
+  // Knot's renderer inherits PULSE_SINK before it is created, so its own voice
   // playback remains on the real output while other applications use this mix.
   keepPairAudioOutOfLinuxShare(original);
   const moved = moveExistingLinuxAudio(sink);
   pipewire('pactl', ['set-default-sink', sink]);
-  const loop = spawn('pw-loopback', ['-n', 'Pair Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+  const loop = spawn('pw-loopback', ['-n', 'Knot Share Playback', '-C', `${sink}.monitor`, '-P', original], { stdio: ['ignore', 'ignore', 'pipe'], detached: true });
   loop.unref();
   // Capture the monitor directly instead of asking Chromium to expose it as a
   // microphone. Chromium's Linux device enumeration can omit virtual monitor
   // sources even though PipeWire created them successfully, which used to make
   // a healthy share route appear as "sound unavailable".
   const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const state = { original, sink, module, loop, capture, moved, label: 'Pair Share Audio', source: `${sink}.monitor`, watch: null, audits: [] };
+  const state = { original, sink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [] };
   const failCaptureRoute = message => {
     if (linuxShareAudio !== state) return;
     if (webContents && !webContents.isDestroyed()) try { webContents.send('pair:linuxShareAudioError', message); } catch {}
@@ -92,7 +95,7 @@ function startLinuxShareAudio(webContents) {
   loop.on('exit', code => { if (linuxShareAudio === state) failCaptureRoute(loopError.trim() || `PipeWire playback exited with code ${code ?? 'unknown'}`); });
   // New Electron audio streams can be created after the default sink changes.
   // PULSE_SINK handles the normal case; subscribe to Pulse/PipeWire events as
-  // a second line of defence so a just-created Pair stream is moved to the real
+  // a second line of defence so a just-created Knot stream is moved to the real
   // output before it can become part of the monitor being shared.
   try {
     const watch = spawn('pactl', ['subscribe'], { stdio: ['ignore', 'pipe', 'ignore'] });
@@ -200,7 +203,7 @@ try {
 // Chromium's Linux hardware encoder is opt-in. On dual-GPU machines it normally
 // probes only the display GPU, which can leave WebRTC using a software encoder
 // even when another render node has a working VA-API encoder. Prefer an Intel
-// media node when present; Chromium still renders Pair on the display GPU.
+// media node when present; Chromium still renders Knot on the display GPU.
 if (process.platform === 'linux' && hardwareAccelerationEnabled) {
   app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL');
   try {
@@ -210,7 +213,7 @@ if (process.platform === 'linux' && hardwareAccelerationEnabled) {
     if (intelRenderNode) app.commandLine.appendSwitch('hardware-video-device-path', `/dev/dri/${intelRenderNode}`);
   } catch {}
 }
-// Pair is serverless by default. `server.js` remains available through
+// Knot is serverless by default. `server.js` remains available through
 // `npm run signal` for people who deliberately operate their own signaling
 // service, but the desktop app must not silently start a localhost server.
 
@@ -350,7 +353,7 @@ ipcMain.on('pair:relaunch', event => { if (isPairRenderer(event)) { app.relaunch
 ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullScreen(!mainWin.isFullScreen()); });
 
 function createWindow() {
-  const windowTitle = `Pair ${app.getVersion()} — private P2P chat`;
+  const windowTitle = `Knot ${app.getVersion()} — private P2P chat`;
   mainWin = new BrowserWindow({
     width: 1180,
     height: 820,
@@ -358,6 +361,7 @@ function createWindow() {
     minHeight: 680,
     backgroundColor: '#111318',
     title: windowTitle,
+    icon: APP_ICON,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -387,7 +391,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  // Keep Pair itself outside the temporary PipeWire share mix.
+  // Keep Knot itself outside the temporary PipeWire share mix.
   if (process.platform === 'linux' && /PipeWire/i.test(pipewire('pactl', ['info']))) {
     const sink = pipewire('pactl', ['get-default-sink']); if (sink) process.env.PULSE_SINK = sink;
   }
@@ -401,8 +405,8 @@ app.whenReady().then(() => {
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
   // System audio is deliberately not granted here. Chromium "loopback" captures
-  // the full render mix (including Pair's own call playback) and reintroduces
-  // echo into the screenshare. Pair attaches isolated system audio from the
+  // the full render mix (including Knot's own call playback) and reintroduces
+  // echo into the screenshare. Knot attaches isolated system audio from the
   // native process-loopback addon / PipeWire share sink instead.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const useId = pendingSourceId;
@@ -466,14 +470,14 @@ function startNativeCapture(win) {
   let cbCount=0;
   try {
     // Discord-style application shares capture the selected process and its
-    // children. Full-display shares capture the desktop but exclude Pair's
+    // children. Full-display shares capture the desktop but exclude Knot's
     // process tree, which prevents the watcher hearing their returned voice.
     let targetPid = process.pid, includeTarget = false;
     if (activeShareSourceId?.startsWith('window:') && typeof addon.windowProcessId === 'function') {
       const selectedPid = Number(addon.windowProcessId(activeShareSourceId));
       if (Number.isInteger(selectedPid) && selectedPid > 0 && selectedPid !== process.pid) { targetPid = selectedPid; includeTarget = true; }
     }
-    console.log('native capture target:', includeTarget ? `include process tree ${targetPid}` : `exclude Pair process tree ${targetPid}`);
+    console.log('native capture target:', includeTarget ? `include process tree ${targetPid}` : `exclude Knot process tree ${targetPid}`);
     addon.start(
       (buf, frames) => {
         cbCount++;

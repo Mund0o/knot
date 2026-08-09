@@ -1,10 +1,11 @@
-// Launch-time updater for packaged Pair builds.
+// Launch-time updater for packaged Knot builds.
 //
 // Release metadata is fetched over HTTPS, then the installer/AppImage is
 // downloaded to a private staging directory and SHA-256 verified before it is
-// ever executed. Updates run without renderer involvement and restart Pair
+// ever executed. Updates run without renderer involvement and restart Knot
 // immediately once the replacement has been handed off to the OS.
 const { app, BrowserWindow } = require('electron');
+const PRODUCT_NAME = 'Knot';
 const crypto = require('crypto');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -59,7 +60,7 @@ function isNewer(local, remote) {
 
 function request(url, maxBytes, onResponse) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': 'Pair-Updater/1.1.2', Accept: 'application/vnd.github+json' } }, response => {
+    const req = https.get(url, { headers: { 'User-Agent': 'Knot-Updater/1.1.2', Accept: 'application/vnd.github+json' } }, response => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
         return resolve({ redirect: new URL(response.headers.location, url).href });
@@ -158,7 +159,7 @@ function runWindowsInstaller(installer) {
   const child = spawn(installer, ['/S', '--updated', '--force-run'], { detached: true, stdio: 'ignore', windowsHide: true });
   child.once('error', error => report('failed', `Could not start the Windows installer: ${error.message}`));
   child.unref();
-  report('restarting', 'Update installed. Restarting Pair…');
+  report('restarting', `Update installed. Restarting ${PRODUCT_NAME}…`);
   app.exit(0);
 }
 
@@ -234,13 +235,13 @@ async function install(manifest) {
   await fsp.mkdir(updateDirectory(), { recursive: true, mode: 0o700 });
   const stage = await fsp.mkdtemp(path.join(updateDirectory(), 'stage-'));
   try {
-    const filename = process.platform === 'win32' ? `Pair-Setup-${manifest.version}.exe` : `Pair-${manifest.version}${fields.extension}`;
-    report('downloading', `Downloading Pair ${manifest.version}…`, { version: manifest.version, percent: 0 });
+    const filename = process.platform === 'win32' ? `${PRODUCT_NAME}-Setup-${manifest.version}.exe` : `${PRODUCT_NAME}-${manifest.version}${fields.extension}`;
+    report('downloading', `Downloading ${PRODUCT_NAME} ${manifest.version}…`, { version: manifest.version, percent: 0 });
     const archive = await download(url, path.join(stage, filename), sha256, (downloaded, total) => {
       const percent = total ? Math.min(100, Math.round(downloaded / total * 100)) : null;
-      report('downloading', percent == null ? `Downloading Pair ${manifest.version}…` : `Downloading Pair ${manifest.version}… ${percent}%`, { version: manifest.version, percent });
+      report('downloading', percent == null ? `Downloading ${PRODUCT_NAME} ${manifest.version}…` : `Downloading ${PRODUCT_NAME} ${manifest.version}… ${percent}%`, { version: manifest.version, percent });
     });
-    report('installing', `Verifying and installing Pair ${manifest.version}…`, { version: manifest.version });
+    report('installing', `Verifying and installing ${PRODUCT_NAME} ${manifest.version}…`, { version: manifest.version });
     if (process.platform === 'win32') runWindowsInstaller(archive);
     else if (process.platform === 'linux') runLinuxUpdate(archive, stage);
   } catch (error) {
@@ -256,9 +257,9 @@ async function checkOnce(feedUrl) {
   report('checking', 'Checking for updates…');
   try {
     const manifest = await fetchManifest(feedUrl);
-    if (!isNewer(app.getVersion(), manifest.version)) { report('current', `Pair ${app.getVersion()} is up to date.`); return; }
-    console.log(`[updater] installing Pair ${manifest.version}`);
-    report('available', `Update found: Pair ${manifest.version}. Preparing download…`, { version: manifest.version });
+    if (!isNewer(app.getVersion(), manifest.version)) { report('current', `${PRODUCT_NAME} ${app.getVersion()} is up to date.`); return; }
+    console.log(`[updater] installing ${PRODUCT_NAME} ${manifest.version}`);
+    report('available', `Update found: ${PRODUCT_NAME} ${manifest.version}. Preparing download…`, { version: manifest.version });
     await install(manifest);
   } catch (error) {
     console.log('[updater] check failed:', error.message);
@@ -270,7 +271,7 @@ function startAutoUpdater() {
   const feed = readFeedUrl();
   if (timer) clearInterval(timer);
   // Check immediately on every launch. The interval catches a release that is
-  // published while Pair is left running.
+  // published while Knot is left running.
   void checkOnce(feed);
   timer = setInterval(() => void checkOnce(feed), CHECK_INTERVAL);
   timer.unref?.();

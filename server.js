@@ -55,7 +55,7 @@ function buildLandingPage(manifest) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pair — download</title>
+<title>Knot — download</title>
 <style>
   body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#f4f1eb;color:#2a2a2a;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}
   .card{background:#fff;border:1px solid #e3ddd0;border-radius:14px;padding:34px 38px;max-width:460px;width:100%;box-shadow:0 6px 24px rgba(0,0,0,.06)}
@@ -74,7 +74,7 @@ function buildLandingPage(manifest) {
 </head>
 <body>
   <div class="card">
-    <h1>Pair — private P2P chat</h1>
+    <h1>Knot — private P2P chat</h1>
     <div class="ver">Latest version: ${version}</div>
     ${notes ? `<div class="notes">${escapeHtml(notes)}</div>` : ''}
     <a class="btn" id="win" href="${escapeHtml(winUrl || '#')}" download>Download for Windows</a>
@@ -165,7 +165,7 @@ const httpServer = tlsEnabled
   : http.createServer(requestHandler);
 
 // The relay only carries setup/control data and bounded file frames. TLS belongs
-// at a reverse proxy; Pair clients require wss:// for non-local signaling.
+// at a reverse proxy; Knot clients require wss:// for non-local signaling.
 const wss = new WebSocket.Server({ server: httpServer, host: '0.0.0.0', maxPayload: 2 * 1024 * 1024, perMessageDeflate: false });
 const MAX_ROOM_PEERS = 2;
 const MAX_SOCKET_BYTES_PER_SECOND = 512 * 1024 * 1024;
@@ -241,13 +241,13 @@ wss.on('connection', socket => {
 
 httpServer.on('error', err => {
   if (err.code === 'EADDRINUSE') {
-    console.warn(`Port ${port} is already in use — another Pair server or process is listening. Signaling will rely on that instance; this app will not start its own.`);
+    console.warn(`Port ${port} is already in use — another Knot server or process is listening. Signaling will rely on that instance; this app will not start its own.`);
     return;
   }
   // Any other listen error is logged, not thrown, so it can't crash the whole
   // Electron app (server.js is required by main.js). The app still runs; it
   // just won't serve signaling/update files on this port.
-  console.error(`Pair server failed to start on port ${port}:`, err.message);
+  console.error(`Knot server failed to start on port ${port}:`, err.message);
 });
 
 // Non-TLS signaling is intentionally loopback-only. Remote peers must use TLS
@@ -255,6 +255,6 @@ httpServer.on('error', err => {
 // local network observer.
 const bindHost = process.env.PAIR_BIND || (tlsEnabled ? '0.0.0.0' : '127.0.0.1');
 httpServer.listen(port, bindHost, () => {
-  console.log(`Pair server listening on ${tlsEnabled ? 'https' : 'http'}://${bindHost}:${port} (signaling + update feed)`);
+  console.log(`Knot server listening on ${tlsEnabled ? 'https' : 'http'}://${bindHost}:${port} (signaling + update feed)`);
 });
-console.log(`Pair signaling server ready for ${tlsEnabled ? 'wss' : 'ws'} connections on ${bindHost}:${port}`);
+console.log(`Knot signaling server ready for ${tlsEnabled ? 'wss' : 'ws'} connections on ${bindHost}:${port}`);

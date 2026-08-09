@@ -79,7 +79,7 @@ contextBridge.exposeInMainWorld('pairEnv', {
 });
 
 // Native WASAPI process-loopback bridge. The OS includes only the selected app
-// or excludes Pair's process tree, so Pair voice never enters these samples.
+// or excludes Knot's process tree, so Knot voice never enters these samples.
 // Only available when the native addon is built and loaded.
 contextBridge.exposeInMainWorld('pairCapture', {
   start: () => ipcRenderer.send('pair:startCapture'),

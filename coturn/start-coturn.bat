@@ -1,6 +1,6 @@
 @echo off
 REM ===========================================================================
-REM  Pair TURN relay launcher.
+REM  Knot TURN relay launcher.
 REM
 REM  Boots coturn via Docker (must have Docker Desktop running). coturn then
 REM  stays up in the background and auto-restarts across reboots while Docker
@@ -33,7 +33,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Starting coturn (Pair TURN relay)...
+echo Starting coturn (Knot TURN relay)...
 docker compose up -d
 if errorlevel 1 (
   echo Failed to start coturn. See errors above.

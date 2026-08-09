@@ -35,13 +35,14 @@ if (!fs.existsSync(SRC)) {
 // build electron-builder actually produced.
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const version = pkg.version;
+const productName = pkg.build?.productName || pkg.name;
 const safeVersion = version.replace(/[^0-9.]/g, '');
 // Public release-asset base URL (no auth needed for public releases).
 const releaseBase = `https://github.com/${GITHUB_REPO}/releases/download/v${version}`;
 
 const linuxTar = `pair-p2p-${safeVersion}.tar.gz`;
-const linuxAppImage = `Pair-${safeVersion}.AppImage`;
-const windowsExe = `Pair Setup ${version}.exe`;
+const linuxAppImage = `${productName}-${safeVersion}.AppImage`;
+const windowsExe = `${productName} Setup ${version}.exe`;
 const windowsBlockmap = `${windowsExe}.blockmap`;
 // GitHub's release uploader normalizes spaces in asset names to dots.
 const releaseUrl = file => `${releaseBase}/${encodeURIComponent(file.replace(/ /g, '.'))}`;
@@ -104,4 +105,4 @@ console.log('  AppImage sha256:', manifest.linuxAppImageSha256);
 console.log('  notes  :', manifest.notes);
 console.log('\nInstallers are hosted as GitHub release assets:');
 console.log('  ' + releaseBase);
-console.log('Publish it with: gh release create v' + version + ' "' + windowsExe + '" "' + linuxTar + '" "' + linuxAppImage + '" --title "Pair ' + version + '"');
+console.log('Publish it with: gh release create v' + version + ' "' + windowsExe + '" "' + linuxTar + '" "' + linuxAppImage + '" --title "' + productName + ' ' + version + '"');

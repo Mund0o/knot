@@ -1,6 +1,6 @@
-# Runs coturn for Pair on this PC. Auto-restarts while Docker Desktop is running
+# Runs coturn for Knot on this PC. Auto-restarts while Docker Desktop is running
 # (even across reboots) via `restart: unless-stopped`, so TURN is always available
-# for you and your friend — independent of whether the Pair app is open.
+# for you and your friend — independent of whether the Knot app is open.
 #
 # NOTE: On Windows, `network_mode: host` does NOT bind to the host's real
 # network interfaces (unlike Linux). We use explicit port maps instead, and the

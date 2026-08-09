@@ -57,7 +57,7 @@ export default {
     const upgrade = request.headers.get('Upgrade');
     if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
       if (request.method !== 'GET') return jsonResponse({ error: 'method not allowed' }, 405);
-      return jsonResponse({ service: 'Pair control plane', status: 'ready', transport: 'websocket', contentRelay: false });
+      return jsonResponse({ service: 'Knot control plane', status: 'ready', transport: 'websocket', contentRelay: false });
     }
     if (url.pathname === '/directory') {
       const id = env.PAIR_DIRECTORY.idFromName('pair-directory-v1');
@@ -87,7 +87,7 @@ export class PairRoom {
 
   webSocketMessage(socket, message) {
     const attachment = socket.deserializeAttachment() || {};
-    // Signaling is deliberately text-only. Pair content must never traverse the Worker.
+    // Signaling is deliberately text-only. Knot content must never traverse the Worker.
     if (typeof message !== 'string') return socket.close(1003, 'binary content relay disabled');
     const bytes = new TextEncoder().encode(message).byteLength;
     if (!this.withinRate(socket, attachment, bytes)) return;
@@ -138,7 +138,7 @@ export class PairDirectory {
     if (!user) return socket.close(1008, 'account missing');
     try {
       if (value.type === 'update-profile') {
-        user.name = cleanText(value.name, 32, user.name || 'Pair user');
+        user.name = cleanText(value.name, 32, user.name || 'Knot user');
         user.image = cleanImage(value.image);
         user.frame = cleanFrame(value.frame);
         await this.putUser(user); await this.broadcastSnapshots();
@@ -200,7 +200,7 @@ export class PairDirectory {
     if (!id || !token) return socket.close(1008, 'invalid credentials');
     const hash = await tokenHash(token); let user = await this.user(id);
     if (user && user.tokenHash !== hash) return socket.close(1008, 'authentication failed');
-    if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Pair user'), image: cleanImage(value.image), frame: cleanFrame(value.frame), friends: [], servers: [] };
+    if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Knot user'), image: cleanImage(value.image), frame: cleanFrame(value.frame), friends: [], servers: [] };
     else { user.name = cleanText(value.name, 32, user.name); user.image = cleanImage(value.image); user.frame = cleanFrame(value.frame); }
     await this.putUser(user); attachment.authed = true; attachment.userId = id; socket.serializeAttachment(attachment);
     this.safeSend(socket, JSON.stringify({ type: 'authenticated', userId: id })); await this.broadcastSnapshots();

@@ -13,7 +13,7 @@
 #include <string>
 
 // Windows process loopback lets us capture the system mix while excluding
-// Pair's process tree. This is the same class of capture Discord uses to keep
+// Knot's process tree. This is the same class of capture Discord uses to keep
 // its own voice playback out of a stream. It needs Windows 10 build 20348+.
 struct ActivationState {
   HANDLE event=nullptr;
@@ -111,7 +111,7 @@ private:
 
     // A window/application share captures its owning process and descendants,
     // matching Discord's application-audio model. A full-display share captures
-    // every render stream except Pair and its descendants, so voice playback can
+    // every render stream except Knot and its descendants, so voice playback can
     // never be sent back to the person watching.
     ActivationState state;
     state.event=CreateEvent(nullptr,FALSE,FALSE,nullptr);
@@ -189,7 +189,7 @@ private:
   void process(BYTE* data,UINT32 frames,bool silent=false){
     const int ch=mixFormat&&mixFormat->nChannels>0?mixFormat->nChannels:2;
     const int outCh=2;
-    // Process-loopback already excludes Pair's process tree, so call playback is
+    // Process-loopback already excludes Knot's process tree, so call playback is
     // not in this mix. Keep a full stereo pass-through for music/game audio
     // instead of collapsing to mono or running a soft canceller that can
     // smear desktop sound.

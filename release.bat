@@ -1,6 +1,6 @@
 @echo off
 REM ===========================================================================
-REM  Pair release script  -  builds + publishes a new version in one click.
+REM  Knot release script  -  builds + publishes a new version in one click.
 REM
 REM  What it does:
 REM    1. Bumps the patch version in package.json (0.8.1 -> 0.8.2 ...)

@@ -30,7 +30,7 @@ app.whenReady().then(async () => {
     }
   });
   const timeout = setTimeout(() => fail('timed out'), TEST_TIMEOUT_MS);
-  await window.loadURL('data:text/html,<meta charset="utf-8"><title>Pair 4K60 test</title>');
+  await window.loadURL('data:text/html,<meta charset="utf-8"><title>Knot 4K60 test</title>');
 
   try {
     const result = await window.webContents.executeJavaScript(`(async()=>{
