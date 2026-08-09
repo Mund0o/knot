@@ -466,7 +466,8 @@ body.server-view .workspace-view{gap:12px}body.server-view.server-voice-connecte
 
 /* Direct calls get the same always-available sidebar controls and a focused stage. */
 .dm-voice-dock .server-voice-summary{grid-template-columns:38px minmax(0,1fr)}
-body.server-view #dmVoiceDock{display:none!important}
+body.server-view #dmVoiceDock[hidden]{display:none!important}
+.screen-stop-watch{position:absolute;z-index:5;top:10px;right:10px;min-height:30px;padding:0 10px;border:1px solid rgba(255,255,255,.14);border-radius:8px;background:rgba(18,20,27,.9);color:#fff;font-size:11px;font-weight:750;box-shadow:0 5px 16px rgba(0,0,0,.35)}.screen-stop-watch:hover,.screen-stop-watch:focus-visible{border-color:#e65c66;background:#b83d47}
 body:not(.server-view) #voicePanel.call-active{position:relative;display:block;min-height:310px;height:min(38vh,390px);overflow:hidden;border:1px solid var(--stroke-quiet);border-radius:14px;background:radial-gradient(circle at 50% 0,rgba(82,65,118,.16),transparent 45%),#07090c}
 body:not(.server-view) #voicePanel.call-active .voice-body{min-height:310px;height:100%;flex-direction:column;justify-content:center;padding:58px 24px 78px}
 body:not(.server-view) #voicePanel.call-active .voice-participants{justify-content:center;gap:20px}
