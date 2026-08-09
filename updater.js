@@ -17,7 +17,7 @@ const { spawn, spawnSync } = require('child_process');
 // The Contents API follows the current Git branch immediately. GitHub's raw
 // CDN can serve an older latest.json for several minutes after a release,
 // making an otherwise valid Windows update look like "no update".
-const DEFAULT_FEED = 'https://api.github.com/repos/Mund0o/pair/contents/public/latest.json?ref=master';
+const DEFAULT_FEED = 'https://api.github.com/repos/Mund0o/knot/contents/public/latest.json?ref=master';
 const CHECK_INTERVAL = 30 * 60 * 1000;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_UPDATE_BYTES = 4 * 1024 * 1024 * 1024;

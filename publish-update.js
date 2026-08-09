@@ -20,11 +20,11 @@ const ROOT = __dirname;
 const SRC = path.join(ROOT, 'dist');
 const OUT = path.join(ROOT, 'public');
 
-// GitHub repo that hosts the installers as release assets, e.g. "Mund0o/pair".
+// GitHub repo that hosts the installers as release assets, e.g. "Mund0o/knot".
 // The auto-updater can then fetch them from:
 //   https://github.com/<repo>/releases/download/v<version>/<file>
 // Set via PAIR_GITHUB_REPO if you fork/relocate the project.
-const GITHUB_REPO = (process.env.PAIR_GITHUB_REPO || 'Mund0o/pair').trim().replace(/\/$/, '');
+const GITHUB_REPO = (process.env.PAIR_GITHUB_REPO || 'Mund0o/knot').trim().replace(/\/$/, '');
 
 if (!fs.existsSync(SRC)) {
   console.error('No dist/ folder found. Build first (npm run dist).');
