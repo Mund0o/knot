@@ -1,10 +1,10 @@
 {
-  "version": "1.1.39",
-  "notes": "Fixes Linux/Wayland black screen sharing by selecting stable full-display portal sources. Computer sound remains optional and never blocks video sharing.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.39/pair-p2p-1.1.39.tar.gz",
-  "linuxSha256": "fe4b24e406d49c482f39b37643e638442f30438ce437921497b4788ecf0cf0f0",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.39/Knot-1.1.39.AppImage",
-  "linuxAppImageSha256": "d8c3c734199b2a046ca0d867ac696c3d59f6974ac60736fed0d8003e5b429cb7",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.39/Knot.Setup.1.1.39.exe",
-  "winSha256": "6871735e85d4a4d8fd1bc151c49d2e8f7ab9ac1406e8f984d33d27ef79ae2818"
+  "version": "1.1.40",
+  "notes": "Update available.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.40/pair-p2p-1.1.40.tar.gz",
+  "linuxSha256": "a1a08a598b5691505d9144a1f842fea617e693ad06eaef8fb99aed0c6579aae2",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.40/Knot-1.1.40.AppImage",
+  "linuxAppImageSha256": "b347dbae16b9c9a459f386fd5b1685c14cf097b4a3701793cdef12222b33b683",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.40/Knot.Setup.1.1.40.exe",
+  "winSha256": "6b5bda6ffb67aa991cc6719f5a151a3f1d2d83a0bae79dd59fde3201305b1ea2"
 }
