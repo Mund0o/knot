@@ -1,10 +1,10 @@
 {
-  "version": "1.1.34",
-  "notes": "Fix Linux screen-share audio so microphone and Knot call playback are excluded from the shared desktop sound.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.34/pair-p2p-1.1.34.tar.gz",
-  "linuxSha256": "0f8651b9dcddc6ed5ab3612a4eb86b32124ea3cb1c8426810732f809a282f2a9",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.34/Knot-1.1.34.AppImage",
-  "linuxAppImageSha256": "c7b8fb501ac2b65922c8ad63d1ce5b9717c92b11c938467cc4b23ba7e64e116b",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.34/Knot.Setup.1.1.34.exe",
-  "winSha256": "f6700eefa6695f55f539a680cc051265e1a15c284bd63e2d2e4ee125a69c2a58"
+  "version": "1.1.35",
+  "notes": "Keep desktop audio audible locally while sharing, add speaking avatar rings, keep active calls visible while chatting, and improve screen-share motion smoothness.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.35/pair-p2p-1.1.35.tar.gz",
+  "linuxSha256": "b1cf350fad77b82c66a7dff4bfa5fe25ac85b0e54cc8698462e40d7f2c52e32e",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.35/Knot-1.1.35.AppImage",
+  "linuxAppImageSha256": "1d0a5f581459ae5b4b60bc05a5f7378d5bd62ad7c0166b293a15953a93595b0e",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.35/Knot.Setup.1.1.35.exe",
+  "winSha256": "001fd5918016cc9824d06688c5a153d7edfe89d08eb1f7e55bbb445405fc4cbc"
 }
