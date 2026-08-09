@@ -485,3 +485,9 @@ body.server-view .member-panel-toggle{display:inline-flex}
 .server-member-heading>div{display:flex;align-items:center;gap:7px}.server-member-heading button{display:grid;width:25px;min-width:25px;min-height:25px;padding:0;place-items:center;border:0;background:transparent;color:var(--muted);font-size:18px}.server-member-heading button:hover{border:0;background:var(--surface-hover);color:#fff}
 body.server-members-collapsed .server-member-panel{display:none!important}body.server-view.server-members-collapsed .app-content{padding-right:34px}
 @media(max-width:1150px){body.server-view.server-members-collapsed .app-content{padding-right:20px}}
+
+/* Keep an active DM call within reach while the conversation timeline grows. */
+body.dm-call-connected:not(.server-view) #voicePanel{position:sticky;z-index:35;top:0;background:var(--canvas);box-shadow:0 10px 24px rgba(0,0,0,.18)}
+
+/* Voice activity never changes layout; it only paints a clear live ring. */
+.avatar.speaking,.friend-avatar.speaking,.server-stage-avatar.speaking,.sidebar-profile-avatar.speaking{outline:3px solid #37d67a;outline-offset:3px;box-shadow:0 0 0 5px rgba(55,214,122,.16),0 0 18px rgba(55,214,122,.3);transition:outline-color .08s ease,box-shadow .08s ease}

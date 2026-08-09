@@ -41,26 +41,25 @@ function startLinuxShareAudio(webContents) {
   const original = pipewire('pactl', ['get-default-sink']);
   if (!original) return null;
   const sink = `pair_share_${process.pid}`;
+  const routeSink = `pair_route_${process.pid}`;
   const module = pipewire('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Knot_Share_Audio']);
   if (!module) return null;
-  // Do not change the system default sink. EasyEffects can retarget its output
-  // when the default changes, which can connect its microphone processing graph
-  // to the share sink. Instead, move only non-Knot playback streams and monitor
-  // that isolated sink explicitly.
-  const moved = [];
-  routeLinuxDesktopAudio(sink, moved);
-  const loop = pipewire('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${original}`, 'latency_msec=20', 'source_dont_move=true', 'sink_dont_move=true']);
+  // Duplicate selected desktop streams to both the user's normal output and the
+  // isolated share sink. This lets the sharer keep hearing games/videos while
+  // the friend receives the same playback. Knot itself is never moved here.
+  const loop = pipewire('pactl', ['load-module', 'module-combine-sink', `sink_name=${routeSink}`, `slaves=${original},${sink}`, 'sink_properties=device.description=Knot_Share_Route']);
   if (!loop) {
-    for (const input of moved) pipewireOk('pactl', ['move-sink-input', input.id, input.sink]);
     pipewire('pactl', ['unload-module', module]);
     return null;
   }
+  const moved = [];
+  routeLinuxDesktopAudio(routeSink, moved);
   // Capture the monitor directly instead of asking Chromium to expose it as a
   // microphone. Chromium's Linux device enumeration can omit virtual monitor
   // sources even though PipeWire created them successfully, which used to make
   // a healthy share route appear as "sound unavailable".
   const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const state = { original, sink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [] };
+  const state = { original, sink, routeSink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [] };
   const failCaptureRoute = message => {
     if (linuxShareAudio !== state) return;
     if (webContents && !webContents.isDestroyed()) try { webContents.send('pair:linuxShareAudioError', message); } catch {}
@@ -89,13 +88,13 @@ function startLinuxShareAudio(webContents) {
     state.watch = watch;
     watch.stdout.setEncoding('utf8');
     watch.stdout.on('data', text => {
-      if (linuxShareAudio === state && /sink-input/i.test(text)) routeLinuxDesktopAudio(sink, moved);
+      if (linuxShareAudio === state && /sink-input/i.test(text)) routeLinuxDesktopAudio(routeSink, moved);
     });
     watch.unref();
   } catch {}
   // Cover streams created between the initial move and subscription becoming
   // active; these are one-shot checks, not a constant polling loop.
-  state.audits = [50, 500].map(delay => setTimeout(() => { if (linuxShareAudio === state) routeLinuxDesktopAudio(sink, moved); }, delay));
+  state.audits = [50, 500].map(delay => setTimeout(() => { if (linuxShareAudio === state) routeLinuxDesktopAudio(routeSink, moved); }, delay));
   linuxShareAudio = state;
   return { label: linuxShareAudio.label, source: linuxShareAudio.source };
 }
@@ -105,8 +104,8 @@ function stopLinuxShareAudio() {
   if (state.watch) try { state.watch.kill(); } catch {}
   for (const audit of state.audits || []) clearTimeout(audit);
   if (state.capture) try { state.capture.kill(); } catch {}
-  pipewire('pactl', ['unload-module', state.loop]);
   for (const input of state.moved || []) pipewireOk('pactl', ['move-sink-input', input.id, input.sink]);
+  pipewire('pactl', ['unload-module', state.loop]);
   pipewire('pactl', ['unload-module', state.module]);
 }
 
