@@ -3,8 +3,15 @@ const path = require('path');
 const { app, BrowserWindow } = require('electron');
 
 const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-if (!mainSource.includes("appendSwitch('render-node-override', primaryGpu.renderNode)") || !mainSource.includes('/device/boot_vga')) {
-  throw new Error('Linux screen sharing is not pinned to the boot/display GPU');
+const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+if (mainSource.includes("appendSwitch('render-node-override'") || mainSource.includes("appendSwitch('use-angle'")) {
+  throw new Error('Linux screen sharing still forces a portal-incompatible GPU target');
+}
+if (!rendererSource.includes('await waitForDisplayFrames(track)') || rendererSource.indexOf('await waitForDisplayFrames(track)') > rendererSource.indexOf("send({t:'screen-start'})")) {
+  throw new Error('Screen sharing is advertised before a real capture frame arrives');
+}
+if (rendererSource.includes('p.encodings[0].minBitrate=')) {
+  throw new Error('Screen sharing still forces a congestion-breaking minimum bitrate');
 }
 
 function fail(error) {

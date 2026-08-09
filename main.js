@@ -205,25 +205,14 @@ function linuxPrimaryGpu() {
   } catch { return null; }
 }
 // Keep PipeWire desktop capture enabled explicitly for native Wayland sessions.
-// Do not force a different render node for video encoding: capture surfaces on
-// NVIDIA/AMD display GPUs often cannot be imported by an Intel render node,
-// producing a black WebRTC stream with zero outbound bitrate on hybrid systems.
+// GPU selection must remain with the compositor/portal. Forcing ANGLE or a DRM
+// render node can make a valid PipeWire target impossible to import, producing
+// a black stream with zero outbound bitrate on hybrid and NVIDIA systems.
 if (process.platform === 'linux' && hardwareAccelerationEnabled) {
   const primaryGpu = linuxPrimaryGpu();
   process.env.KNOT_PRIMARY_GPU_VENDOR = primaryGpu?.vendor || '';
-  console.log('[gpu] single-GPU policy:', primaryGpu?.renderNode || 'system default', primaryGpu?.vendor || 'unknown vendor');
+  console.log('[gpu] display GPU detected:', primaryGpu?.renderNode || 'system default', primaryGpu?.vendor || 'unknown vendor', '(compositor-managed capture)');
   app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer,AcceleratedVideoEncoder');
-  app.commandLine.appendSwitch('use-gl', 'angle');
-  app.commandLine.appendSwitch('use-angle', 'gl');
-  // Chromium documents this switch as the hint that matches the VA-API device
-  // to the compositing DRM device. Resolve it from boot_vga so a secondary GPU
-  // is never selected merely because it exposes a convenient encoder.
-  if (primaryGpu?.renderNode) app.commandLine.appendSwitch('render-node-override', primaryGpu.renderNode);
-  if (primaryGpu?.vendor === '0x10de') {
-    process.env.__NV_PRIME_RENDER_OFFLOAD = '1';
-    process.env.__GLX_VENDOR_LIBRARY_NAME = 'nvidia';
-    process.env.__VK_LAYER_NV_optimus = 'NVIDIA_only';
-  }
   // Electron/Chromium currently rejects Vulkan surfaces under native Wayland;
   // falling back to GL avoids a captured DMABUF presenting as a black frame.
   if (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('disable-features', 'Vulkan');

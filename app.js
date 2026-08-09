@@ -557,14 +557,14 @@ function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.in
 // the old 16 Mbps ceiling.
 function patchVideoSdp(sdp){
   const eol=sdp.includes('\r\n')?'\r\n':'\n';
-  const cap=Math.round(Math.max(4,Math.min(400,Number(screenBitrateMbps)||240))*1000000),startKbps=Math.min(60000,Math.max(12000,Math.round(cap/4000))),minKbps=Math.min(20000,Math.max(8000,Math.round(cap/12000)));
+  const cap=Math.round(Math.max(4,Math.min(400,Number(screenBitrateMbps)||240))*1000000),startKbps=Math.min(60000,Math.max(12000,Math.round(cap/4000)));
   return sdp.split(/(?=^m=)/m).map(section=>{
     if(!section.startsWith('m=video '))return section;
     const lines=section.split(/\r?\n/).filter(line=>!/^b=(?:AS|TIAS):/i.test(line)&&!/^a=x-google-(?:min|max|start)-bitrate:/i.test(line));
     const connection=lines.findIndex(line=>line.startsWith('c='));
     lines.splice(connection>=0?connection+1:1,0,'b=TIAS:'+cap);
     const primary=new Set(lines.map(line=>line.match(/^a=rtpmap:(\d+)\s+video\/(?:H26[45]|VP8|VP9|AV1)/i)?.[1]).filter(Boolean));
-    for(const payload of primary){const index=lines.findIndex(line=>line.startsWith('a=fmtp:'+payload+' ')),values='x-google-start-bitrate='+startKbps+';x-google-min-bitrate='+minKbps+';x-google-max-bitrate='+Math.round(cap/1000);if(index>=0){lines[index]=lines[index].replace(/;?\s*x-google-(?:start|min|max)-bitrate=\d+/gi,'').replace(/;$/,'')+';'+values}else{const rtp=lines.findIndex(line=>line.startsWith('a=rtpmap:'+payload+' '));lines.splice(rtp+1,0,'a=fmtp:'+payload+' '+values)}}
+    for(const payload of primary){const index=lines.findIndex(line=>line.startsWith('a=fmtp:'+payload+' ')),values='x-google-start-bitrate='+startKbps+';x-google-max-bitrate='+Math.round(cap/1000);if(index>=0){lines[index]=lines[index].replace(/;?\s*x-google-(?:start|min|max)-bitrate=\d+/gi,'').replace(/;$/,'')+';'+values}else{const rtp=lines.findIndex(line=>line.startsWith('a=rtpmap:'+payload+' '));lines.splice(rtp+1,0,'a=fmtp:'+payload+' '+values)}}
     return lines.join(eol);
   }).join('');
 }
@@ -1341,7 +1341,7 @@ function orderedScreenCodecs(caps){
   // Linux Chromium commonly falls back to OpenH264 software encoding, which is
   // unable to keep up with 4K capture. VP9 avoids H.264's level constraints and
   // is also exposed by Intel's VA-API encoder when acceleration is available.
-  const gpuVendor=window.pairEnv?.primaryGpuVendor||'',automatic=window.pairEnv?.platform==='linux'?(gpuVendor==='0x10de'?['VP8','H264','VP9','AV1','H265']:['H264','VP9','VP8','AV1','H265']):['H264','VP9','VP8','AV1','H265'];
+  const gpuVendor=window.pairEnv?.primaryGpuVendor||'',automatic=window.pairEnv?.platform==='linux'&&gpuVendor==='0x10de'?['VP9','VP8','H264','AV1','H265']:['H264','VP9','VP8','AV1','H265'];
   const requested=screenCodec==='auto'?automatic:[screenCodec,...automatic];
   const order=[...new Set(requested.map(name=>name.toUpperCase()))],seen=new Set(),result=[];
   for(const name of order)for(const codec of caps.codecs||[]){if(codec.mimeType?.toUpperCase()!==`VIDEO/${name}`||seen.has(codec))continue;seen.add(codec);result.push(codec)}
@@ -1363,7 +1363,7 @@ function targetScreenBitrate(width,height,fps){
 async function configureScreenVideoSender(sender,track,fps){
   const settings=track.getSettings?.()||{},maxBitrate=targetScreenBitrate(settings.width,settings.height,fps);
   const p=sender.getParameters();if(!p.encodings||!p.encodings.length)p.encodings=[{}];
-  p.encodings[0].maxBitrate=maxBitrate;p.encodings[0].minBitrate=Math.min(maxBitrate,settings.height>=2160?20000000:settings.height>=1440?12000000:8000000);p.encodings[0].maxFramerate=fps;p.encodings[0].scaleResolutionDownBy=1;p.encodings[0].priority='high';p.encodings[0].bitratePriority=2;
+  p.encodings[0].maxBitrate=maxBitrate;delete p.encodings[0].minBitrate;p.encodings[0].maxFramerate=fps;p.encodings[0].scaleResolutionDownBy=1;p.encodings[0].priority='high';
   if('networkPriority' in p.encodings[0])p.encodings[0].networkPriority='high';
   // Motion shares feel broken when frames queue behind an overloaded encoder.
   // Use the valid WebRTC motion preference: hold the requested frame rate and
@@ -1395,11 +1395,31 @@ async function tuneDisplayTrack(track){
   try{if(navigator.mediaDevices.getSupportedConstraints?.().cursor)constraints.cursor=screenCursor}catch{}
   try{await track.applyConstraints(constraints)}catch(error){console.warn('[VIDEO] display track constraints partially unsupported:',error?.message||error);try{await track.applyConstraints({frameRate:{ideal:fps,max:fps}})}catch{}}
 }
+async function waitForDisplayFrames(track,timeoutMs=4000){
+  if(!track||track.readyState==='ended')throw new Error('The selected screen capture ended before it produced video');
+  const stream=new MediaStream([track]),video=document.createElement('video');video.muted=true;video.playsInline=true;video.srcObject=stream;
+  let timer;
+  try{
+    await video.play();
+    await new Promise((resolve,reject)=>{
+      let settled=false;
+      const finish=(error)=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve()};
+      timer=setTimeout(()=>finish(new Error('Linux screen capture produced no video frames. Re-select the screen and allow the desktop portal.')),timeoutMs);
+      if(typeof video.requestVideoFrameCallback==='function')video.requestVideoFrameCallback(()=>finish());
+      else video.addEventListener('loadeddata',()=>finish(),{once:true});
+      track.addEventListener('ended',()=>finish(new Error('The selected screen capture was closed by the desktop portal')),{once:true});
+    });
+    const settings=track.getSettings?.()||{},width=settings.width||video.videoWidth||0,height=settings.height||video.videoHeight||0,fps=Math.round(settings.frameRate||0);
+    if(!width||!height)throw new Error('Linux screen capture returned an empty video target');
+    return {width,height,fps};
+  }finally{clearTimeout(timer);video.pause();video.srcObject=null}
+}
 async function startScreenShare(){
   if(screenActive||screenStarting||!pc)return;
   screenStarting=true;
   const gen=++screenGen;
   // Show source picker in Electron app (in browser getDisplayMedia shows native picker)
+  let startupStream=null;
   try{
   if(window.pairEnv?.getSources&&!window.pairEnv.useSystemPicker){
     screenStatus.textContent='Choose a screen or window…';
@@ -1423,18 +1443,22 @@ async function startScreenShare(){
     // Never request Chromium's full-mix loopback. That path includes Knot voice
     // playback. Computer sound is attached separately through isolated capture
     // so desktop/game audio can share while the call stays on the voice track.
-    const stream=await captureDisplayStream();
+    const stream=await captureDisplayStream();startupStream=stream;
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
-    screenStream=stream;
     const track=stream.getVideoTracks()[0];
     if(!track){stream.getTracks().forEach(t=>t.stop());return}
     await tuneDisplayTrack(track);
+    screenStatus.textContent='Checking screen video…';
+    const captured=await waitForDisplayFrames(track);
+    if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
+    screenStream=stream;
+    console.log('[VIDEO] PipeWire capture ready:',captured.width+'×'+captured.height,(captured.fps||'?')+'fps');
     // Desktop capture defaults to text/detail on some Chromium builds. Motion
     // tells the encoder to preserve changing game/action content instead.
     try{track.contentHint=screenContentHint}catch{}
     // Add the video track
     let sender;
-    try{sender=pc.addTrack(track,stream);screenSenders=[sender]}catch{stream.getTracks().forEach(t=>t.stop());return}
+    try{sender=pc.addTrack(track,stream);screenSenders=[sender]}catch{stream.getTracks().forEach(t=>t.stop());if(screenStream===stream)screenStream=null;startupStream=null;return}
     // Audio attachment can take a moment while native capture warms up. Start
     // video first, then renegotiate again only if a clean audio track is ready.
     const attachShareAudio=async()=>{
@@ -1497,13 +1521,14 @@ async function startScreenShare(){
     // Prefer codecs that are normally hardware accelerated. AV1 is excellent at
     // low bitrates but its software encoder is a frequent source of high CPU and
     // seconds of latency during desktop capture, so it stays a last fallback.
-    try{const tr=pc.getTransceivers().find(t=>t.sender===sender),caps=RTCRtpSender.getCapabilities('video');if(tr&&caps){const codecs=orderedScreenCodecs(caps);if(codecs.length)tr.setCodecPreferences(codecs)}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
+    try{const tr=pc.getTransceivers().find(t=>t.sender===sender),caps=RTCRtpSender.getCapabilities('video'),prefer=screenCodec!=='auto'||window.pairEnv?.platform==='linux';if(prefer&&tr&&caps){const codecs=orderedScreenCodecs(caps);if(codecs.length)tr.setCodecPreferences(codecs)}}catch(e){console.warn('[VIDEO] codec pref err:',e)}
     try{await configureScreenVideoSender(sender,track,fps)}catch(e){console.warn('[VIDEO] setParams err:',e)}
     if(gen!==screenGen||!pc){screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];stream.getTracks().forEach(t=>t.stop());return}
     screenActive=true;screenAudioDebug=screenAudioOn?' · starting sound capture':' · sound off';
+    startupStream=null;
     screenPreview.muted=true;
     screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{};setTimeout(()=>{try{syncLocalScreenPreview()}catch{}},250)
-    screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';screenStatus.textContent='Sharing';
+    screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';screenStatus.textContent='Sharing · '+captured.width+'×'+captured.height+(captured.fps?' · '+captured.fps+'fps':'');
     startScreenStats(sender);
     try{send({t:'screen-start'})}catch{};
     logCallEvent('You started screen sharing');
@@ -1514,7 +1539,7 @@ async function startScreenShare(){
     // browser default cannot silently take over after the initial setup.
     if(videoNegotiated)try{await configureScreenVideoSender(sender,track,fps)}catch(e){console.warn('[VIDEO] post-negotiation params err:',e)}
     void attachShareAudio();
-  }catch(e){screenStatus.textContent='Share failed';if(e.name!=='NotAllowedError')logCallEvent('Screen share error')}
+  }catch(e){try{startupStream?.getTracks().forEach(track=>track.stop())}catch{};if(screenStream===startupStream)screenStream=null;const message=e?.message||String(e);screenStatus.textContent=e?.name==='NotAllowedError'?'Screen share canceled':'Share failed: '+message;console.error('[VIDEO] screen share failed:',e);if(e.name!=='NotAllowedError')logCallEvent('Screen share error: '+message)}
   }finally{if(gen===screenGen)screenStarting=false}
 }
 async function stopScreenShare(fromEnd){
