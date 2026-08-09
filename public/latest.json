@@ -1,10 +1,10 @@
 {
-  "version": "1.1.28",
-  "notes": "Server channel history now syncs directly between online members, with owner-only server and channel editing, managed channel ordering, and improved voice channel presence.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.28/pair-p2p-1.1.28.tar.gz",
-  "linuxSha256": "1c284adf8f828e1ecd6f1db74be83b5d6d401bd9d379a80fb781b88a9aea439e",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.28/Pair-1.1.28.AppImage",
-  "linuxAppImageSha256": "2b3f7fb441ef931bec489df2c5d37ffe45c9c61e75eef790bfff7dba6db17855",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.28/Pair.Setup.1.1.28.exe",
-  "winSha256": "148d58a36fe09b7215c7be5824ce9713cc600e1f1dcb2cfd15d98e05745bdda6"
+  "version": "1.1.29",
+  "notes": "Pair is now Knot, with a new interlocking-link app icon across the interface, Linux taskbar, Windows executable, and installers. Includes peer-synced server channel history and owner-only server editing.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.29/pair-p2p-1.1.29.tar.gz",
+  "linuxSha256": "a92d9c0622eafb845adde5906739089a9cf3ee1ab209b48878a117ae83ec0f03",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.29/Knot-1.1.29.AppImage",
+  "linuxAppImageSha256": "43453b189f83f11d0ce93a34ee2e176a7b43e777695334078fe3cd216662d324",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.29/Knot.Setup.1.1.29.exe",
+  "winSha256": "0c181fc25e335391f80dc24cd3fa271c9e1a797abe71bf153b62d64f7eca378a"
 }
