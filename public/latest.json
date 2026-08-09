@@ -1,10 +1,10 @@
 {
-  "version": "1.1.31",
-  "notes": "Fix screen sharing on Electron and Linux by applying quality constraints after display capture starts.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.31/pair-p2p-1.1.31.tar.gz",
-  "linuxSha256": "7dddcf2f5e4a4b2285c7d5700cbd869437f8c92df0846ffe58d85a481ab3de48",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.31/Knot-1.1.31.AppImage",
-  "linuxAppImageSha256": "2f413740783e00e6d6b3404e101f8e67d1b7ab23737f60d7e053f14ccbaa2393",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.31/Knot.Setup.1.1.31.exe",
-  "winSha256": "d97691af2ff97657cce41e54f72af8223dd9cfba7e6e60d9849a4bf893744173"
+  "version": "1.1.32",
+  "notes": "Fix Linux screen capture compatibility and simplify voice panels to mute, share, and hang up.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.32/pair-p2p-1.1.32.tar.gz",
+  "linuxSha256": "40defb46834f42c66e2e00d7e11cd93a81bacbd1637976869e04fe2aa32bd875",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.32/Knot-1.1.32.AppImage",
+  "linuxAppImageSha256": "ee04859e6604a143de2ed9df814c8dc7d0a0e0574625bcc421f9be7964f01a0b",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.32/Knot.Setup.1.1.32.exe",
+  "winSha256": "273c424a3fbfbcc0afb7f0f41f03432ab06cb0a95f8da786c4cce627f91fe331"
 }
