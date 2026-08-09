@@ -16,6 +16,9 @@ if (rendererSource.includes('p.encodings[0].minBitrate=')) {
 if (!mainSource.includes("if (process.platform === 'linux')") || !mainSource.includes('thumbnailSize: { width: 0, height: 0 }') || !rendererSource.includes("window.pairEnv?.getSources&&!window.pairEnv.useSystemPicker")) {
   throw new Error('Linux display media does not acquire its portal source in one step');
 }
+if (!rendererSource.includes('FILE_DRAIN_TIMEOUT=45000') || !rendererSource.includes('direct connection stopped draining')) {
+  throw new Error('File transfers can still wait forever on a stalled SCTP send buffer');
+}
 
 function fail(error) {
   console.error('Navigation UI smoke test failed:', error?.stack || error);
