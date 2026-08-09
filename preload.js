@@ -53,14 +53,16 @@ contextBridge.exposeInMainWorld('pairUpdates', {
 // Read-only environment info exposed to the sandboxed renderer.
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
-  useSystemPicker: process.platform === 'linux' && !!process.env.WAYLAND_DISPLAY,
+  // Electron's useSystemPicker option is not available on Linux. Wayland
+  // selection is provided by PipeWire when desktopCapturer.getSources runs.
+  useSystemPicker: false,
   isApp: true,
   iceServers: turnServersFromEnvironment(),
   toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
   onFullscreenChange: cb => { if (typeof cb !== 'function') return () => {}; const listener = (_event, value) => cb(!!value); ipcRenderer.on('pair:fullscreenChanged', listener); return () => ipcRenderer.removeListener('pair:fullscreenChanged', listener); },
   getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),
   getSources: () => ipcRenderer.invoke('pair:getSources'),
-  setPendingSource: id => ipcRenderer.send('pair:setPendingSource', id),
+  setPendingSource: id => ipcRenderer.invoke('pair:setPendingSource', id),
   startLinuxShareAudio: () => ipcRenderer.invoke('pair:startLinuxShareAudio'),
   stopLinuxShareAudio: () => ipcRenderer.send('pair:stopLinuxShareAudio'),
   onLinuxShareAudio: cb => {

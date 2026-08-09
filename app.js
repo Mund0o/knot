@@ -805,7 +805,7 @@ function closeServerMesh(){for(const state of serverPeers.values()){try{state.ch
 function syncServerMesh(){closeServerMesh();const online=serverOnlineMembers();for(const id of online)ensureServerPeer(id).catch(()=>{});if(!online.length)setServerStatus('No other server members online')}
 function toggleServerVoiceMute(){if(!serverVoiceStream)return;serverVoiceMuted=!serverVoiceMuted;serverVoiceStream.getAudioTracks().forEach(track=>track.enabled=!serverVoiceMuted);renderServerVoiceUI()}
 async function renegotiateServerPeer(peerId,state){if(!state||state.pc.signalingState!=='stable')return false;const offer=await state.pc.createOffer();await state.pc.setLocalDescription(offer);directorySend({type:'signal',peerId,context:state.context,payload:{kind:'offer',sdp:state.pc.localDescription.sdp}});return true}
-async function chooseServerScreenSource(){if(!window.pairEnv?.getSources||window.pairEnv.useSystemPicker)return true;const sources=await window.pairEnv.getSources();if(!sources.length)throw new Error('No screens or windows are available');return new Promise(resolve=>{const modal=document.createElement('div');modal.className='screen-source-modal';const dialog=document.createElement('div');dialog.className='screen-source-dialog';dialog.innerHTML='<h3>Select what to share</h3>';const grid=document.createElement('div');grid.className='screen-source-grid';for(const source of sources){const button=document.createElement('button');button.type='button';button.className='screen-source-option';const image=document.createElement('img');image.src=source.thumbnail;image.alt='';const name=document.createElement('span');name.textContent=source.name;button.append(image,name);button.onclick=()=>{window.pairEnv.setPendingSource(source.id);modal.remove();resolve(true)};grid.append(button)}const cancel=document.createElement('button');cancel.type='button';cancel.className='screen-source-cancel';cancel.textContent='Cancel';cancel.onclick=()=>{modal.remove();resolve(false)};dialog.append(grid,cancel);modal.append(dialog);document.body.append(modal)})}
+async function chooseServerScreenSource(){if(!window.pairEnv?.getSources||window.pairEnv.useSystemPicker)return true;setServerStatus('Choose a screen or window…');const sources=await window.pairEnv.getSources();if(!sources.length)throw new Error('No screen or window was selected');if(window.pairEnv.platform==='linux'&&sources.length===1){await window.pairEnv.setPendingSource(sources[0].id);return true}return new Promise(resolve=>{const modal=document.createElement('div');modal.className='screen-source-modal';const dialog=document.createElement('div');dialog.className='screen-source-dialog';dialog.innerHTML='<h3>Select what to share</h3>';const grid=document.createElement('div');grid.className='screen-source-grid';for(const source of sources){const button=document.createElement('button');button.type='button';button.className='screen-source-option';const image=document.createElement('img');image.src=source.thumbnail;image.alt='';const name=document.createElement('span');name.textContent=source.name;button.append(image,name);button.onclick=async()=>{await window.pairEnv.setPendingSource(source.id);modal.remove();resolve(true)};grid.append(button)}const cancel=document.createElement('button');cancel.type='button';cancel.className='screen-source-cancel';cancel.textContent='Cancel';cancel.onclick=()=>{modal.remove();resolve(false)};dialog.append(grid,cancel);modal.append(dialog);document.body.append(modal)})}
 async function startServerScreenShare(){
   if(!serverVoiceStream||serverScreenStream||serverScreenStarting)return;
   serverScreenStarting=true;renderServerVoiceUI();
@@ -1320,9 +1320,10 @@ async function startScreenShare(){
   // Show source picker in Electron app (in browser getDisplayMedia shows native picker)
   try{
   if(window.pairEnv?.getSources&&!window.pairEnv.useSystemPicker){
+    screenStatus.textContent='Choose a screen or window…';
     const sources=await window.pairEnv.getSources();
-    if(!sources.length||gen!==screenGen){screenStatus.textContent='No sources';return}
-    const id=await new Promise(resolve=>{
+    if(!sources.length||gen!==screenGen){screenStatus.textContent='No screen or window was selected';return}
+    const id=window.pairEnv.platform==='linux'&&sources.length===1?sources[0].id:await new Promise(resolve=>{
       const o=document.createElement('div');o.className='screen-source-modal';
       const b=document.createElement('div');b.className='screen-source-dialog';
       b.innerHTML='<h3>Select what to share</h3><div class="share-start-options"><label>Resolution<select id="shareResolution"><option value="source" selected>Source — sharpest</option><option value="2160">4K</option><option value="1440">1440p</option><option value="1080">1080p</option><option value="720">720p</option></select></label><label>Frame rate<select id="shareFrameRate"><option value="60" selected>60 fps</option><option value="30">30 fps</option></select></label><label class="share-audio-option"><input id="shareSystemAudio" type="checkbox" checked /> Share computer sound<span class="share-audio-hint">Desktop apps and games — Knot voice is always excluded</span></label></div>';
@@ -1333,7 +1334,7 @@ async function startScreenShare(){
       b.appendChild(g);b.appendChild(c);o.appendChild(b);document.body.appendChild(o);
     });
     if(!id||gen!==screenGen)return;
-    window.pairEnv.setPendingSource(id);
+    await window.pairEnv.setPendingSource(id);
   }
   try{
     const fps=shareFrameRate===30?30:60;

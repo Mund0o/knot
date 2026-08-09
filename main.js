@@ -187,7 +187,11 @@ ipcMain.handle('pair:getSources', async event => {
   return pendingSources.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
 ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
-ipcMain.on('pair:setPendingSource', (event, id) => { if (isPairRenderer(event) && typeof id === 'string') pendingSourceId = id; });
+ipcMain.handle('pair:setPendingSource', (event, id) => {
+  if (!isPairRenderer(event) || typeof id !== 'string') return false;
+  pendingSourceId = id;
+  return true;
+});
 ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio(event.sender) : null);
 ipcMain.on('pair:stopLinuxShareAudio', event => { if (isPairRenderer(event)) stopLinuxShareAudio(); });
 
@@ -432,7 +436,7 @@ app.whenReady().then(() => {
       activeShareSourceId = src.id;
       callback({ video: src });
     } else callback({ video: undefined });
-  }, { useSystemPicker: process.platform === 'linux' && !!process.env.WAYLAND_DISPLAY });
+  }, { useSystemPicker: false });
   createWindow();
   startAutoUpdater();
   app.on('activate', () => {
