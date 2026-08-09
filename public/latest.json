@@ -1,10 +1,10 @@
 {
-  "version": "1.1.36",
-  "notes": "DM calls now stay connected across server navigation. Linux screen sharing gains primary-GPU pinning, black-screen fixes, smoother isolated audio, lower latency, and higher-quality 4K60 tuning.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.36/pair-p2p-1.1.36.tar.gz",
-  "linuxSha256": "e960b87b40c584fc3d921650687386ce87665f18ad2fccc4eeafdcaa10b4c19b",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.36/Knot-1.1.36.AppImage",
-  "linuxAppImageSha256": "3308bba4ee87b0b8f66772661f8edfe8d500379b1780267d4608e3168c97c2ca",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.36/Knot.Setup.1.1.36.exe",
-  "winSha256": "ddc2868fa0cf1cfe07784113034e3e67b23c34795d915aa260b9c98c9799a3cc"
+  "version": "1.1.37",
+  "notes": "Fixes Linux black screen capture, validates live video before sharing, and improves screen-share frame pacing.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.37/pair-p2p-1.1.37.tar.gz",
+  "linuxSha256": "e0a12b193656fc16564d364935d2f1b3fe3a76d42ba94ea8882a638586215f9b",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.37/Knot-1.1.37.AppImage",
+  "linuxAppImageSha256": "385a265c94f0c028d2fb14167cf4bfb92053520f2e1969604b18defb2b8900fe",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.37/Knot.Setup.1.1.37.exe",
+  "winSha256": "6331e1e3cc89cb83b8034e0fc055cee99213be7e0afc1186a791e6dcb954b4cf"
 }
