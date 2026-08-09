@@ -162,6 +162,27 @@ export class PairDirectory {
         if (server.channels.length >= 64) throw new Error('channel limit reached');
         server.channels.push({ id: randomHex(), type: value.channelType === 'voice' ? 'voice' : 'text', name: cleanText(value.name, 48, value.channelType === 'voice' ? 'New voice' : 'new-channel') });
         await this.state.storage.put(`server:${server.id}`, server); await this.broadcastSnapshots();
+      } else if (value.type === 'delete-channel') {
+        const server = await this.server(value.serverId); this.requireMember(server, user.id);
+        const channelId = normalizeId(value.channelId), channel = server.channels.find(item => item.id === channelId);
+        if (!channel) throw new Error('channel missing');
+        if (channel.type === 'text' && server.channels.filter(item => item.type === 'text').length <= 1) throw new Error('a server needs at least one text channel');
+        server.channels = server.channels.filter(item => item.id !== channelId);
+        for (const live of this.state.getWebSockets()) { const liveAttachment = live.deserializeAttachment() || {}; if (liveAttachment.voiceChannelId === channelId) { delete liveAttachment.voiceServerId; delete liveAttachment.voiceChannelId; delete liveAttachment.voiceJoinedAt; live.serializeAttachment(liveAttachment); } }
+        await this.state.storage.put(`server:${server.id}`, server); await this.broadcastSnapshots();
+      } else if (value.type === 'reorder-channels') {
+        const server = await this.server(value.serverId); this.requireMember(server, user.id);
+        const ids = Array.isArray(value.channelIds) ? value.channelIds.map(normalizeId).filter(Boolean) : [];
+        if (ids.length !== server.channels.length || new Set(ids).size !== ids.length || ids.some(id => !server.channels.some(channel => channel.id === id))) throw new Error('invalid channel order');
+        const channels = new Map(server.channels.map(channel => [channel.id, channel])); server.channels = ids.map(id => channels.get(id));
+        await this.state.storage.put(`server:${server.id}`, server); await this.broadcastSnapshots();
+      } else if (value.type === 'voice-state') {
+        const server = await this.server(value.serverId); this.requireMember(server, user.id);
+        const channelId = normalizeId(value.channelId), channel = server.channels.find(item => item.id === channelId && item.type === 'voice');
+        if (value.joined && !channel) throw new Error('voice channel missing');
+        if (value.joined) { const sameChannel = attachment.voiceServerId === server.id && attachment.voiceChannelId === channelId; attachment.voiceServerId = server.id; attachment.voiceChannelId = channelId; attachment.voiceJoinedAt = sameChannel && attachment.voiceJoinedAt ? attachment.voiceJoinedAt : Date.now(); }
+        else { delete attachment.voiceServerId; delete attachment.voiceChannelId; delete attachment.voiceJoinedAt; }
+        socket.serializeAttachment(attachment); await this.broadcastSnapshots();
       } else if (value.type === 'connect' || value.type === 'signal') {
         const peerId = normalizeId(value.peerId); if (!peerId || !await this.canContact(user, peerId)) throw new Error('peer is not connected to you');
         const envelope = value.type === 'connect' ? { type: 'connect-request', from: user.id, session: normalizeId(value.session), context: this.cleanContext(value.context) } : { type: 'peer-signal', from: user.id, context: this.cleanContext(value.context), payload: value.payload };
@@ -216,10 +237,11 @@ export class PairDirectory {
     const servers = (await Promise.all(user.servers.map(id => this.server(id)))).filter(Boolean);
     const memberIds = [...new Set(servers.flatMap(server => server.members))];
     const members = Object.fromEntries((await Promise.all(memberIds.map(id => this.user(id)))).filter(Boolean).map(member => [member.id, this.publicUser(member)]));
-    return { type: 'snapshot', self: this.publicUser(user), friends, servers, members };
+    return { type: 'snapshot', self: this.publicUser(user), friends, servers, members, voiceStates: this.voiceStates(servers) };
   }
 
   publicUser(user) { return { id: user.id, name: user.name, image: user.image, frame: cleanFrame(user.frame), online: this.isOnline(user.id) }; }
+  voiceStates(servers) { const allowed = new Set(servers.map(server => server.id)), states = {}; for (const socket of this.state.getWebSockets()) { if (socket.readyState !== 1) continue; const attachment = socket.deserializeAttachment() || {}; if (!attachment.authed || !allowed.has(attachment.voiceServerId) || !normalizeId(attachment.voiceChannelId)) continue; const list = states[attachment.voiceChannelId] || (states[attachment.voiceChannelId] = []); if (!list.some(entry => entry.id === attachment.userId)) list.push({ id: attachment.userId, joinedAt: Number(attachment.voiceJoinedAt) || Date.now() }); } return states; }
   isOnline(userId) { return this.state.getWebSockets().some(socket => { const a = socket.deserializeAttachment() || {}; return socket.readyState === 1 && a.authed && a.userId === userId; }); }
   async broadcastSnapshots() { const ids = [...new Set(this.state.getWebSockets().map(socket => (socket.deserializeAttachment() || {}).userId).filter(Boolean))]; for (const id of ids) { const snapshot = await this.snapshot(id); if (snapshot) this.sendUser(id, snapshot); } }
   sendUser(userId, value) { let sent = false, data = JSON.stringify(value); for (const socket of this.state.getWebSockets()) { const a = socket.deserializeAttachment() || {}; if (socket.readyState === 1 && a.authed && a.userId === userId) { this.safeSend(socket, data); sent = true; } } return sent; }

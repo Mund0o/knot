@@ -22,10 +22,11 @@
           <div id="friendList" class="friend-list"><p class="social-empty">Your friends will appear here.</p></div>
         </section>
         <section id="serverNavigation" class="social-view" hidden>
-          <div class="social-heading"><div><span class="eyebrow">SERVER</span><h2 id="serverPanelTitle">Server</h2></div><button id="editServerPicture" class="social-add" type="button" aria-label="Edit server picture" title="Edit server picture">✎</button></div>
-          <div class="channel-actions"><button id="inviteServer" type="button">Invite</button><button id="addTextChannel" type="button">+ Text</button><button id="addVoiceChannel" type="button">+ Voice</button></div>
-          <div id="channelList" class="channel-list"></div>
-          <div class="server-members"><span class="eyebrow">MEMBERS</span><div id="serverMemberList" class="server-member-list"></div></div>
+          <div class="server-nav-header"><h2 id="serverPanelTitle">Server</h2><div><button id="inviteServer" type="button" aria-label="Create server invite" title="Create invite">Invite</button><button id="editServerPicture" type="button" aria-label="Edit server picture" title="Edit server picture">✎</button></div></div>
+          <div class="server-channel-scroll">
+            <section class="channel-category"><div class="channel-category-heading"><span>Text Channels</span><button id="addTextChannel" type="button" aria-label="Add text channel" title="Add text channel">+</button></div><div id="textChannelList" class="channel-list"></div></section>
+            <section class="channel-category"><div class="channel-category-heading"><span>Voice Channels</span><button id="addVoiceChannel" type="button" aria-label="Add voice channel" title="Add voice channel">+</button></div><div id="voiceChannelList" class="channel-list"></div></section>
+          </div>
         </section>
         <div class="presence-card"><span id="sidebarProfileAvatar" class="sidebar-profile-avatar"><span class="avatar-letter">Y</span><i id="directoryPresence"></i></span><div><strong id="sidebarProfileName">You</strong><span id="directoryStatus">Connecting…</span></div></div>
       </aside>
@@ -39,6 +40,9 @@
         </div>
         <p id="serverDialogStatus" class="settings-hint" aria-live="polite"></p>
       </dialog>
+      <dialog id="channelDialog" class="channel-dialog" aria-labelledby="channelDialogTitle">
+        <form id="channelForm"><div class="server-dialog-header"><div><span id="channelDialogKind" class="eyebrow">TEXT CHANNEL</span><h2 id="channelDialogTitle">Create channel</h2></div><button id="closeChannelDialog" class="icon-button" type="button" aria-label="Close channel dialog">×</button></div><label for="newChannelName">Channel name</label><input id="newChannelName" maxlength="48" autocomplete="off" placeholder="new-channel" /><p id="channelDialogStatus" class="settings-hint" aria-live="polite"></p><button class="primary" type="submit">Create channel</button></form>
+      </dialog>
       <button id="panelBackdrop" class="panel-backdrop" type="button" aria-label="Close open panel" hidden></button>
       <div class="app-content">
       <header class="topbar">
@@ -50,6 +54,7 @@
           <div class="connection"><i id="statusDot"></i><span id="statusText">Not connected</span></div>
         </div>
       </header>
+      <aside id="serverMemberPanel" class="server-member-panel" aria-label="Server members" hidden><div class="server-member-heading"><span>Members</span><strong id="serverMemberCount">0</strong></div><div id="serverMemberList" class="server-member-list"></div></aside>
       <section id="updateBanner" class="update-banner" aria-live="polite" hidden>
         <div class="update-text"><strong id="updateTitle">Checking for updates…</strong><span id="updateDetails" class="update-notes"></span></div>
       </section>
