@@ -812,7 +812,7 @@ async function startServerScreenShare(){
   try{
     if(!await chooseServerScreenSource())return;
     const fps=shareFrameRate===30?30:60;
-    serverScreenStream=await navigator.mediaDevices.getDisplayMedia(displayCaptureRequest());
+    serverScreenStream=await captureDisplayStream();
     const track=serverScreenStream.getVideoTracks()[0];if(!track)throw new Error('No screen was selected');
     await tuneDisplayTrack(track);
     try{track.contentHint=screenContentHint}catch{}
@@ -1296,7 +1296,16 @@ async function configureScreenVideoSender(sender,track,fps){
   if(encoding.scaleResolutionDownBy!==undefined&&encoding.scaleResolutionDownBy!==1)throw new Error('browser changed the requested screen scale');
   console.log('[VIDEO] source='+((settings.width||'?')+'×'+(settings.height||'?'))+' ceiling='+(Number(encoding.maxBitrate||maxBitrate)/1e6).toFixed(1)+'Mbps '+fps+'fps degradation='+(applied.degradationPreference||'browser-default'));
 }
-function displayCaptureRequest(){return{video:true,audio:false}}
+function displayCaptureRequest(){return{video:true}}
+async function captureDisplayStream(){
+  try{return await navigator.mediaDevices.getDisplayMedia(displayCaptureRequest())}
+  catch(error){
+    if(!/invalid capture constraints/i.test(String(error?.message||error)))throw error;
+    // A few Electron/portal combinations require a dictionary rather than the
+    // equivalent boolean form. Retry once without prompting for audio.
+    return navigator.mediaDevices.getDisplayMedia({video:{}})
+  }
+}
 async function tuneDisplayTrack(track){
   if(!track?.applyConstraints)return;
   const fps=shareFrameRate===30?30:60,heights={720:720,1080:1080,1440:1440,2160:2160},height=heights[shareResolution],width=height?Math.round(height*16/9):null,constraints={frameRate:{ideal:fps,max:fps}};
@@ -1331,7 +1340,7 @@ async function startScreenShare(){
     // Never request Chromium's full-mix loopback. That path includes Knot voice
     // playback. Computer sound is attached separately through isolated capture
     // so desktop/game audio can share while the call stays on the voice track.
-    const stream=await navigator.mediaDevices.getDisplayMedia(displayCaptureRequest());
+    const stream=await captureDisplayStream();
     if(gen!==screenGen||!pc){stream.getTracks().forEach(t=>t.stop());return}
     screenStream=stream;
     const track=stream.getVideoTracks()[0];
