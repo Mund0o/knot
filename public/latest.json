@@ -1,10 +1,10 @@
 {
-  "version": "1.1.38",
-  "notes": "Fixes Linux/KDE black screen sharing and makes file transfers fail cleanly instead of hanging when a direct connection stalls.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.38/pair-p2p-1.1.38.tar.gz",
-  "linuxSha256": "3945249ebe8db718085f11031f39bcfc3e4e101e9f52ae94d2a4b97646b10ccb",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.38/Knot-1.1.38.AppImage",
-  "linuxAppImageSha256": "5912a969eb853ed9571527ed6e83f021743975c2af0d1538532c526ba44d1556",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.38/Knot.Setup.1.1.38.exe",
-  "winSha256": "3a90216583158ada31957a6e171bedc8ade86420944a0b89e4f0f715461d30c1"
+  "version": "1.1.39",
+  "notes": "Fixes Linux/Wayland black screen sharing by selecting stable full-display portal sources. Computer sound remains optional and never blocks video sharing.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.39/pair-p2p-1.1.39.tar.gz",
+  "linuxSha256": "fe4b24e406d49c482f39b37643e638442f30438ce437921497b4788ecf0cf0f0",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.39/Knot-1.1.39.AppImage",
+  "linuxAppImageSha256": "d8c3c734199b2a046ca0d867ac696c3d59f6974ac60736fed0d8003e5b429cb7",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.39/Knot.Setup.1.1.39.exe",
+  "winSha256": "6871735e85d4a4d8fd1bc151c49d2e8f7ab9ac1406e8f984d33d27ef79ae2818"
 }
