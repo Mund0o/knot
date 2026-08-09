@@ -1542,10 +1542,10 @@ async function startScreenShare(){
     screenActive=true;screenAudioDebug=screenAudioOn?' · starting sound capture':' · sound off';
     startupStream=null;
     screenPreview.muted=true;
-    // Playing a local 4K preview creates a second compositor/decode workload
-    // in the renderer. Keep the capture track independent and decode it only
-    // when the sharer explicitly opens their own preview.
-    screenPreview.srcObject=stream;screenPreview.hidden=false;syncLocalScreenPreview();
+    // Keep a local consumer alive until the portal/WebRTC capture graph has
+    // settled. Some Electron/PipeWire combinations otherwise starve the share
+    // source and send black video to both sides.
+    screenPreview.srcObject=stream;screenPreview.hidden=false;try{screenPreview.play()}catch{};setTimeout(()=>{try{syncLocalScreenPreview()}catch{}},250)
     screenBtn.textContent='Stop sharing';screenBtn.title='Stop screen sharing';screenStatus.textContent='Sharing · '+captured.width+'×'+captured.height+(captured.fps?' · '+captured.fps+'fps':'');
     startScreenStats(sender);
     try{send({t:'screen-start'})}catch{};
@@ -1610,7 +1610,7 @@ const screenViewBar=document.createElement('div');screenViewBar.className='scree
 const screenVolumeBtn=screenViewBar.querySelector('[data-screen-volume]'),fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=screenVideos.parentElement;screenStage.classList.add('screen-stage');let nativeShareFullscreen=false;
 const screenAudioBadge=document.createElement('span');screenAudioBadge.className='screen-audio-badge';screenStage.appendChild(screenAudioBadge);const syncScreenAudioBadge=()=>{screenAudioBadge.textContent=screenStatus.textContent||'Sharing';screenAudioBadge.hidden=!screenIsActive()};new MutationObserver(syncScreenAudioBadge).observe(screenStatus,{childList:true,characterData:true,subtree:true});
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
-function syncLocalScreenPreview(){if(screenPreview.hidden||!screenPreview.srcObject)return;if(screenExpanded&&focusedScreen==='local'&&screenPreview.readyState>=2)screenPreview.play().catch(()=>{});else screenPreview.pause()}
+function syncLocalScreenPreview(){if(screenPreview.hidden||!screenPreview.srcObject||screenPreview.readyState<2)return;if(screenExpanded&&focusedScreen==='local')screenPreview.play().catch(()=>{});else screenPreview.pause()}
 function updateScreenLayout(){const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=!!document.fullscreenElement||screenStage.classList.contains('fs');if(!hasRemote)focusedScreen='local';if(!hasLocal)focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;voicePanel.classList.toggle('screen-sharing',hasLocal||hasRemote);voicePanel.classList.toggle('screen-expanded',screenExpanded&&(hasLocal||hasRemote));screenStage.classList.toggle('screen-expanded-local',focusedScreen==='local');localScreenTile.hidden=!hasLocal;remoteScreenTile.hidden=!hasRemote;screenViewBar.hidden=!screenIsActive();fsBtn.hidden=!screenExpanded||!screenIsActive();fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen';syncLocalScreenPreview();syncScreenAudioBadge();renderDmVoiceUI()}
 function returnToSharePreview(){screenStage.classList.remove('fs');document.body.classList.remove('screen-fullscreen');screenExpanded=false;updateScreenLayout()}
 function toggleRemoteFs(){if(screenStage.classList.contains('fs')||document.fullscreenElement){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else if(nativeShareFullscreen)window.pairEnv?.toggleFullscreen?.();nativeShareFullscreen=false;returnToSharePreview();return}screenStage.classList.add('fs');document.body.classList.add('screen-fullscreen');nativeShareFullscreen=!!window.pairEnv?.toggleFullscreen;window.pairEnv?.toggleFullscreen?.();updateScreenLayout()}
