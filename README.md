@@ -1,6 +1,9 @@
 # Pair
 
-Pair is a two-person, no-account P2P chat prototype. It uses WebRTC data channels for transport and Web Crypto ECDH + AES-GCM for an application-level encryption layer on top of WebRTC's DTLS encryption.
+Pair is a small-group P2P communication app with saved friends, live presence,
+direct messages, and servers containing text and voice channels. It uses WebRTC
+data channels and media tracks for content transport. Direct messages also use
+Web Crypto ECDH + AES-GCM on top of WebRTC's DTLS encryption.
 
 ## Run as a PC app
 
@@ -50,12 +53,17 @@ SHA-256 checksum, installs it, and restarts automatically.
 ## Screen sharing architecture
 
 Pair sends screen video, computer sound, and voice as separate WebRTC tracks.
-Screen capture defaults to source resolution at 60 fps, prefers H.264 for broad
-hardware encoding, retains retransmission/FEC codecs, and uses a
-resolution-aware bitrate ceiling (32 Mbps at 1080p60 and up to roughly 104 Mbps
-at 4K60 by default). Live sender statistics show the delivered resolution,
-frame rate, bitrate, codec, and whether the network or encoder is limiting the
-stream.
+Screen capture defaults to source resolution at 60 fps, prefers H.264 on
+Windows and VP9 on Linux, retains retransmission/FEC codecs, and uses a
+resolution-aware quality ceiling (about 40 Mbps at 1080p60, 72 Mbps at 1440p60,
+and 160 Mbps at 4K60 by default). Live sender statistics show delivered
+resolution, frame rate, actual/target bitrate, codec, encode time, round-trip
+time, estimated available bandwidth, and whether the network or encoder is
+limiting the stream.
+
+`npm run test:screen` runs a strict local 4K/60 motion benchmark. It intentionally
+fails when capture, encoding, or receiving drops below 55 fps, so it can expose
+a Linux software-encoder fallback before a real call.
 
 Screen sharing settings include **Test isolated computer audio**. It exercises
 the same OS route used by a real share and reports the capture stage, format,
@@ -100,11 +108,11 @@ direct connection; those require a TURN relay supplied by the people using it.
 
 ### Cloudflare Worker (recommended)
 
-The repository includes a Cloudflare Worker backed by a Durable Object. Each
-private room is coordinated by one Durable Object and accepts at most two
-people. The service only relays ephemeral WebRTC setup messages (plus encrypted
-file fallback frames); it does not receive decrypted chats, calls, or screen
-shares.
+The repository includes two SQLite-backed Durable Objects. `PairDirectory`
+stores authenticated device identity, friend relationships, presence, server
+membership, server pictures, and text/voice channel metadata. `PairRoom`
+coordinates ephemeral two-person WebRTC setup. The Worker rejects binary frames
+and never relays messages, files, calls, or screen shares.
 
 Cloudflare's Git build command is:
 
@@ -115,10 +123,11 @@ npx wrangler deploy
 No build output directory or static-assets directory is needed. The checked-in
 `wrangler.jsonc` points directly to `worker/index.js`, preventing Wrangler from
 trying to upload the Electron repository or `node_modules` as website assets.
-The app keeps the Worker address internal. The host creates a five-digit invite
-code and the friend enters it; neither person has to type or see a WebSocket
-address. Longer legacy room codes remain accepted by the Worker for older app
-versions.
+The app keeps the Worker address internal. Five-digit friend and server invites
+expire after 15 minutes. Selecting an online friend automatically creates a
+private rendezvous room, while server text and voice channels form direct peer
+meshes among currently online members. Conversation history stays in each
+desktop app's local settings file; offline content is not stored by Cloudflare.
 
 ### Host signaling from your own PC
 

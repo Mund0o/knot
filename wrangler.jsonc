@@ -11,6 +11,10 @@
       {
         "name": "PAIR_ROOMS",
         "class_name": "PairRoom"
+      },
+      {
+        "name": "PAIR_DIRECTORY",
+        "class_name": "PairDirectory"
       }
     ]
   },
@@ -18,6 +22,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["PairRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["PairDirectory"]
     }
   ]
 }

@@ -124,7 +124,7 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareFrameRate']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareFrameRate', 'directoryUserId', 'directoryToken', 'messageHistory']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
@@ -188,16 +188,28 @@ ipcMain.on('pair:setPendingSource', (event, id) => { if (isPairRenderer(event) &
 ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio(event.sender) : null);
 ipcMain.on('pair:stopLinuxShareAudio', event => { if (isPairRenderer(event)) stopLinuxShareAudio(); });
 
-// Leave Chromium's graphics stack at its platform defaults. That avoids
-// pre-warming GPU/video paths while Pair is idle; hardware codecs still engage
-// on demand when a call or screen share actually needs them.
 const fs = require('fs');
 // Electron only accepts this before its ready event. Read the tightly scoped
 // local setting early; toggling it in the UI takes effect on restart.
+let hardwareAccelerationEnabled = true;
 try {
   const earlySettings = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
-  if (earlySettings.hardwareAcceleration === 'off') app.disableHardwareAcceleration();
+  hardwareAccelerationEnabled = earlySettings.hardwareAcceleration !== 'off';
+  if (!hardwareAccelerationEnabled) app.disableHardwareAcceleration();
 } catch {}
+// Chromium's Linux hardware encoder is opt-in. On dual-GPU machines it normally
+// probes only the display GPU, which can leave WebRTC using a software encoder
+// even when another render node has a working VA-API encoder. Prefer an Intel
+// media node when present; Chromium still renders Pair on the display GPU.
+if (process.platform === 'linux' && hardwareAccelerationEnabled) {
+  app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL');
+  try {
+    const intelRenderNode = fs.readdirSync('/sys/class/drm')
+      .filter(name => /^renderD\d+$/.test(name))
+      .find(name => fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim().toLowerCase() === '0x8086');
+    if (intelRenderNode) app.commandLine.appendSwitch('hardware-video-device-path', `/dev/dri/${intelRenderNode}`);
+  } catch {}
+}
 // Pair is serverless by default. `server.js` remains available through
 // `npm run signal` for people who deliberately operate their own signaling
 // service, but the desktop app must not silently start a localhost server.
