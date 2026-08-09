@@ -22,6 +22,9 @@ if (!rendererSource.includes('FILE_DRAIN_TIMEOUT=45000') || !rendererSource.incl
 if (!rendererSource.includes('pendingFrameDelete=pendingFrames.delete.bind') || !rendererSource.includes('pendingFrames.delete=seq=>')) {
   throw new Error('Canceled early file frames can still leak the pending-transfer budget');
 }
+if (!rendererSource.includes('maxptime=20') || !rendererSource.includes('c.maxptime=20;c.ptime=10')) {
+  throw new Error('Voice audio can still queue long Opus packets behind screen sharing');
+}
 
 function fail(error) {
   console.error('Navigation UI smoke test failed:', error?.stack || error);
