@@ -438,11 +438,11 @@ app.whenReady().then(() => {
         // the selected source inside this request and consume it immediately;
         // retaining a source from an earlier renderer IPC call makes KDE close
         // its PipeWire target before Chromium imports it ("target not found").
-        const sources = await desktopCapturer.getSources({
-          types: ['screen', 'window'],
-          fetchWindowIcons: false,
-          thumbnailSize: { width: 0, height: 0 }
-        });
+        // KDE's portal can expose a transient window target that resolves to
+        // black after the picker closes. A display share is stable across both
+        // AMD and NVIDIA Wayland sessions; window sharing remains available on
+        // platforms where Electron supplies a persistent window source.
+        const sources = await desktopCapturer.getSources({ types: ['screen'] });
         src = sources[0];
       } else {
         const useId = pendingSourceId;
@@ -451,6 +451,7 @@ app.whenReady().then(() => {
       pendingSourceId = null;
       pendingSources = [];
       if (!src) return callback({ video: undefined });
+      console.log('[screen portal] selected', src.id, src.name || 'display');
       activeShareSourceId = src.id;
       callback({ video: src });
     } catch (error) {

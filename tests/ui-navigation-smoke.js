@@ -13,7 +13,7 @@ if (!rendererSource.includes('await waitForDisplayFrames(track)') || rendererSou
 if (rendererSource.includes('p.encodings[0].minBitrate=')) {
   throw new Error('Screen sharing still forces a congestion-breaking minimum bitrate');
 }
-if (!mainSource.includes("if (process.platform === 'linux')") || !mainSource.includes('thumbnailSize: { width: 0, height: 0 }') || !rendererSource.includes("window.pairEnv?.getSources&&!window.pairEnv.useSystemPicker")) {
+if (!mainSource.includes("if (process.platform === 'linux')") || !mainSource.includes("types: ['screen']") || !rendererSource.includes("window.pairEnv?.getSources&&!window.pairEnv.useSystemPicker")) {
   throw new Error('Linux display media does not acquire its portal source in one step');
 }
 if (!rendererSource.includes('FILE_DRAIN_TIMEOUT=45000') || !rendererSource.includes('direct connection stopped draining')) {
