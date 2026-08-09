@@ -1,10 +1,10 @@
 {
-  "version": "1.1.35",
-  "notes": "Keep desktop audio audible locally while sharing, add speaking avatar rings, keep active calls visible while chatting, and improve screen-share motion smoothness.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.35/pair-p2p-1.1.35.tar.gz",
-  "linuxSha256": "b1cf350fad77b82c66a7dff4bfa5fe25ac85b0e54cc8698462e40d7f2c52e32e",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.35/Knot-1.1.35.AppImage",
-  "linuxAppImageSha256": "1d0a5f581459ae5b4b60bc05a5f7378d5bd62ad7c0166b293a15953a93595b0e",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.35/Knot.Setup.1.1.35.exe",
-  "winSha256": "001fd5918016cc9824d06688c5a153d7edfe89d08eb1f7e55bbb445405fc4cbc"
+  "version": "1.1.36",
+  "notes": "DM calls now stay connected across server navigation. Linux screen sharing gains primary-GPU pinning, black-screen fixes, smoother isolated audio, lower latency, and higher-quality 4K60 tuning.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.36/pair-p2p-1.1.36.tar.gz",
+  "linuxSha256": "e960b87b40c584fc3d921650687386ce87665f18ad2fccc4eeafdcaa10b4c19b",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.36/Knot-1.1.36.AppImage",
+  "linuxAppImageSha256": "3308bba4ee87b0b8f66772661f8edfe8d500379b1780267d4608e3168c97c2ca",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.36/Knot.Setup.1.1.36.exe",
+  "winSha256": "ddc2868fa0cf1cfe07784113034e3e67b23c34795d915aa260b9c98c9799a3cc"
 }
