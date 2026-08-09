@@ -1,10 +1,10 @@
 {
-  "version": "1.1.32",
-  "notes": "Fix Linux screen capture compatibility and simplify voice panels to mute, share, and hang up.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.32/pair-p2p-1.1.32.tar.gz",
-  "linuxSha256": "40defb46834f42c66e2e00d7e11cd93a81bacbd1637976869e04fe2aa32bd875",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.32/Knot-1.1.32.AppImage",
-  "linuxAppImageSha256": "ee04859e6604a143de2ed9df814c8dc7d0a0e0574625bcc421f9be7964f01a0b",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.32/Knot.Setup.1.1.32.exe",
-  "winSha256": "273c424a3fbfbcc0afb7f0f41f03432ab06cb0a95f8da786c4cce627f91fe331"
+  "version": "1.1.33",
+  "notes": "Fix Linux screen sharing so the PipeWire screen picker opens and the selected source starts reliably.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.33/pair-p2p-1.1.33.tar.gz",
+  "linuxSha256": "c879d367f021e8caf1d8a1e431ca248d315e4dd440b4d00cba92689fcc45cec7",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.33/Knot-1.1.33.AppImage",
+  "linuxAppImageSha256": "497c57d9c06df4647cb771d0febdcb6fc7218c4dcc788cdc957623fe73bc9fa7",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.33/Knot.Setup.1.1.33.exe",
+  "winSha256": "8ca6295ab965af35473543572b4c7a029ca86febff6300ef145dabba79ff958c"
 }
