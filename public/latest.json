@@ -2,9 +2,9 @@
   "version": "1.1.30",
   "notes": "Focused server and DM call controls, retractable member list, and server identity persistence across updates.",
   "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/pair-p2p-1.1.30.tar.gz",
-  "linuxSha256": "dd2a756e3489463a5b32c69e87c9f364498f9305034804487fe5b91ae21bd150",
+  "linuxSha256": "69df3cc873204b975566e516e9cb49677572e33782a62c06f60ebc3cb9b9ce2a",
   "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/Knot-1.1.30.AppImage",
   "linuxAppImageSha256": "53f584d80f49cdf311357b3215e7eea164e8308264cfd891318f2503cbc09d7a",
   "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.30/Knot.Setup.1.1.30.exe",
-  "winSha256": "79a0d3e1ca8aa1727444b72705ad22e23c160515ab1a5b8d54e521ab2a780323"
+  "winSha256": "3ac14dc6e4c4f74335b189974cc316456acc922ea52b8db00d68ef39d42056ec"
 }
