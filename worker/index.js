@@ -153,17 +153,17 @@ export class PairDirectory {
         const server = { id: randomHex(), name: cleanText(value.name, 48, 'New server'), picture: cleanImage(value.picture), owner: user.id, members: [user.id], channels: [{ id: randomHex(), type: 'text', name: 'general' }, { id: randomHex(), type: 'voice', name: 'Lounge' }] };
         user.servers.push(server.id); await this.state.storage.put(`server:${server.id}`, server); await this.putUser(user); await this.broadcastSnapshots();
       } else if (value.type === 'update-server') {
-        const server = await this.server(value.serverId); this.requireMember(server, user.id);
+        const server = await this.server(value.serverId); this.requireOwner(server, user.id);
         if ('name' in value) server.name = cleanText(value.name, 48, server.name);
         if ('picture' in value) server.picture = cleanImage(value.picture);
         await this.state.storage.put(`server:${server.id}`, server); await this.broadcastSnapshots();
       } else if (value.type === 'create-channel') {
-        const server = await this.server(value.serverId); this.requireMember(server, user.id);
+        const server = await this.server(value.serverId); this.requireOwner(server, user.id);
         if (server.channels.length >= 64) throw new Error('channel limit reached');
         server.channels.push({ id: randomHex(), type: value.channelType === 'voice' ? 'voice' : 'text', name: cleanText(value.name, 48, value.channelType === 'voice' ? 'New voice' : 'new-channel') });
         await this.state.storage.put(`server:${server.id}`, server); await this.broadcastSnapshots();
       } else if (value.type === 'delete-channel') {
-        const server = await this.server(value.serverId); this.requireMember(server, user.id);
+        const server = await this.server(value.serverId); this.requireOwner(server, user.id);
         const channelId = normalizeId(value.channelId), channel = server.channels.find(item => item.id === channelId);
         if (!channel) throw new Error('channel missing');
         if (channel.type === 'text' && server.channels.filter(item => item.type === 'text').length <= 1) throw new Error('a server needs at least one text channel');
@@ -171,7 +171,7 @@ export class PairDirectory {
         for (const live of this.state.getWebSockets()) { const liveAttachment = live.deserializeAttachment() || {}; if (liveAttachment.voiceChannelId === channelId) { delete liveAttachment.voiceServerId; delete liveAttachment.voiceChannelId; delete liveAttachment.voiceJoinedAt; live.serializeAttachment(liveAttachment); } }
         await this.state.storage.put(`server:${server.id}`, server); await this.broadcastSnapshots();
       } else if (value.type === 'reorder-channels') {
-        const server = await this.server(value.serverId); this.requireMember(server, user.id);
+        const server = await this.server(value.serverId); this.requireOwner(server, user.id);
         const ids = Array.isArray(value.channelIds) ? value.channelIds.map(normalizeId).filter(Boolean) : [];
         if (ids.length !== server.channels.length || new Set(ids).size !== ids.length || ids.some(id => !server.channels.some(channel => channel.id === id))) throw new Error('invalid channel order');
         const channels = new Map(server.channels.map(channel => [channel.id, channel])); server.channels = ids.map(id => channels.get(id));
@@ -185,7 +185,9 @@ export class PairDirectory {
         socket.serializeAttachment(attachment); await this.broadcastSnapshots();
       } else if (value.type === 'connect' || value.type === 'signal') {
         const peerId = normalizeId(value.peerId); if (!peerId || !await this.canContact(user, peerId)) throw new Error('peer is not connected to you');
-        const envelope = value.type === 'connect' ? { type: 'connect-request', from: user.id, session: normalizeId(value.session), context: this.cleanContext(value.context) } : { type: 'peer-signal', from: user.id, context: this.cleanContext(value.context), payload: value.payload };
+        const context = this.cleanContext(value.context);
+        if (context.type === 'server') { const server = await this.server(context.serverId); this.requireMember(server, user.id); if (!server.members.includes(peerId)) throw new Error('peer is not a server member'); if (context.channelId && !server.channels.some(channel => channel.id === context.channelId)) throw new Error('server channel missing'); }
+        const envelope = value.type === 'connect' ? { type: 'connect-request', from: user.id, session: normalizeId(value.session), context } : { type: 'peer-signal', from: user.id, context, payload: value.payload };
         if (value.type === 'connect' && !envelope.session) throw new Error('invalid session');
         if (!this.sendUser(peerId, envelope)) throw new Error('peer is offline');
       }
@@ -251,6 +253,7 @@ export class PairDirectory {
   async server(id) { return normalizeId(id) ? this.state.storage.get(`server:${normalizeId(id)}`) : null; }
   async putUser(user) { user.friends = [...new Set(user.friends.map(normalizeId).filter(Boolean))].slice(0, 500); user.servers = [...new Set(user.servers.map(normalizeId).filter(Boolean))].slice(0, 100); await this.state.storage.put(`user:${user.id}`, user); }
   requireMember(server, userId) { if (!server || !server.members.includes(userId)) throw new Error('not a server member'); }
+  requireOwner(server, userId) { this.requireMember(server, userId); if (server.owner !== userId) throw new Error('only the server owner can edit this server'); }
   safeSend(socket, message) { try { socket.send(message); } catch {} }
   withinRate(socket, attachment, bytes) { const now = Date.now(); if (!attachment.rateAt || now - attachment.rateAt >= 1000) { attachment.rateAt = now; attachment.rateBytes = 0; } attachment.rateBytes = (attachment.rateBytes || 0) + bytes; socket.serializeAttachment(attachment); if (attachment.rateBytes <= MAX_SOCKET_BYTES_PER_SECOND) return true; socket.close(1008, 'rate limit'); return false; }
   async webSocketClose(socket) { const userId = (socket.deserializeAttachment() || {}).userId; if (userId) await this.broadcastSnapshots(); }
