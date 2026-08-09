@@ -1,10 +1,10 @@
 {
-  "version": "1.1.41",
+  "version": "1.1.42",
   "notes": "Update available.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.41/pair-p2p-1.1.41.tar.gz",
-  "linuxSha256": "b3fef5550a1bb07c11f1a1ff0f908f68aa39b910d0a2ce1543d4fc39cd561591",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.41/Knot-1.1.41.AppImage",
-  "linuxAppImageSha256": "7acff5800ae6dcceef021d12d11c089d6eda47ececc9ad89772c872db35e724e",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.41/Knot.Setup.1.1.41.exe",
-  "winSha256": "82b0b20834fe22cfe7d3587494bf7ca6819aa4fa424a81e2768eb01f55fc741b"
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.42/pair-p2p-1.1.42.tar.gz",
+  "linuxSha256": "2fc2a2e704980a43cf069606539c65f5a0d46c96843d616583731f6cebed7805",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.42/Knot-1.1.42.AppImage",
+  "linuxAppImageSha256": "3762a88ea7e8eb0fcd0fae44cb0b9eda2e9619aa980e49bc2aad74ef134feed8",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.42/Knot.Setup.1.1.42.exe",
+  "winSha256": "439245e02fc444c50a186f0825c2bac7577cf10c040102579c5b07ac8d25db14"
 }
