@@ -28,6 +28,10 @@
             <section class="channel-category"><div class="channel-category-heading"><span>Voice Channels</span><button id="addVoiceChannel" type="button" aria-label="Add voice channel" title="Add voice channel">+</button></div><div id="voiceChannelList" class="channel-list"></div></section>
           </div>
         </section>
+        <section id="serverVoiceDock" class="server-voice-dock" aria-label="Voice connection controls" hidden>
+          <div class="server-voice-summary"><span class="server-voice-signal" aria-hidden="true">◔</span><div><strong>Voice Connected</strong><span id="serverVoiceDockChannel">Voice channel</span><time id="serverVoiceDockTime">0:00</time></div><button id="serverVoiceLeave" class="server-voice-leave" type="button" aria-label="Disconnect from voice" title="Disconnect">☎</button></div>
+          <div class="server-voice-actions"><button id="serverVoiceMute" type="button" aria-label="Mute microphone" title="Mute microphone"><span aria-hidden="true">♩</span></button><button id="serverVoiceShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="serverVoiceFocus" type="button" aria-label="Open voice view" title="Open voice view">✦</button></div>
+        </section>
         <div class="presence-card"><span id="sidebarProfileAvatar" class="sidebar-profile-avatar"><span class="avatar-letter">Y</span><i id="directoryPresence"></i></span><div><strong id="sidebarProfileName">You</strong><span id="directoryStatus">Connecting…</span></div></div>
       </aside>
       <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="socialSidebar" aria-expanded="true" aria-label="Collapse friends and channels panel" title="Collapse panel">‹</button>
@@ -107,6 +111,13 @@
           </div>
         </div>
       </details>
+
+      <section id="serverVoiceStage" class="server-voice-stage" aria-label="Server voice channel" hidden>
+        <div class="server-stage-heading"><div><span class="server-stage-live">Voice Connected</span><h2 id="serverVoiceStageChannel">Voice channel</h2></div><time id="serverVoiceStageTime">0:00</time></div>
+        <div id="serverVoiceStageMembers" class="server-stage-members"></div>
+        <div id="serverVoiceScreens" class="server-stage-screens"><video id="serverVoiceScreenPreview" muted autoplay playsinline hidden></video></div>
+        <div class="server-stage-controls"><button id="serverStageMute" type="button" aria-label="Mute microphone" title="Mute microphone">♩</button><button id="serverStageShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="serverStageLeave" class="leave" type="button" aria-label="Disconnect from voice" title="Disconnect">☎</button></div>
+      </section>
 
       <section id="voicePanel" class="voice card">
         <div class="section-heading"><div><p class="eyebrow">02 / CALL</p><h2>Voice</h2></div><span id="callTimer" class="call-timer"></span></div>
