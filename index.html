@@ -10,10 +10,11 @@
   <body>
     <main class="app-shell">
       <aside class="app-rail" aria-label="Pair navigation">
-        <div class="rail-top"><button id="homeButton" class="rail-brand" type="button" aria-label="Direct messages" title="Direct messages">P</button><div id="serverList" class="server-list" aria-label="Servers"></div><button id="addServer" class="rail-button rail-add" type="button" aria-label="Create or join a server" title="Create or join a server">+</button></div>
+        <div class="rail-top"><button id="homeButton" class="rail-brand" type="button" aria-label="Friends and direct messages" title="Friends and direct messages">P</button><div id="serverList" class="server-list" aria-label="Your servers"></div><button id="addServer" class="rail-button rail-add" type="button" aria-label="Create or join a server" title="Create or join a server">+</button></div>
         <div class="rail-bottom"><button id="openSettings" class="rail-button" type="button" aria-label="Open settings" title="Settings">⚙</button></div>
       </aside>
       <aside id="socialSidebar" class="social-sidebar" aria-label="Friends and channels">
+        <div id="sidebarResize" class="sidebar-resize" role="separator" aria-label="Resize friends and channels panel" aria-orientation="vertical" tabindex="0"></div>
         <section id="friendsNavigation" class="social-view">
           <div class="social-heading"><div><span class="eyebrow">DIRECT MESSAGES</span><h2>Friends</h2></div><button id="addFriend" class="social-add" type="button" aria-label="Add a friend" title="Add a friend">+</button></div>
           <div id="friendList" class="friend-list"><p class="social-empty">Your friends will appear here.</p></div>
@@ -26,6 +27,16 @@
         </section>
         <div class="presence-card"><span id="sidebarProfileAvatar" class="sidebar-profile-avatar"><span class="avatar-letter">Y</span><i id="directoryPresence"></i></span><div><strong id="sidebarProfileName">You</strong><span id="directoryStatus">Connecting…</span></div></div>
       </aside>
+      <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-controls="socialSidebar" aria-expanded="true" aria-label="Collapse friends and channels panel" title="Collapse panel">‹</button>
+      <dialog id="serverDialog" class="server-dialog" aria-labelledby="serverDialogTitle">
+        <div class="server-dialog-header"><div><span class="eyebrow">SERVERS</span><h2 id="serverDialogTitle">Create or join</h2></div><button id="closeServerDialog" class="icon-button" type="button" aria-label="Close server dialog">×</button></div>
+        <p class="muted">Servers appear as icons under the P button. Messages, calls, and screen shares stay peer to peer.</p>
+        <div class="server-dialog-options">
+          <form id="createServerForm" class="server-dialog-option"><div><strong>Create a server</strong><span>Start with text and voice channels.</span></div><label for="newServerName">Server name</label><input id="newServerName" maxlength="48" value="New server" autocomplete="off" /><button class="primary" type="submit">Create server</button></form>
+          <form id="joinServerForm" class="server-dialog-option"><div><strong>Join a server</strong><span>Use the five-digit invite from a friend.</span></div><label for="serverInviteCode">Invite code</label><input id="serverInviteCode" inputmode="numeric" pattern="[0-9]{5}" maxlength="5" placeholder="12345" autocomplete="one-time-code" /><button type="submit">Join server</button></form>
+        </div>
+        <p id="serverDialogStatus" class="settings-hint" aria-live="polite"></p>
+      </dialog>
       <button id="panelBackdrop" class="panel-backdrop" type="button" aria-label="Close open panel" hidden></button>
       <div class="app-content">
       <header class="topbar">
