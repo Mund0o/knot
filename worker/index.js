@@ -29,6 +29,14 @@ function cleanImage(value) {
   return image.length <= 512 * 1024 && /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=]+$/i.test(image) ? image : '';
 }
 
+function cleanFrame(value) {
+  const number = (input, fallback, min, max) => {
+    const parsed = Number(input);
+    return Number.isFinite(parsed) ? Math.max(min, Math.min(max, parsed)) : fallback;
+  };
+  return { zoom: number(value?.zoom, 100, 40, 180), x: number(value?.x, 50, 0, 100), y: number(value?.y, 50, 0, 100) };
+}
+
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
 }
@@ -132,6 +140,7 @@ export class PairDirectory {
       if (value.type === 'update-profile') {
         user.name = cleanText(value.name, 32, user.name || 'Pair user');
         user.image = cleanImage(value.image);
+        user.frame = cleanFrame(value.frame);
         await this.putUser(user); await this.broadcastSnapshots();
       } else if (value.type === 'create-invite') {
         const kind = value.kind === 'server' ? 'server' : 'friend';
@@ -168,8 +177,8 @@ export class PairDirectory {
     if (!id || !token) return socket.close(1008, 'invalid credentials');
     const hash = await tokenHash(token); let user = await this.user(id);
     if (user && user.tokenHash !== hash) return socket.close(1008, 'authentication failed');
-    if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Pair user'), image: cleanImage(value.image), friends: [], servers: [] };
-    else { user.name = cleanText(value.name, 32, user.name); user.image = cleanImage(value.image); }
+    if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Pair user'), image: cleanImage(value.image), frame: cleanFrame(value.frame), friends: [], servers: [] };
+    else { user.name = cleanText(value.name, 32, user.name); user.image = cleanImage(value.image); user.frame = cleanFrame(value.frame); }
     await this.putUser(user); attachment.authed = true; attachment.userId = id; socket.serializeAttachment(attachment);
     this.safeSend(socket, JSON.stringify({ type: 'authenticated', userId: id })); await this.broadcastSnapshots();
   }
@@ -210,7 +219,7 @@ export class PairDirectory {
     return { type: 'snapshot', self: this.publicUser(user), friends, servers, members };
   }
 
-  publicUser(user) { return { id: user.id, name: user.name, image: user.image, online: this.isOnline(user.id) }; }
+  publicUser(user) { return { id: user.id, name: user.name, image: user.image, frame: cleanFrame(user.frame), online: this.isOnline(user.id) }; }
   isOnline(userId) { return this.state.getWebSockets().some(socket => { const a = socket.deserializeAttachment() || {}; return socket.readyState === 1 && a.authed && a.userId === userId; }); }
   async broadcastSnapshots() { const ids = [...new Set(this.state.getWebSockets().map(socket => (socket.deserializeAttachment() || {}).userId).filter(Boolean))]; for (const id of ids) { const snapshot = await this.snapshot(id); if (snapshot) this.sendUser(id, snapshot); } }
   sendUser(userId, value) { let sent = false, data = JSON.stringify(value); for (const socket of this.state.getWebSockets()) { const a = socket.deserializeAttachment() || {}; if (socket.readyState === 1 && a.authed && a.userId === userId) { this.safeSend(socket, data); sent = true; } } return sent; }
