@@ -1,5 +1,5 @@
-const fs = require('fs');
 const { app, BrowserWindow } = require('electron');
+const { linuxMainGpu } = require('../linux-gpu');
 
 const TEST_TIMEOUT_MS = 30000;
 
@@ -11,12 +11,9 @@ function fail(message, details) {
 }
 
 app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL');
-try {
-  const intelRenderNode = fs.readdirSync('/sys/class/drm')
-    .filter(name => /^renderD\d+$/.test(name))
-    .find(name => fs.readFileSync(`/sys/class/drm/${name}/device/vendor`, 'utf8').trim().toLowerCase() === '0x8086');
-  if (intelRenderNode) app.commandLine.appendSwitch('hardware-video-device-path', `/dev/dri/${intelRenderNode}`);
-} catch {}
+const mainGpu = linuxMainGpu();
+if (mainGpu?.renderNode) app.commandLine.appendSwitch('hardware-video-device-path', mainGpu.renderNode);
+app.commandLine.appendSwitch('force-high-performance-gpu');
 
 app.whenReady().then(async () => {
   const codecArg = process.argv.find(value => /^--codec=(?:H264|VP9|VP8|AV1)$/i.test(value));

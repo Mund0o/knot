@@ -1,10 +1,10 @@
 {
-  "version": "1.1.44",
-  "notes": "Fixes screen-share lag, restores AV1 sharing, improves adaptive quality, and keeps isolated computer audio responsive.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.44/pair-p2p-1.1.44.tar.gz",
-  "linuxSha256": "7db4356ecc69f491e1cb728389f5e57c5476aeec6f9451dd1626efff233a1931",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.44/Knot-1.1.44.AppImage",
-  "linuxAppImageSha256": "5a2e6225da5c38f8a79b98c5faa9e0fe08ba1f7fcff575dea6877e302cad353f",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.44/Knot.Setup.1.1.44.exe",
-  "winSha256": "b430d321e8854cbfc9449c72cfacc0b323ee45c10d13dcc3b22695bedbab9417"
+  "version": "1.1.45",
+  "notes": "Uses the main discrete GPU for Linux rendering and WebRTC video while excluding integrated graphics on hybrid systems.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.45/pair-p2p-1.1.45.tar.gz",
+  "linuxSha256": "40927b86ee97b0e0249da21ef39a4666f62962538db2b431f4fedde527154a46",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.45/Knot-1.1.45.AppImage",
+  "linuxAppImageSha256": "0311fafe25dd3a634def9458ba08a8d07463d67f601429b07c0d49b5d4fcbade",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.45/Knot.Setup.1.1.45.exe",
+  "winSha256": "d3d26f49e790644d734ad31a437a1b0392d9c3348cea58e3e4f2513494d43afc"
 }

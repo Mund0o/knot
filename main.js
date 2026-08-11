@@ -1,6 +1,7 @@
 const path = require('path');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
+const { linuxMainGpu } = require('./linux-gpu');
 const { execFileSync, spawn } = require('child_process');
 const APP_ICON = path.join(__dirname, 'build', 'icon.png');
 
@@ -189,29 +190,16 @@ try {
   hardwareAccelerationEnabled = earlySettings.hardwareAcceleration !== 'off';
   if (!hardwareAccelerationEnabled) app.disableHardwareAcceleration();
 } catch {}
-function linuxPrimaryGpu() {
-  if (process.platform !== 'linux') return null;
-  try {
-    const cards = fs.readdirSync('/sys/class/drm').filter(name => /^card\d+$/.test(name));
-    const boot = cards.find(name => {
-      try { return fs.readFileSync(`/sys/class/drm/${name}/device/boot_vga`, 'utf8').trim() === '1'; } catch { return false; }
-    }) || cards[0];
-    if (!boot) return null;
-    const device = fs.realpathSync(`/sys/class/drm/${boot}/device`), vendor = fs.readFileSync(`/sys/class/drm/${boot}/device/vendor`, 'utf8').trim().toLowerCase();
-    const render = fs.readdirSync('/sys/class/drm').filter(name => /^renderD\d+$/.test(name)).find(name => {
-      try { return fs.realpathSync(`/sys/class/drm/${name}/device`) === device; } catch { return false; }
-    });
-    return { vendor, renderNode: render ? `/dev/dri/${render}` : '' };
-  } catch { return null; }
-}
 // Keep PipeWire desktop capture enabled explicitly for native Wayland sessions.
-// GPU selection must remain with the compositor/portal. Forcing ANGLE or a DRM
-// render node can make a valid PipeWire target impossible to import, producing
-// a black stream with zero outbound bitrate on hybrid and NVIDIA systems.
+// The compositor/portal still owns capture import; forcing ANGLE or Chromium's
+// render-node override can turn a valid PipeWire target black. The media-device
+// path is narrower: it keeps WebRTC encode/decode on the selected discrete GPU.
 if (process.platform === 'linux' && hardwareAccelerationEnabled) {
-  const primaryGpu = linuxPrimaryGpu();
+  const primaryGpu = linuxMainGpu();
   process.env.KNOT_PRIMARY_GPU_VENDOR = primaryGpu?.vendor || '';
-  console.log('[gpu] display GPU detected:', primaryGpu?.renderNode || 'system default', primaryGpu?.vendor || 'unknown vendor', '(compositor-managed capture)');
+  if (primaryGpu?.renderNode) app.commandLine.appendSwitch('hardware-video-device-path', primaryGpu.renderNode);
+  app.commandLine.appendSwitch('force-high-performance-gpu');
+  console.log('[gpu] main GPU selected:', primaryGpu?.renderNode || 'system default', primaryGpu?.vendor || 'unknown vendor', primaryGpu?.pciAddress || 'unknown PCI address', primaryGpu?.integrated ? '(integrated fallback)' : '(integrated GPUs excluded)');
   app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer,AcceleratedVideoEncoder');
   // Electron/Chromium currently rejects Vulkan surfaces under native Wayland;
   // falling back to GL avoids a captured DMABUF presenting as a black frame.

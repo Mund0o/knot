@@ -3,9 +3,13 @@ const path = require('path');
 const { app, BrowserWindow } = require('electron');
 
 const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+const gpuSource = fs.readFileSync(path.join(__dirname, '..', 'linux-gpu.js'), 'utf8');
 const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 if (mainSource.includes("appendSwitch('render-node-override'") || mainSource.includes("appendSwitch('use-angle'")) {
   throw new Error('Linux screen sharing still forces a portal-incompatible GPU target');
+}
+if (!mainSource.includes("appendSwitch('hardware-video-device-path', primaryGpu.renderNode)") || !mainSource.includes("appendSwitch('force-high-performance-gpu')") || !gpuSource.includes('Number(a.integrated) - Number(b.integrated)')) {
+  throw new Error('Linux media can still select an integrated GPU when a discrete main GPU is available');
 }
 if (!rendererSource.includes('await waitForDisplayFrames(track)') || rendererSource.indexOf('await waitForDisplayFrames(track)') > rendererSource.indexOf("send({t:'screen-start'})")) {
   throw new Error('Screen sharing is advertised before a real capture frame arrives');

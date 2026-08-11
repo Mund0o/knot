@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.44",
+  "version": "1.1.45",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -18,7 +18,8 @@
     "test:screen:h264": "electron tests/screen-quality-smoke.js --codec=H264",
     "test:screen:av1": "electron tests/screen-quality-smoke.js --codec=AV1",
     "test:screen": "npm run test:screen:h264 && npm run test:screen:av1",
-    "test": "npm run test:ui && npm run test:screen",
+    "test:gpu": "node tests/linux-gpu-selection.js",
+    "test": "npm run test:gpu && npm run test:ui && npm run test:screen",
     "deploy": "wrangler deploy",
     "dist": "electron-builder --linux tar.gz AppImage",
     "dist:win": "electron-builder --win nsis",
@@ -44,6 +45,7 @@
       "styles.css",
       "app.js",
       "main.js",
+      "linux-gpu.js",
       "preload.js",
       "screen-audio-worklet.js",
       "updater.js",

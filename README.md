@@ -63,6 +63,11 @@ unresponsive. The selected AV1 mode is negotiated normally and only falls back
 to H.264 after the receiver confirms that AV1 packets arrive without decoded
 frames.
 
+On Linux systems with both integrated and discrete graphics, Knot excludes the
+integrated render node and sends WebRTC video encode/decode work to the main
+discrete GPU. PipeWire capture import remains compositor-managed so Wayland
+screen shares continue to produce valid frames.
+
 `npm test` validates navigation, capture constraints, congestion-safe sender
 parameters, overload recovery, isolated audio delivery, H.264 transport, and
 AV1 transport with live decode. Set `PAIR_TEST_4K60=1` when running an individual
