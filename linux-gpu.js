@@ -21,15 +21,18 @@ function linuxGpuCandidates(sysfsRoot = '/sys/class/drm', devRoot = '/dev/dri') 
     const pciAddress = readText(path.join(devicePath, 'uevent')).match(/^pci_slot_name=(.+)$/m)?.[1] || '';
     const bootVga = readText(path.join(devicePath, 'boot_vga')) === '1';
     const pcieLinkWidth = Number.parseInt(readText(path.join(devicePath, 'current_link_width')), 10) || 0;
+    const pcieMaxLinkWidth = Number.parseInt(readText(path.join(devicePath, 'max_link_width')), 10) || 0;
     const connected = names.some(name =>
       name.startsWith(`${card}-`) && readText(path.join(sysfsRoot, name, 'status')) === 'connected'
     );
-    // Intel/AMD integrated graphics has no external PCIe link. This also keeps
-    // Intel Arc and AMD discrete cards eligible without maintaining device-ID
-    // lists that become stale as new GPUs ship.
+    // Intel/AMD integrated graphics has no normal external PCIe link. A sleeping
+    // discrete card can report current_link_width=0 (notably AMD runtime D3), so
+    // retain it when sysfs exposes a real 1..32 lane maximum. Integrated devices
+    // commonly omit this value or report the 255 sentinel.
     const integratedVendor = vendor === '0x8086' || vendor === '0x1002';
-    const integrated = integratedVendor && pcieLinkWidth === 0;
-    return [{ card, vendor, pciAddress, bootVga, connected, integrated, pcieLinkWidth, renderNode: path.join(devRoot, render) }];
+    const externalPcieLink = pcieLinkWidth > 0 || (pcieMaxLinkWidth >= 1 && pcieMaxLinkWidth <= 32);
+    const integrated = integratedVendor && !externalPcieLink;
+    return [{ card, vendor, pciAddress, bootVga, connected, integrated, pcieLinkWidth, pcieMaxLinkWidth, renderNode: path.join(devRoot, render) }];
   });
 }
 
@@ -43,7 +46,7 @@ function linuxMainGpu(options = {}) {
   return candidates.sort((a, b) =>
     Number(b.bootVga) - Number(a.bootVga) ||
     Number(b.connected) - Number(a.connected) ||
-    b.pcieLinkWidth - a.pcieLinkWidth ||
+    Math.max(b.pcieLinkWidth, b.pcieMaxLinkWidth) - Math.max(a.pcieLinkWidth, a.pcieMaxLinkWidth) ||
     a.renderNode.localeCompare(b.renderNode)
   )[0];
 }

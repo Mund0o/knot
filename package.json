@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.49",
+  "version": "1.1.50",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -18,6 +18,7 @@
     "test:screen:h264": "electron tests/screen-quality-smoke.js --codec=H264",
     "test:screen:av1": "electron tests/screen-quality-smoke.js --codec=AV1",
     "test:screen:native": "node tests/native-screen-live.js && electron tests/native-screen-transport.js",
+    "test:screen:full": "electron tests/full-app-screen-endurance.js",
     "test:screen": "node tests/run-screen-suite.js",
     "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-service.js && electron tests/linux-gpu-runtime.js",
     "test": "npm run test:gpu && npm run test:ui && npm run test:screen",
@@ -55,11 +56,7 @@
       "updater.js",
       "linux-launcher.js",
       "server.js",
-      "addon/build/Release/pair-capture.node",
       "build/**/*"
-    ],
-    "asarUnpack": [
-      "addon/build/Release/pair-capture.node"
     ],
     "linux": {
       "target": [
@@ -80,7 +77,13 @@
         }
       ],
       "artifactName": "Knot Setup ${version}.${ext}",
-      "icon": "icon.ico"
+      "icon": "icon.ico",
+      "extraResources": [
+        {
+          "from": "addon/build/Release/pair-capture.node",
+          "to": "app.asar.unpacked/addon/build/Release/pair-capture.node"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,

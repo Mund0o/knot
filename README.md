@@ -58,15 +58,16 @@ SHA-256 checksum, installs it, and restarts automatically.
 
 ## Screen sharing architecture
 
-Knot sends screen video, computer sound, and voice as separate WebRTC tracks.
+Knot keeps screen video, computer sound, and voice on separate WebRTC paths.
 Screen capture defaults to 1080p60, prefers broadly hardware-accelerated H.264,
 retains retransmission/FEC codecs, and keeps every video target below a 60 Mbps
-user ceiling. Native AV1 4K60 targets 24 Mbps so voice and control traffic keep
-headroom. Its low-priority, partially reliable transport abandons stale video
-instead of building a reliable queue, then resumes at a fresh AV1 keyframe. Mic
-audio remains high priority. Persistent congestion, packet-loss recovery failure,
-or an incompatible AV1 decoder switches the share to H.264 instead of freezing or
-leaving a black screen.
+user ceiling. Native AV1 keeps 3840×2160 capture at 60 fps while targeting 10
+Mbps so voice and control traffic have real upload headroom. Its low-priority,
+unordered, partially reliable transport abandons packets after 100 ms, bounds
+the send queue to 256 KiB, drops stale deltas, and resets only at a complete AV1
+keyframe. Mic audio remains high priority. Congestion stays on efficient AV1;
+only a sustained decoder failure or incompatible client switches that viewer to
+a 12 Mbps-capped H.264 compatibility stream.
 
 With **Hardware acceleration** enabled, Knot requests the high-performance GPU
 for compositing, image and canvas rasterization, zero-copy tile presentation,
@@ -74,12 +75,13 @@ WebGL/WebGPU, and supported video encode/decode paths. Software 3D rasterization
 is disabled in this mode. On Linux systems with both integrated and discrete
 graphics, Knot excludes the integrated render node, pins Chromium and VA-API to
 the main discrete card, and uses NVENC on NVIDIA or VA-API on AMD for its native
-GPU-only AV1 screen route. The 4K60 route measures segment-arrival-to-paint
-latency and enforces a 100 ms steady-state p95 target; hardware decoder startup
-must also paint within 100 ms. If a Linux driver advertises AV1 decoding but
-rejects the stream, Knot may use CPU decode as the necessary compatibility
-fallback while capture, encode, compositing, and canvas presentation stay on
-the discrete GPU. The sender's own preview never falls back to CPU AV1 decode;
+GPU-only AV1 screen route. The 4K60 route measures segment-arrival-to-presentation
+latency and enforces a 100 ms steady-state p95 target with sustained-failure
+hysteresis. If a Linux driver advertises AV1 decoding but rejects or silently
+stalls on the stream, Knot retries with CPU decode as the necessary compatibility
+fallback while capture and encode remain on the discrete GPU. Decoded frames feed
+a generated video track directly into Chromium's compositor instead of copying
+every 4K frame through a renderer canvas. The sender's own preview never falls back to CPU AV1 decode;
 if hardware preview decode is unavailable, Knot shows a lightweight live-share
 placeholder. A receiver that cannot decode AV1 within the 100 ms target requests
 H.264 rather than remaining black or accumulating stale frames.
@@ -89,8 +91,9 @@ IPC, and file I/O stay on the CPU because Electron provides no dependable GPU
 implementation for those jobs.
 
 `npm test` validates navigation, capture constraints, congestion-safe sender
-parameters, overload recovery, isolated audio delivery, H.264 transport, and
-AV1 transport with live decode. Set `PAIR_TEST_4K60=1` when running an individual
+parameters, overload recovery, isolated audio delivery, H.264 transport, live
+AV1 decode, and two complete Knot app windows sharing 4K60 with voice over a
+bursty constrained uplink. Set `PAIR_TEST_4K60=1` when running an individual
 codec test to turn it into a strict local 4K60 hardware stress benchmark.
 
 Screen sharing settings include **Test isolated computer audio**. It exercises

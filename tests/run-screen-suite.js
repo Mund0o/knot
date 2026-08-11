@@ -15,6 +15,9 @@ const native = gpu ? nativeScreenInfo(gpu.vendor, gpu.card) : { supported: false
 if (native.supported) {
   console.log(`Testing production ${native.encoder} route on ${native.cardPath}`);
   run('test:screen:native');
+  // Screen-share responsiveness must be measured inside two complete Knot
+  // renderers with voice, messages, friends, servers, and a constrained uplink.
+  run('test:screen:full');
 } else {
   console.log('Native GPU AV1 route unavailable; testing Chromium codec fallbacks');
   run('test:screen:h264');
