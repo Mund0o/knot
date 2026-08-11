@@ -1,13 +1,13 @@
 const path = require('path');
 const { app, BrowserWindow } = require('electron');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('../linux-gpu');
+const { applyGpuAccelerationPolicy } = require('../gpu-acceleration');
 
 const input = process.argv.find(value => value.endsWith('.webm'));
 if (!input) throw new Error('Pass a WebM capture path');
 const gpu = linuxMainGpu();
 if (applyLinuxMainGpuEnvironment(gpu)) {
-  app.commandLine.appendSwitch('hardware-video-device-path', gpu.renderNode);
-  app.commandLine.appendSwitch('force-high-performance-gpu');
+  applyGpuAccelerationPolicy(app, { platform: process.platform, gpu, wayland: !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) });
 }
 
 function fail(error) {

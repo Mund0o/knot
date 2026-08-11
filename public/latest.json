@@ -1,10 +1,10 @@
 {
-  "version": "1.1.47",
-  "notes": "Discrete-only NVIDIA GPU routing, native NVENC AV1 4K60 sharing, lower-latency screen audio, stable DM/server stream playback, and Discord-style Focus View improvements.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.47/pair-p2p-1.1.47.tar.gz",
-  "linuxSha256": "28633e2a69265754245098c43e35f8ec5d40cd54bc2910312d73e006e029dd01",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.47/Knot-1.1.47.AppImage",
-  "linuxAppImageSha256": "8095f018f0e8cb6c775fbec0c8410f55c7fd4b794ea9331fb0a40a5334637d8f",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.47/Knot.Setup.1.1.47.exe",
-  "winSha256": "be50d10a70479d76f2d7f9921cfc169c540034f8a6e21d03a9f93676b1344d7a"
+  "version": "1.1.48",
+  "notes": "GPU-only AV1 sharing for NVIDIA and AMD, lower-latency 4K60, AMD decode recovery, share-only fullscreen, and speaking outline fixes.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.48/pair-p2p-1.1.48.tar.gz",
+  "linuxSha256": "84c24b8a746164e1f874092e7bbf9e43ac9473e60bcaf4b8f7b99b3222af8af7",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.48/Knot-1.1.48.AppImage",
+  "linuxAppImageSha256": "e9cc14782ed0127296deb63b1a4e959d4cd6c71a2fa38c507bb28ad7c2d320df",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.48/Knot.Setup.1.1.48.exe",
+  "winSha256": "c6fbe117e2e9191aaeca3fcb2922b84e76be693ccc8cc2d595b4c30366316b6e"
 }

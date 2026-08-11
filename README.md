@@ -60,18 +60,33 @@ SHA-256 checksum, installs it, and restarts automatically.
 Knot sends screen video, computer sound, and voice as separate WebRTC tracks.
 Screen capture defaults to 1080p60, prefers broadly hardware-accelerated H.264,
 retains retransmission/FEC codecs, and keeps every video target below a 60 Mbps
-user ceiling. The 4K60 profile targets 56 Mbps, leaving useful headroom on an
-88 Mbps upload instead of forcing an SDP bitrate that can build latency. WebRTC
+user ceiling. Native AV1 4K60 targets 40 Mbps so voice and control traffic keep
+headroom instead of letting reliable video data build latency. WebRTC
 can adapt below the ceiling, and repeated encoder overload first falls back to
 30 fps and then to a reduced render scale so sharing cannot make the whole app
 unresponsive. The selected AV1 mode is negotiated normally and only falls back
 to H.264 after the receiver confirms that AV1 packets arrive without decoded
 frames.
 
-On Linux systems with both integrated and discrete graphics, Knot excludes the
-integrated render node and sends WebRTC video encode/decode work to the main
-discrete GPU. PipeWire capture import remains compositor-managed so Wayland
-screen shares continue to produce valid frames.
+With **Hardware acceleration** enabled, Knot requests the high-performance GPU
+for compositing, image and canvas rasterization, zero-copy tile presentation,
+WebGL/WebGPU, and supported video encode/decode paths. Software 3D rasterization
+is disabled in this mode. On Linux systems with both integrated and discrete
+graphics, Knot excludes the integrated render node, pins Chromium and VA-API to
+the main discrete card, and uses NVENC on NVIDIA or VA-API on AMD for its native
+GPU-only AV1 screen route. The 4K60 route measures segment-arrival-to-paint
+latency and enforces a 100 ms steady-state p95 target; hardware decoder startup
+must also paint within 100 ms. If a Linux driver advertises AV1 decoding but
+rejects the stream, Knot may use CPU decode as the necessary compatibility
+fallback while capture, encode, compositing, and canvas presentation stay on
+the discrete GPU. The sender's own preview never falls back to CPU AV1 decode;
+if hardware preview decode is unavailable, Knot shows a lightweight live-share
+placeholder. A receiver that cannot decode AV1 within the 100 ms target requests
+H.264 rather than remaining black or accumulating stale frames.
+PipeWire capture import remains compositor-managed so Wayland screen shares
+continue to produce valid frames. Audio processing, encryption, networking,
+IPC, and file I/O stay on the CPU because Electron provides no dependable GPU
+implementation for those jobs.
 
 `npm test` validates navigation, capture constraints, congestion-safe sender
 parameters, overload recovery, isolated audio delivery, H.264 transport, and

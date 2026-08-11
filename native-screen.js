@@ -32,16 +32,24 @@ function parseInfo(output) {
   return { vendor, cardPath, codecs };
 }
 
+function validateNativeScreenInfo(primaryGpuVendor = '', primaryGpuCard = '', info = {}, source = '') {
+  const vendor = ({ '0x10de': 'nvidia', '0x1002': 'amd' })[String(primaryGpuVendor).toLowerCase()];
+  if (!vendor) return { supported: false, reason: 'A discrete NVIDIA or AMD GPU is required' };
+  const encoder = vendor === 'nvidia' ? 'NVENC' : 'AMD VA-API';
+  if (info.vendor !== vendor) return { supported: false, reason: `${encoder} resolved to ${info.vendor || 'an unknown GPU vendor'}, not the selected ${vendor.toUpperCase()} card` };
+  if (!info.codecs?.includes('av1')) return { supported: false, reason: `The selected ${vendor.toUpperCase()} card does not expose AV1 encoding` };
+  if (primaryGpuCard && info.cardPath !== `/dev/dri/${primaryGpuCard}`) return { supported: false, reason: `${encoder} resolved to ${info.cardPath || 'an unknown card'}, not the selected ${primaryGpuCard}` };
+  return { supported: true, source, vendor, encoder, cardPath: info.cardPath, codecs: info.codecs.filter(codec => codec === 'av1' || codec === 'h264'), latencyTargetMs: 100 };
+}
+
 function nativeScreenInfo(primaryGpuVendor = '', primaryGpuCard = '') {
-  if (process.platform !== 'linux' || primaryGpuVendor !== '0x10de') return { supported: false, reason: 'A discrete NVIDIA GPU is required' };
+  if (process.platform !== 'linux') return { supported: false, reason: 'Native GPU AV1 sharing is currently available on Linux' };
+  if (!['0x10de', '0x1002'].includes(String(primaryGpuVendor).toLowerCase())) return { supported: false, reason: 'A discrete NVIDIA or AMD GPU is required' };
   const runner = gpuScreenRecorderCommand();
-  if (!runner) return { supported: false, reason: 'Install GPU Screen Recorder or its Flatpak to enable NVENC sharing' };
+  if (!runner) return { supported: false, reason: 'Install GPU Screen Recorder or its Flatpak to enable GPU AV1 sharing' };
   try {
     const output = execFileSync(runner.command, [...runner.prefix, '--info'], { encoding: 'utf8', timeout: 7000 });
-    const info = parseInfo(output);
-    if (info.vendor !== 'nvidia' || !info.codecs.includes('av1')) return { supported: false, reason: 'The selected NVIDIA card does not expose AV1 encoding' };
-    if (primaryGpuCard && info.cardPath !== `/dev/dri/${primaryGpuCard}`) return { supported: false, reason: `NVENC resolved to ${info.cardPath || 'an unknown card'}, not the selected ${primaryGpuCard}` };
-    return { supported: true, source: runner.source, cardPath: info.cardPath, codecs: info.codecs.filter(codec => codec === 'av1' || codec === 'h264') };
+    return validateNativeScreenInfo(primaryGpuVendor, primaryGpuCard, parseInfo(output), runner.source);
   } catch (error) {
     return { supported: false, reason: error?.message || 'GPU Screen Recorder capability check failed' };
   }
@@ -102,7 +110,7 @@ class NativeScreenService {
     const bitrateKbps = Math.max(8000, Math.min(80000, Math.round(Number(options.bitrateKbps) || 56000)));
     const cursor = options.cursor === 'never' ? 'no' : 'yes';
     const testCapture = process.env.KNOT_NATIVE_SCREEN_TEST === '1' && /^[A-Za-z0-9_.-]{1,64}$/.test(options.captureSource || '') ? options.captureSource : '';
-    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-f', String(fps), '-fm', 'cfr', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '1', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm'];
+    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'cfr', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '1', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm'];
     const child = spawnRecorder(runner, args);
     const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', active: true, stopping: false, stderr: '', seq: 0, paused: false, segmenter: new WebmClusterSegmenter() };
     this.session = session;
@@ -120,7 +128,7 @@ class NativeScreenService {
       while (session.waiters.length) session.waiters.shift()(null);
       if (session.error) this.onError(session.error);
     });
-    return { id: session.id, codec, fps, width, height, source: info.source };
+    return { id: session.id, codec, fps, width, height, source: info.source, vendor: info.vendor, encoder: info.encoder, latencyTargetMs: info.latencyTargetMs };
   }
 
   async read(id, timeoutMs = 1500) {
@@ -143,4 +151,4 @@ class NativeScreenService {
   }
 }
 
-module.exports = { gpuScreenRecorderCommand, parseInfo, nativeScreenInfo, WebmClusterSegmenter, NativeScreenService };
+module.exports = { gpuScreenRecorderCommand, parseInfo, validateNativeScreenInfo, nativeScreenInfo, WebmClusterSegmenter, NativeScreenService };

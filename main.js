@@ -2,6 +2,7 @@ const path = require('path');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
+const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
 const { execFileSync, spawn } = require('child_process');
 const APP_ICON = path.join(__dirname, 'build', 'icon.png');
@@ -200,29 +201,28 @@ try {
   hardwareAccelerationEnabled = earlySettings.hardwareAcceleration !== 'off';
   if (!hardwareAccelerationEnabled) app.disableHardwareAcceleration();
 } catch {}
-// Keep PipeWire desktop capture enabled explicitly for native Wayland sessions.
-// The compositor/portal still owns capture import; forcing ANGLE or Chromium's
-// render-node override can turn a valid PipeWire target black. The media-device
-// path is narrower: it keeps WebRTC encode/decode on the selected discrete GPU.
-if (process.platform === 'linux' && hardwareAccelerationEnabled) {
-  const primaryGpu = linuxMainGpu();selectedPrimaryGpu=primaryGpu;
-  if (applyLinuxMainGpuEnvironment(primaryGpu)) {
-    app.commandLine.appendSwitch('hardware-video-device-path', primaryGpu.renderNode);
-    app.commandLine.appendSwitch('force-high-performance-gpu');
-    console.log('[gpu] discrete-only GPU selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress);
-    app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer,AcceleratedVideoEncoder');
+// Apply the aggressive policy only when the setting is on. Linux first pins the
+// exact discrete render node; Windows/macOS ask the OS for its high-performance
+// adapter. The policy keeps driver safety workarounds but prevents silent
+// integrated-GPU or software-rasterizer fallback.
+if (hardwareAccelerationEnabled) {
+  const wayland = process.platform === 'linux' && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY);
+  if (process.platform === 'linux') {
+    const primaryGpu = linuxMainGpu();selectedPrimaryGpu=primaryGpu;
+    if (applyLinuxMainGpuEnvironment(primaryGpu) && applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: primaryGpu, wayland })) {
+      console.log('[gpu] discrete-only full acceleration selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress);
+    } else {
+      // Never let an integrated GPU become Knot's implicit fallback. Chromium's
+      // software renderer remains available only when acceleration is disabled.
+      app.disableHardwareAcceleration();
+      process.env.KNOT_PRIMARY_GPU_VENDOR = '';
+      console.warn('[gpu] no discrete render node found; integrated GPU rejected, using CPU rendering');
+    }
   } else {
-    // Never let an integrated GPU become Knot's implicit fallback. Chromium's
-    // software renderer remains available when a machine has no discrete card.
-    app.disableHardwareAcceleration();
-    process.env.KNOT_PRIMARY_GPU_VENDOR = '';
-    console.warn('[gpu] no discrete render node found; integrated GPU rejected, using software rendering');
-  }
-  // Electron/Chromium currently rejects Vulkan surfaces under native Wayland;
-  // falling back to GL avoids a captured DMABUF presenting as a black frame.
-  if (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) {
-    app.commandLine.appendSwitch('disable-features', 'Vulkan');
-    app.commandLine.appendSwitch('use-vulkan', 'disabled');
+    // Windows/macOS expose their high-performance adapter through Chromium's
+    // platform backend. The same policy covers D3D/Metal compositing, raster,
+    // canvas, zero-copy surfaces, and platform video acceleration.
+    applyGpuAccelerationPolicy(app, { platform: process.platform });
   }
 }
 nativeScreenService = new NativeScreenService({
@@ -383,7 +383,6 @@ const { startAutoUpdater, getUpdateStatus } = require('./updater');
 ipcMain.handle('pair:getUpdateStatus', event => isPairRenderer(event) ? getUpdateStatus() : { state: 'idle' });
 ipcMain.on('pair:relaunch', event => { if (isPairRenderer(event)) { app.relaunch(); app.exit(0); } });
 // The update feed is never accepted from renderer or signaling input.
-ipcMain.on('pair:toggleFullscreen', event => { if (isPairRenderer(event) && mainWin) mainWin.setFullScreen(!mainWin.isFullScreen()); });
 
 function createWindow() {
   const windowTitle = `Knot ${app.getVersion()} — private P2P chat`;
@@ -421,8 +420,6 @@ function createWindow() {
   });
   mainWin.webContents.on('will-navigate', event => event.preventDefault());
   mainWin.loadFile(path.join(__dirname, 'index.html'));
-  mainWin.on('enter-full-screen', () => mainWin?.webContents.send('pair:fullscreenChanged', true));
-  mainWin.on('leave-full-screen', () => mainWin?.webContents.send('pair:fullscreenChanged', false));
 }
 
 app.whenReady().then(() => {

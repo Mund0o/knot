@@ -1,8 +1,14 @@
 const assert = require('assert');
-const { parseInfo, WebmClusterSegmenter, nativeScreenInfo } = require('../native-screen');
+const { parseInfo, validateNativeScreenInfo, WebmClusterSegmenter, nativeScreenInfo } = require('../native-screen');
 
 const parsed = parseInfo('section=gpu_info\nvendor|nvidia\ncard_path|/dev/dri/card1\nsection=video_codecs\nh264\nav1\nav1_10bit\n');
 assert.deepStrictEqual(parsed, { vendor: 'nvidia', cardPath: '/dev/dri/card1', codecs: ['h264', 'av1', 'av1_10bit'] });
+const amd = parseInfo('section=gpu_info\nvendor|amd\ncard_path|/dev/dri/card2\nsection=video_codecs\nh264\nav1\n');
+assert.deepStrictEqual(validateNativeScreenInfo('0x1002', 'card2', amd, 'fixture'), {
+  supported: true, source: 'fixture', vendor: 'amd', encoder: 'AMD VA-API', cardPath: '/dev/dri/card2', codecs: ['h264', 'av1'], latencyTargetMs: 100
+});
+assert.strictEqual(validateNativeScreenInfo('0x1002', 'card1', amd).supported, false);
+assert.strictEqual(validateNativeScreenInfo('0x10de', 'card2', amd).supported, false);
 
 const cluster = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 const clusterWith = value => Buffer.concat([cluster, Buffer.from([0x80|value.length]), Buffer.from(value)]);
@@ -23,7 +29,7 @@ if (live.supported) {
   assert(live.codecs.includes('av1'));
   assert.strictEqual(nativeScreenInfo('0x10de', live.cardPath.split('/').at(-1)).supported, true);
   assert.strictEqual(nativeScreenInfo('0x10de', 'card999').supported, false);
-  console.log(`PASS native screen service framing and ${live.source} NVENC capability`);
+  console.log(`PASS native screen service framing and ${live.source} ${live.encoder} capability`);
 } else {
-  console.log('PASS native screen service framing (NVENC unavailable: '+live.reason+')');
+  console.log('PASS native screen service framing and AMD capability fixture (live GPU AV1 unavailable: '+live.reason+')');
 }

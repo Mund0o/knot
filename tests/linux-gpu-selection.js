@@ -33,11 +33,13 @@ try {
   gpu({ card: 'card1', render: 'renderD128', device: 'nvidia', vendor: '0x10de', pciAddress: '0000:01:00.0', bootVga: true, connected: true, pcieLinkWidth: 16 });
   gpu({ card: 'card2', render: 'renderD130', device: 'amd-apu', vendor: '0x1002', pciAddress: '0000:05:00.0' });
   gpu({ card: 'card3', render: 'renderD131', device: 'intel-arc', vendor: '0x8086', pciAddress: '0000:06:00.0', pcieLinkWidth: 8 });
+  gpu({ card: 'card4', render: 'renderD132', device: 'amd-discrete', vendor: '0x1002', pciAddress: '0000:07:00.0', pcieLinkWidth: 16 });
   const candidates = linuxGpuCandidates(drm, dev);
-  assert.strictEqual(candidates.length, 4);
+  assert.strictEqual(candidates.length, 5);
   assert.strictEqual(candidates.find(item => item.pciAddress === '0000:00:02.0').integrated, true);
   assert.strictEqual(candidates.find(item => item.vendor === '0x1002').integrated, true);
   assert.strictEqual(candidates.find(item => item.pciAddress === '0000:06:00.0').integrated, false);
+  assert.strictEqual(candidates.find(item => item.pciAddress === '0000:07:00.0').integrated, false);
   assert.strictEqual(candidates.find(item => item.vendor === '0x10de').connected, true);
   assert.deepStrictEqual(linuxMainGpu({ platform: 'linux', sysfsRoot: drm, devRoot: dev }), candidates.find(item => item.vendor === '0x10de'));
   assert.strictEqual(linuxMainGpu({ platform: 'win32', sysfsRoot: drm, devRoot: dev }), null);
@@ -51,7 +53,17 @@ try {
     KNOT_PRIMARY_GPU_PCI: '0000:01:00.0',
     __NV_PRIME_RENDER_OFFLOAD: '1',
     __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
-    __VK_LAYER_NV_optimus: 'NVIDIA_only'
+    __VK_LAYER_NV_optimus: 'NVIDIA_only',
+    LIBVA_DRIVER_NAME: 'nvidia',
+    NVD_BACKEND: 'direct'
+  });
+  const amdEnv = { LIBVA_DRIVER_NAME: 'nvidia', NVD_BACKEND: 'direct', __NV_PRIME_RENDER_OFFLOAD: '1' };
+  assert.strictEqual(applyLinuxMainGpuEnvironment(candidates.find(item => item.pciAddress === '0000:07:00.0'), amdEnv), true);
+  assert.deepStrictEqual(amdEnv, {
+    DRI_PRIME: 'pci-0000_07_00_0!',
+    KNOT_PRIMARY_GPU_VENDOR: '0x1002',
+    KNOT_PRIMARY_GPU_RENDER_NODE: path.join(dev, 'renderD132'),
+    KNOT_PRIMARY_GPU_PCI: '0000:07:00.0'
   });
 
   const integratedOnly = path.join(root, 'integrated-only');

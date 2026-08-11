@@ -66,10 +66,16 @@ function applyLinuxMainGpuEnvironment(gpu, env = process.env) {
     env.__NV_PRIME_RENDER_OFFLOAD = '1';
     env.__GLX_VENDOR_LIBRARY_NAME = 'nvidia';
     env.__VK_LAYER_NV_optimus = 'NVIDIA_only';
+    // Chromium video acceleration uses VA-API on Linux. Pin libva to NVIDIA's
+    // NVDEC bridge so decoding cannot drift to an integrated render node.
+    env.LIBVA_DRIVER_NAME = 'nvidia';
+    env.NVD_BACKEND = 'direct';
   } else {
     delete env.__NV_PRIME_RENDER_OFFLOAD;
     delete env.__GLX_VENDOR_LIBRARY_NAME;
     delete env.__VK_LAYER_NV_optimus;
+    delete env.LIBVA_DRIVER_NAME;
+    delete env.NVD_BACKEND;
   }
   return true;
 }

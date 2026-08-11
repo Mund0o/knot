@@ -1,5 +1,6 @@
 const { app, BrowserWindow } = require('electron');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('../linux-gpu');
+const { applyGpuAccelerationPolicy, acceleratedFeature } = require('../gpu-acceleration');
 
 const selected = linuxMainGpu();
 if (process.platform !== 'linux' || !selected) {
@@ -7,12 +8,7 @@ if (process.platform !== 'linux' || !selected) {
   app.exit(0);
 } else {
   applyLinuxMainGpuEnvironment(selected);
-  app.commandLine.appendSwitch('hardware-video-device-path', selected.renderNode);
-  app.commandLine.appendSwitch('force-high-performance-gpu');
-  if (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) {
-    app.commandLine.appendSwitch('disable-features', 'Vulkan');
-    app.commandLine.appendSwitch('use-vulkan', 'disabled');
-  }
+  applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: selected, wayland: !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) });
 }
 
 function fail(message, detail) {
@@ -35,6 +31,11 @@ app.whenReady().then(async () => {
     if (active.vendorId !== expectedVendor) {
       return fail(`expected vendor ${selected.vendor}, got 0x${active.vendorId.toString(16)}`, JSON.stringify(info.gpuDevice));
     }
+    const status = app.getGPUFeatureStatus();
+    for (const feature of ['2d_canvas', 'gpu_compositing', 'rasterization', 'video_decode', 'video_encode', 'webgl', 'webgpu']) {
+      if (!acceleratedFeature(status[feature])) return fail(`${feature} is not GPU accelerated`, JSON.stringify(status));
+    }
+    console.log('[gpu features]', JSON.stringify(status));
     console.log(`PASS Chromium active GPU is discrete vendor ${selected.vendor} at ${selected.pciAddress}`);
     app.exit(0);
   } catch (error) {

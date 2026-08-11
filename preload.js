@@ -59,8 +59,6 @@ contextBridge.exposeInMainWorld('pairEnv', {
   useSystemPicker: process.platform === 'linux',
   isApp: true,
   iceServers: turnServersFromEnvironment(),
-  toggleFullscreen: () => ipcRenderer.send('pair:toggleFullscreen'),
-  onFullscreenChange: cb => { if (typeof cb !== 'function') return () => {}; const listener = (_event, value) => cb(!!value); ipcRenderer.on('pair:fullscreenChanged', listener); return () => ipcRenderer.removeListener('pair:fullscreenChanged', listener); },
   getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),
   getSources: () => ipcRenderer.invoke('pair:getSources'),
   setPendingSource: id => ipcRenderer.invoke('pair:setPendingSource', id),
@@ -110,7 +108,7 @@ contextBridge.exposeInMainWorld('pairCapture', {
   }
 });
 
-// Pull-based NVENC bridge: renderer and data-channel backpressure naturally
+// Pull-based GPU AV1 bridge: renderer and data-channel backpressure naturally
 // pause reads instead of allowing encoded video to accumulate without bounds.
 contextBridge.exposeInMainWorld('pairNativeScreen', {
   info: () => ipcRenderer.invoke('pair:nativeScreenInfo'),

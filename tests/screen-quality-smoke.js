@@ -1,5 +1,6 @@
 const { app, BrowserWindow } = require('electron');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('../linux-gpu');
+const { applyGpuAccelerationPolicy } = require('../gpu-acceleration');
 
 const TEST_TIMEOUT_MS = 30000;
 
@@ -10,15 +11,9 @@ function fail(message, details) {
   app.exit(1);
 }
 
-app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL');
 const mainGpu = linuxMainGpu();
 if (applyLinuxMainGpuEnvironment(mainGpu)) {
-  app.commandLine.appendSwitch('hardware-video-device-path', mainGpu.renderNode);
-  app.commandLine.appendSwitch('force-high-performance-gpu');
-}
-if (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) {
-  app.commandLine.appendSwitch('disable-features', 'Vulkan');
-  app.commandLine.appendSwitch('use-vulkan', 'disabled');
+  applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: mainGpu, wayland: !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) });
 }
 
 app.whenReady().then(async () => {
