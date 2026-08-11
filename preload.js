@@ -109,3 +109,18 @@ contextBridge.exposeInMainWorld('pairCapture', {
     return () => ipcRenderer.removeListener('pair:captureFormat', listener);
   }
 });
+
+// Pull-based NVENC bridge: renderer and data-channel backpressure naturally
+// pause reads instead of allowing encoded video to accumulate without bounds.
+contextBridge.exposeInMainWorld('pairNativeScreen', {
+  info: () => ipcRenderer.invoke('pair:nativeScreenInfo'),
+  start: options => ipcRenderer.invoke('pair:startNativeScreen', options),
+  read: id => ipcRenderer.invoke('pair:readNativeScreen', id),
+  stop: id => ipcRenderer.send('pair:stopNativeScreen', id),
+  onError: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, message) => cb(String(message || 'Native screen capture failed'));
+    ipcRenderer.on('pair:nativeScreenError', listener);
+    return () => ipcRenderer.removeListener('pair:nativeScreenError', listener);
+  }
+});

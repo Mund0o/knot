@@ -21,27 +21,57 @@ function linuxGpuCandidates(sysfsRoot = '/sys/class/drm', devRoot = '/dev/dri') 
     const pciAddress = readText(path.join(devicePath, 'uevent')).match(/^pci_slot_name=(.+)$/m)?.[1] || '';
     const bootVga = readText(path.join(devicePath, 'boot_vga')) === '1';
     const pcieLinkWidth = Number.parseInt(readText(path.join(devicePath, 'current_link_width')), 10) || 0;
+    const connected = names.some(name =>
+      name.startsWith(`${card}-`) && readText(path.join(sysfsRoot, name, 'status')) === 'connected'
+    );
     // Intel/AMD integrated graphics has no external PCIe link. This also keeps
     // Intel Arc and AMD discrete cards eligible without maintaining device-ID
     // lists that become stale as new GPUs ship.
     const integratedVendor = vendor === '0x8086' || vendor === '0x1002';
     const integrated = integratedVendor && pcieLinkWidth === 0;
-    return [{ card, vendor, pciAddress, bootVga, integrated, pcieLinkWidth, renderNode: path.join(devRoot, render) }];
+    return [{ card, vendor, pciAddress, bootVga, connected, integrated, pcieLinkWidth, renderNode: path.join(devRoot, render) }];
   });
 }
 
 function linuxMainGpu(options = {}) {
   if ((options.platform || process.platform) !== 'linux') return null;
-  const candidates = linuxGpuCandidates(options.sysfsRoot, options.devRoot);
+  const candidates = linuxGpuCandidates(options.sysfsRoot, options.devRoot).filter(candidate => !candidate.integrated);
   if (!candidates.length) return null;
-  // Never select an integrated device while a discrete render node exists.
-  // boot_vga then identifies the user's main/display card when there are
-  // multiple discrete GPUs.
+  // Integrated devices are deliberately ineligible. boot_vga identifies the
+  // user's primary display card; a connected output is the next-best signal
+  // on systems whose firmware does not expose boot_vga.
   return candidates.sort((a, b) =>
-    Number(a.integrated) - Number(b.integrated) ||
     Number(b.bootVga) - Number(a.bootVga) ||
+    Number(b.connected) - Number(a.connected) ||
+    b.pcieLinkWidth - a.pcieLinkWidth ||
     a.renderNode.localeCompare(b.renderNode)
   )[0];
 }
 
-module.exports = { linuxGpuCandidates, linuxMainGpu };
+function primePciSelector(pciAddress) {
+  if (!/^\d{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$/i.test(pciAddress || '')) return '';
+  return `pci-${pciAddress.replaceAll(':', '_').replace('.', '_')}!`;
+}
+
+function applyLinuxMainGpuEnvironment(gpu, env = process.env) {
+  if (!gpu || gpu.integrated) return false;
+  const selector = primePciSelector(gpu.pciAddress);
+  if (selector) env.DRI_PRIME = selector;
+  env.KNOT_PRIMARY_GPU_VENDOR = gpu.vendor || '';
+  env.KNOT_PRIMARY_GPU_RENDER_NODE = gpu.renderNode || '';
+  env.KNOT_PRIMARY_GPU_PCI = gpu.pciAddress || '';
+  if (gpu.vendor === '0x10de') {
+    // NVIDIA's GLVND/PRIME controls cover EGL/GLX and hide non-NVIDIA Vulkan
+    // devices. DRI_PRIME supplies the exact PCI device for Mesa consumers.
+    env.__NV_PRIME_RENDER_OFFLOAD = '1';
+    env.__GLX_VENDOR_LIBRARY_NAME = 'nvidia';
+    env.__VK_LAYER_NV_optimus = 'NVIDIA_only';
+  } else {
+    delete env.__NV_PRIME_RENDER_OFFLOAD;
+    delete env.__GLX_VENDOR_LIBRARY_NAME;
+    delete env.__VK_LAYER_NV_optimus;
+  }
+  return true;
+}
+
+module.exports = { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment };

@@ -1,10 +1,10 @@
 {
-  "version": "1.1.46",
-  "notes": "Persistent encrypted DMs, background voice calls, responsive speaking rings, focused multi-stream screen sharing, fullscreen cleanup, and five new themes.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.46/pair-p2p-1.1.46.tar.gz",
-  "linuxSha256": "3e42869fa1ffa088cb7ac1abb4db38ff1932df43927ced58af5f84a9810aa927",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.46/Knot-1.1.46.AppImage",
-  "linuxAppImageSha256": "97578f71b9b661286b47122d9da8995e147b83a34db553ead5bbc98001ad2ac1",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.46/Knot.Setup.1.1.46.exe",
-  "winSha256": "b5d8e2d5b321b191bf74ca3e4ed088dce0810e8ced6419b71e6bcb3464c2aa46"
+  "version": "1.1.47",
+  "notes": "Discrete-only NVIDIA GPU routing, native NVENC AV1 4K60 sharing, lower-latency screen audio, stable DM/server stream playback, and Discord-style Focus View improvements.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.47/pair-p2p-1.1.47.tar.gz",
+  "linuxSha256": "28633e2a69265754245098c43e35f8ec5d40cd54bc2910312d73e006e029dd01",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.47/Knot-1.1.47.AppImage",
+  "linuxAppImageSha256": "8095f018f0e8cb6c775fbec0c8410f55c7fd4b794ea9331fb0a40a5334637d8f",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.47/Knot.Setup.1.1.47.exe",
+  "winSha256": "be50d10a70479d76f2d7f9921cfc169c540034f8a6e21d03a9f93676b1344d7a"
 }

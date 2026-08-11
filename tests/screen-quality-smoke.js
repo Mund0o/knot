@@ -1,5 +1,5 @@
 const { app, BrowserWindow } = require('electron');
-const { linuxMainGpu } = require('../linux-gpu');
+const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('../linux-gpu');
 
 const TEST_TIMEOUT_MS = 30000;
 
@@ -12,8 +12,14 @@ function fail(message, details) {
 
 app.commandLine.appendSwitch('enable-features', 'AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxZeroCopyGL');
 const mainGpu = linuxMainGpu();
-if (mainGpu?.renderNode) app.commandLine.appendSwitch('hardware-video-device-path', mainGpu.renderNode);
-app.commandLine.appendSwitch('force-high-performance-gpu');
+if (applyLinuxMainGpuEnvironment(mainGpu)) {
+  app.commandLine.appendSwitch('hardware-video-device-path', mainGpu.renderNode);
+  app.commandLine.appendSwitch('force-high-performance-gpu');
+}
+if (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) {
+  app.commandLine.appendSwitch('disable-features', 'Vulkan');
+  app.commandLine.appendSwitch('use-vulkan', 'disabled');
+}
 
 app.whenReady().then(async () => {
   const codecArg = process.argv.find(value => /^--codec=(?:H264|VP9|VP8|AV1)$/i.test(value));
@@ -23,7 +29,8 @@ app.whenReady().then(async () => {
   const width = stress4k60 ? 3840 : 1280;
   const height = stress4k60 ? 2160 : 720;
   const requestedFps = stress4k60 ? 60 : 30;
-  const maxBitrate = stress4k60 ? 56000000 : 7000000;
+  const bitrateOverride = Number.parseInt(process.env.PAIR_TEST_BITRATE || '', 10);
+  const maxBitrate = Number.isFinite(bitrateOverride) && bitrateOverride >= 1000000 ? bitrateOverride : stress4k60 ? 56000000 : 7000000;
   const window = new BrowserWindow({
     show: false,
     webPreferences: {
@@ -54,9 +61,9 @@ app.whenReady().then(async () => {
       senderPc.onicecandidate=e=>{if(e.candidate)receiverPc.addIceCandidate(e.candidate).catch(()=>{})};receiverPc.onicecandidate=e=>{if(e.candidate)senderPc.addIceCandidate(e.candidate).catch(()=>{})};
       const sender=senderPc.addTrack(track,stream),transceiver=senderPc.getTransceivers().find(t=>t.sender===sender),caps=RTCRtpSender.getCapabilities('video');
       const preferred=[],seen=new Set(),testCodec=${JSON.stringify(requestedCodec)};for(const name of [testCodec,'H264','VP9','VP8','AV1'])for(const codec of caps?.codecs||[]){if(codec.mimeType?.toUpperCase()===('VIDEO/'+name)&&!seen.has(codec)){seen.add(codec);preferred.push(codec)}}for(const codec of caps?.codecs||[]){if(!seen.has(codec)&&/^video\\/(?:rtx|red|ulpfec|flexfec)/i.test(codec.mimeType||'')){seen.add(codec);preferred.push(codec)}}if(preferred.length)transceiver.setCodecPreferences(preferred);
-      const offer=await senderPc.createOffer();await senderPc.setLocalDescription(offer);await receiverPc.setRemoteDescription(offer);const answer=await receiverPc.createAnswer();await receiverPc.setLocalDescription(answer);await senderPc.setRemoteDescription(answer);
+      const offer=await senderPc.createOffer();await senderPc.setLocalDescription(offer);await receiverPc.setRemoteDescription(senderPc.localDescription);const answer=await receiverPc.createAnswer();await receiverPc.setLocalDescription(answer);await senderPc.setRemoteDescription(receiverPc.localDescription);
       const connected=Date.now()+5000;while(senderPc.connectionState!=='connected'&&Date.now()<connected)await wait(25);if(senderPc.connectionState!=='connected')throw new Error('local peer connection did not connect');
-      let parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];Object.assign(parameters.encodings[0],{maxBitrate,maxFramerate:requestedFps,scaleResolutionDownBy:1});parameters.degradationPreference='balanced';await sender.setParameters(parameters);
+      let parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];Object.assign(parameters.encodings[0],{maxBitrate,maxFramerate:requestedFps,scaleResolutionDownBy:1,priority:'high',networkPriority:'high'});parameters.degradationPreference='maintain-resolution';await sender.setParameters(parameters);
       await wait(4000);let first;for(const report of (await sender.getStats()).values())if(report.type==='outbound-rtp'&&(report.kind==='video'||report.mediaType==='video'))first=report;
       await wait(5000);const senderStats=await sender.getStats(),receiverStats=await receiverPc.getStats();let out,inbound,codec,source;for(const report of senderStats.values()){if(report.type==='outbound-rtp'&&(report.kind==='video'||report.mediaType==='video'))out=report;if(report.type==='media-source'&&(report.kind==='video'||report.mediaType==='video'))source=report}if(out)codec=senderStats.get(out.codecId);for(const report of receiverStats.values())if(report.type==='inbound-rtp'&&(report.kind==='video'||report.mediaType==='video'))inbound=report;
       const appliedParameters=sender.getParameters();clearInterval(timer);track.stop();senderPc.close();receiverPc.close();

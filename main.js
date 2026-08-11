@@ -1,7 +1,8 @@
 const path = require('path');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
-const { linuxMainGpu } = require('./linux-gpu');
+const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
+const { NativeScreenService } = require('./native-screen');
 const { execFileSync, spawn } = require('child_process');
 const APP_ICON = path.join(__dirname, 'build', 'icon.png');
 
@@ -12,6 +13,8 @@ let pendingSourceId = null;
 let pendingSources = [];
 let activeShareSourceId = null;
 let linuxShareAudio = null;
+let nativeScreenService = null;
+let selectedPrimaryGpu = null;
 function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
 function pipewireOk(command, args) { try { execFileSync(command, args, { stdio: 'ignore' }); return true; } catch { return false; } }
 function pairProcessTree() {
@@ -180,6 +183,13 @@ ipcMain.handle('pair:setPendingSource', (event, id) => {
 });
 ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio(event.sender) : null);
 ipcMain.on('pair:stopLinuxShareAudio', event => { if (isPairRenderer(event)) stopLinuxShareAudio(); });
+ipcMain.handle('pair:nativeScreenInfo', event => isPairRenderer(event) ? nativeScreenService?.info() || { supported: false } : { supported: false });
+ipcMain.handle('pair:startNativeScreen', (event, options) => {
+  if (!isPairRenderer(event) || !options || typeof options !== 'object') return null;
+  try { return nativeScreenService?.start(options) || { error: 'Native screen capture is unavailable' }; } catch (error) { return { error: error?.message || String(error) }; }
+});
+ipcMain.handle('pair:readNativeScreen', (event, id) => isPairRenderer(event) && Number.isInteger(id) ? nativeScreenService?.read(id) || { active: false } : { active: false });
+ipcMain.on('pair:stopNativeScreen', (event, id) => { if (isPairRenderer(event)) nativeScreenService?.stop(Number.isInteger(id) ? id : 0); });
 
 const fs = require('fs');
 // Electron only accepts this before its ready event. Read the tightly scoped
@@ -195,16 +205,31 @@ try {
 // render-node override can turn a valid PipeWire target black. The media-device
 // path is narrower: it keeps WebRTC encode/decode on the selected discrete GPU.
 if (process.platform === 'linux' && hardwareAccelerationEnabled) {
-  const primaryGpu = linuxMainGpu();
-  process.env.KNOT_PRIMARY_GPU_VENDOR = primaryGpu?.vendor || '';
-  if (primaryGpu?.renderNode) app.commandLine.appendSwitch('hardware-video-device-path', primaryGpu.renderNode);
-  app.commandLine.appendSwitch('force-high-performance-gpu');
-  console.log('[gpu] main GPU selected:', primaryGpu?.renderNode || 'system default', primaryGpu?.vendor || 'unknown vendor', primaryGpu?.pciAddress || 'unknown PCI address', primaryGpu?.integrated ? '(integrated fallback)' : '(integrated GPUs excluded)');
-  app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer,AcceleratedVideoEncoder');
+  const primaryGpu = linuxMainGpu();selectedPrimaryGpu=primaryGpu;
+  if (applyLinuxMainGpuEnvironment(primaryGpu)) {
+    app.commandLine.appendSwitch('hardware-video-device-path', primaryGpu.renderNode);
+    app.commandLine.appendSwitch('force-high-performance-gpu');
+    console.log('[gpu] discrete-only GPU selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress);
+    app.commandLine.appendSwitch('enable-features', 'WebRTCPipeWireCapturer,AcceleratedVideoEncoder');
+  } else {
+    // Never let an integrated GPU become Knot's implicit fallback. Chromium's
+    // software renderer remains available when a machine has no discrete card.
+    app.disableHardwareAcceleration();
+    process.env.KNOT_PRIMARY_GPU_VENDOR = '';
+    console.warn('[gpu] no discrete render node found; integrated GPU rejected, using software rendering');
+  }
   // Electron/Chromium currently rejects Vulkan surfaces under native Wayland;
   // falling back to GL avoids a captured DMABUF presenting as a black frame.
-  if (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) app.commandLine.appendSwitch('disable-features', 'Vulkan');
+  if (process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) {
+    app.commandLine.appendSwitch('disable-features', 'Vulkan');
+    app.commandLine.appendSwitch('use-vulkan', 'disabled');
+  }
 }
+nativeScreenService = new NativeScreenService({
+  primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
+  primaryGpuCard: selectedPrimaryGpu?.card || '',
+  onError: message => mainWin?.webContents.send('pair:nativeScreenError', String(message || 'Native screen capture failed'))
+});
 // Knot is serverless by default. `server.js` remains available through
 // `npm run signal` for people who deliberately operate their own signaling
 // service, but the desktop app must not silently start a localhost server.
@@ -457,6 +482,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', async () => {
+  nativeScreenService?.stop();
   stopLinuxShareAudio();
   await closeStream();
   stopNativeCapture();

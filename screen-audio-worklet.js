@@ -11,9 +11,9 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
       if (!frames) return;
       this.queue.push(samples);
       this.frames += frames;
-      // Bound latency at two seconds. If IPC or rendering stalls, discard the
-      // oldest audio instead of replaying it late and making the call stutter.
-      while (this.frames > 96000 && this.queue.length) {
+      // Keep 40–160 ms of stereo audio. If IPC or rendering stalls, trim back
+      // to about 80 ms instead of replaying seconds of stale desktop sound.
+      while (this.frames > 7680 && this.queue.length && this.frames > 3840) {
         const oldest = this.queue.shift();
         this.frames -= Math.floor(oldest.length / 2) - this.offset;
         this.offset = 0;
@@ -28,7 +28,7 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     left.fill(0);
     right.fill(0);
     if (!this.started) {
-      if (this.frames < 2048) return true;
+      if (this.frames < 1920) return true;
       this.started = true;
     }
     for (let frame = 0; frame < left.length; frame++) {

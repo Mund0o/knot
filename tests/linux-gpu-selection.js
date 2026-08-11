@@ -2,14 +2,14 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { linuxGpuCandidates, linuxMainGpu } = require('../linux-gpu');
+const { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment } = require('../linux-gpu');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'knot-gpu-test-'));
 const drm = path.join(root, 'sys', 'class', 'drm');
 const devices = path.join(root, 'devices');
 const dev = path.join(root, 'dev', 'dri');
 
-function gpu({ card, render, device, vendor, pciAddress, bootVga = false, pcieLinkWidth = 0 }) {
+function gpu({ card, render, device, vendor, pciAddress, bootVga = false, connected = false, pcieLinkWidth = 0 }) {
   const target = path.join(devices, device);
   fs.mkdirSync(target, { recursive: true });
   fs.writeFileSync(path.join(target, 'vendor'), vendor);
@@ -21,11 +21,16 @@ function gpu({ card, render, device, vendor, pciAddress, bootVga = false, pcieLi
     fs.mkdirSync(drmNode, { recursive: true });
     fs.symlinkSync(target, path.join(drmNode, 'device'), 'dir');
   }
+  if (connected) {
+    const connector = path.join(drm, `${card}-DP-1`);
+    fs.mkdirSync(connector, { recursive: true });
+    fs.writeFileSync(path.join(connector, 'status'), 'connected\n');
+  }
 }
 
 try {
   gpu({ card: 'card0', render: 'renderD129', device: 'intel', vendor: '0x8086', pciAddress: '0000:00:02.0' });
-  gpu({ card: 'card1', render: 'renderD128', device: 'nvidia', vendor: '0x10de', pciAddress: '0000:01:00.0', bootVga: true, pcieLinkWidth: 16 });
+  gpu({ card: 'card1', render: 'renderD128', device: 'nvidia', vendor: '0x10de', pciAddress: '0000:01:00.0', bootVga: true, connected: true, pcieLinkWidth: 16 });
   gpu({ card: 'card2', render: 'renderD130', device: 'amd-apu', vendor: '0x1002', pciAddress: '0000:05:00.0' });
   gpu({ card: 'card3', render: 'renderD131', device: 'intel-arc', vendor: '0x8086', pciAddress: '0000:06:00.0', pcieLinkWidth: 8 });
   const candidates = linuxGpuCandidates(drm, dev);
@@ -33,8 +38,28 @@ try {
   assert.strictEqual(candidates.find(item => item.pciAddress === '0000:00:02.0').integrated, true);
   assert.strictEqual(candidates.find(item => item.vendor === '0x1002').integrated, true);
   assert.strictEqual(candidates.find(item => item.pciAddress === '0000:06:00.0').integrated, false);
+  assert.strictEqual(candidates.find(item => item.vendor === '0x10de').connected, true);
   assert.deepStrictEqual(linuxMainGpu({ platform: 'linux', sysfsRoot: drm, devRoot: dev }), candidates.find(item => item.vendor === '0x10de'));
   assert.strictEqual(linuxMainGpu({ platform: 'win32', sysfsRoot: drm, devRoot: dev }), null);
+  assert.strictEqual(primePciSelector('0000:01:00.0'), 'pci-0000_01_00_0!');
+  const env = {};
+  assert.strictEqual(applyLinuxMainGpuEnvironment(candidates.find(item => item.vendor === '0x10de'), env), true);
+  assert.deepStrictEqual(env, {
+    DRI_PRIME: 'pci-0000_01_00_0!',
+    KNOT_PRIMARY_GPU_VENDOR: '0x10de',
+    KNOT_PRIMARY_GPU_RENDER_NODE: path.join(dev, 'renderD128'),
+    KNOT_PRIMARY_GPU_PCI: '0000:01:00.0',
+    __NV_PRIME_RENDER_OFFLOAD: '1',
+    __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
+    __VK_LAYER_NV_optimus: 'NVIDIA_only'
+  });
+
+  const integratedOnly = path.join(root, 'integrated-only');
+  const integratedRenderNode = path.join(integratedOnly, 'renderD129');
+  fs.mkdirSync(integratedRenderNode, { recursive: true });
+  fs.symlinkSync(path.join(devices, 'intel'), path.join(integratedRenderNode, 'device'), 'dir');
+  assert.strictEqual(linuxMainGpu({ platform: 'linux', sysfsRoot: integratedOnly, devRoot: dev }), null);
+  assert.strictEqual(applyLinuxMainGpuEnvironment(candidates.find(item => item.integrated), {}), false);
   console.log('PASS Linux main GPU selection excludes integrated graphics');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
