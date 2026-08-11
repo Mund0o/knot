@@ -9,6 +9,7 @@ Direct-message transports connect in the background while friends are online,
 so opening another DM or server does not end the current voice call. Screen
 shares appear beside their owners and open into a single focused viewer; use a
 stream's context menu to stop watching without making the stream undiscoverable.
+Fullscreen expands the selected share stage, not the entire Knot interface.
 
 ## Run as a PC app
 
@@ -60,13 +61,12 @@ SHA-256 checksum, installs it, and restarts automatically.
 Knot sends screen video, computer sound, and voice as separate WebRTC tracks.
 Screen capture defaults to 1080p60, prefers broadly hardware-accelerated H.264,
 retains retransmission/FEC codecs, and keeps every video target below a 60 Mbps
-user ceiling. Native AV1 4K60 targets 40 Mbps so voice and control traffic keep
-headroom instead of letting reliable video data build latency. WebRTC
-can adapt below the ceiling, and repeated encoder overload first falls back to
-30 fps and then to a reduced render scale so sharing cannot make the whole app
-unresponsive. The selected AV1 mode is negotiated normally and only falls back
-to H.264 after the receiver confirms that AV1 packets arrive without decoded
-frames.
+user ceiling. Native AV1 4K60 targets 24 Mbps so voice and control traffic keep
+headroom. Its low-priority, partially reliable transport abandons stale video
+instead of building a reliable queue, then resumes at a fresh AV1 keyframe. Mic
+audio remains high priority. Persistent congestion, packet-loss recovery failure,
+or an incompatible AV1 decoder switches the share to H.264 instead of freezing or
+leaving a black screen.
 
 With **Hardware acceleration** enabled, Knot requests the high-performance GPU
 for compositing, image and canvas rasterization, zero-copy tile presentation,

@@ -3,8 +3,11 @@ const { execFileSync, spawn } = require('child_process');
 
 const FLATPAK_APP = 'com.dec05eba.gpu_screen_recorder';
 const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
-const MAX_QUEUE_BYTES = 16 * 1024 * 1024;
-const RESUME_QUEUE_BYTES = 6 * 1024 * 1024;
+// Keep at most about one second of 4K AV1 between the recorder and renderer.
+// A larger queue turns a short renderer/network stall into seconds of stale
+// video and lets capture memory/CPU pressure spill into the real-time mic path.
+const MAX_QUEUE_BYTES = 4 * 1024 * 1024;
+const RESUME_QUEUE_BYTES = 1 * 1024 * 1024;
 
 function gpuScreenRecorderCommand() {
   for (const file of ['/usr/bin/gpu-screen-recorder', '/usr/local/bin/gpu-screen-recorder']) {
@@ -59,7 +62,9 @@ function spawnRecorder(runner, args) {
   // gpu-screen-recorder reopens /dev/stdout. Node implements child stdout with
   // a socketpair, which cannot be reopened on Linux (ENXIO), so place a real
   // kernel pipe between the recorder and a byte-for-byte bridge to Electron.
-  return spawn('/bin/bash', ['-o', 'pipefail', '-c', '"$@" | /bin/cat', 'knot-native-screen', runner.command, ...args], {
+  // Encoding is still fully GPU-backed, but the recorder/muxer's small amount
+  // of CPU work must yield to Chromium's real-time audio threads under load.
+  return spawn('/bin/bash', ['-o', 'pipefail', '-c', '/usr/bin/nice -n 5 -- "$@" | /bin/cat', 'knot-native-screen', runner.command, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true
   });

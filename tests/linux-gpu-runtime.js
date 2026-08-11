@@ -3,12 +3,13 @@ const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('../linux-gpu');
 const { applyGpuAccelerationPolicy, acceleratedFeature } = require('../gpu-acceleration');
 
 const selected = linuxMainGpu();
+const wayland = !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY);
 if (process.platform !== 'linux' || !selected) {
   console.log('SKIP Linux discrete GPU runtime check (no discrete render node)');
   app.exit(0);
 } else {
   applyLinuxMainGpuEnvironment(selected);
-  applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: selected, wayland: !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY) });
+  applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: selected, wayland });
 }
 
 function fail(message, detail) {
@@ -34,6 +35,9 @@ app.whenReady().then(async () => {
     const status = app.getGPUFeatureStatus();
     for (const feature of ['2d_canvas', 'gpu_compositing', 'rasterization', 'video_decode', 'video_encode', 'webgl', 'webgpu']) {
       if (!acceleratedFeature(status[feature])) return fail(`${feature} is not GPU accelerated`, JSON.stringify(status));
+    }
+    if (wayland && (status.vulkan !== 'disabled_off' || status.webgpu_on_vk_via_gl_interop !== 'disabled_off')) {
+      return fail('Wayland Vulkan interop is active and can black-screen DMA-BUF video', JSON.stringify(status));
     }
     console.log('[gpu features]', JSON.stringify(status));
     console.log(`PASS Chromium active GPU is discrete vendor ${selected.vendor} at ${selected.pciAddress}`);

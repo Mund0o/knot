@@ -409,6 +409,10 @@ function createWindow() {
   // replace the versioned native title bar text.
   mainWin.on('page-title-updated', event => { event.preventDefault(); mainWin?.setTitle(windowTitle); });
   mainWin.webContents.on('did-finish-load', () => mainWin?.setTitle(windowTitle));
+  mainWin.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[runtime] renderer process gone:', details?.reason || 'unknown', details?.exitCode ?? '');
+  });
+  mainWin.webContents.on('unresponsive', () => console.error('[runtime] renderer became unresponsive'));
   mainWin.setMenuBarVisibility(false);
 
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
@@ -421,6 +425,11 @@ function createWindow() {
   mainWin.webContents.on('will-navigate', event => event.preventDefault());
   mainWin.loadFile(path.join(__dirname, 'index.html'));
 }
+
+app.on('child-process-gone', (_event, details) => {
+  const type=String(details?.type||'');console.error('[runtime] child process gone:', type||'unknown', details?.reason||'unknown', details?.exitCode??'');
+  if(type.toLowerCase()==='gpu'&&mainWin&&!mainWin.isDestroyed())try{mainWin.webContents.send('pair:gpuProcessGone',{reason:String(details?.reason||'unknown'),exitCode:Number(details?.exitCode)||0})}catch{}
+});
 
 app.whenReady().then(() => {
   // Keep Knot itself outside the temporary PipeWire share mix.

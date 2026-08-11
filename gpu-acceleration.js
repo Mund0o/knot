@@ -46,6 +46,12 @@ function gpuAccelerationPolicy({ platform = process.platform, gpu = null, waylan
     // accelerated path here rather than a CPU fallback.
     if (wayland) {
       disableFeatures.push('Vulkan');
+      // Recent Chromium builds initialize native Vulkan for WebGPU-on-Vulkan
+      // interop even when the compositor's Vulkan feature is disabled. Wayland
+      // cannot present that path reliably on either NVIDIA or AMD. Selecting
+      // Dawn's accelerated OpenGL ES adapter disables the interop feature while
+      // keeping WebGPU, raster, canvas, WebGL, and video work on the main GPU.
+      switches.set('use-webgpu-adapter', 'opengles');
     }
   }
 

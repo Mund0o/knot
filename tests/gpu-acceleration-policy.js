@@ -8,6 +8,7 @@ for (const name of ['force-high-performance-gpu', 'enable-gpu-rasterization', 'e
   assert(linux.switches.has(name), `missing ${name}`);
 }
 assert.strictEqual(linux.switches.get('hardware-video-device-path'), nvidia.renderNode);
+assert.strictEqual(linux.switches.get('use-webgpu-adapter'), 'opengles');
 for (const name of ['CanvasOopRasterization', 'AcceleratedVideoDecoder', 'AcceleratedVideoEncoder', 'AcceleratedVideoDecodeLinuxGL', 'AcceleratedVideoDecodeLinuxZeroCopyGL', 'VaapiOnNvidiaGPUs', 'WebRTCPipeWireCapturer']) {
   assert(linux.enableFeatures.includes(name), `missing ${name}`);
 }
@@ -16,6 +17,7 @@ const amd = { vendor: '0x1002', renderNode: '/dev/dri/renderD130', integrated: f
 const amdLinux = gpuAccelerationPolicy({ platform: 'linux', gpu: amd, wayland: true });
 assert(amdLinux);
 assert.strictEqual(amdLinux.switches.get('hardware-video-device-path'), amd.renderNode);
+assert.strictEqual(amdLinux.switches.get('use-webgpu-adapter'), 'opengles');
 assert(!amdLinux.enableFeatures.includes('VaapiOnNvidiaGPUs'));
 for (const name of ['AcceleratedVideoDecoder', 'AcceleratedVideoEncoder', 'AcceleratedVideoDecodeLinuxGL', 'AcceleratedVideoDecodeLinuxZeroCopyGL']) {
   assert(amdLinux.enableFeatures.includes(name), `AMD policy missing ${name}`);
