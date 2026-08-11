@@ -4,7 +4,7 @@ const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
-const { execFileSync, spawn } = require('child_process');
+const { execFile, execFileSync, spawn } = require('child_process');
 const APP_ICON = path.join(__dirname, 'build', 'icon.png');
 
 app.setName('Knot');
@@ -18,16 +18,24 @@ let nativeScreenService = null;
 let selectedPrimaryGpu = null;
 function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
 function pipewireOk(command, args) { try { execFileSync(command, args, { stdio: 'ignore' }); return true; } catch { return false; } }
-function pairProcessTree() {
-  const rows = pipewire('ps', ['-eo', 'pid=,ppid=']).split(/\n+/).map(line => line.trim().split(/\s+/).map(Number)).filter(row => row.length === 2 && row.every(Number.isFinite));
+function pipewireAsync(command, args) { return new Promise(resolve => execFile(command, args, { encoding: 'utf8', timeout: 2500, maxBuffer: 4*1024*1024 }, (error, stdout) => resolve(error ? '' : String(stdout || '').trim()))); }
+function pipewireOkAsync(command, args) { return new Promise(resolve => execFile(command, args, { timeout: 2500 }, error => resolve(!error))); }
+function pairProcessTree(output) {
+  const rows = String(output || '').split(/\n+/).map(line => line.trim().split(/\s+/).map(Number)).filter(row => row.length === 2 && row.every(Number.isFinite));
   const children = new Map(); for (const [pid, ppid] of rows) { const list = children.get(ppid) || []; list.push(pid); children.set(ppid, list); }
   const ids = new Set([process.pid]), todo = [process.pid]; while (todo.length) for (const child of children.get(todo.pop()) || []) if (!ids.has(child)) { ids.add(child); todo.push(child); }
   return ids;
 }
-function routeLinuxDesktopAudio(sink, moved) {
-  const pairPids = pairProcessTree(), sinkNames = new Map(pipewire('pactl', ['list', 'short', 'sinks']).split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2).map(parts => [parts[0], parts[1]]));
-  const details = pipewire('pactl', ['list', 'sink-inputs']);
-  for (const parts of pipewire('pactl', ['list', 'short', 'sink-inputs']).split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2)) {
+async function routeLinuxDesktopAudio(state) {
+  const [processes, sinks, details, inputs] = await Promise.all([
+    pipewireAsync('ps', ['-eo', 'pid=,ppid=']),
+    pipewireAsync('pactl', ['list', 'short', 'sinks']),
+    pipewireAsync('pactl', ['list', 'sink-inputs']),
+    pipewireAsync('pactl', ['list', 'short', 'sink-inputs'])
+  ]);
+  if (linuxShareAudio !== state) return;
+  const pairPids = pairProcessTree(processes), sinkNames = new Map(sinks.split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2).map(parts => [parts[0], parts[1]]));
+  for (const parts of inputs.split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2)) {
     const [id, currentSink] = parts, currentName = sinkNames.get(currentSink), block = details.match(new RegExp(`Sink Input #${id}\\n([\\s\\S]*?)(?=\\nSink Input #|$)`))?.[1] || '';
     const pid = Number(block.match(/application\.process\.id\s*=\s*"(\d+)"/)?.[1]);
     const appName = block.match(/application\.name\s*=\s*"([^"]+)"/)?.[1] || '';
@@ -35,9 +43,24 @@ function routeLinuxDesktopAudio(sink, moved) {
     // Move only attributable desktop application streams. Knot and its helper
     // processes stay on the normal output, so call playback never enters the
     // share monitor. Module streams have no PID and are deliberately untouched.
-    if (!pid || pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || !currentName || currentName === sink) continue;
-    if (pipewireOk('pactl', ['move-sink-input', id, sink]) && !moved.some(item => item.id === id)) moved.push({ id, sink: currentName });
+    if (!pid || pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || !currentName || currentName === state.routeSink) continue;
+    if (linuxShareAudio !== state) return;
+    const movedOk = await pipewireOkAsync('pactl', ['move-sink-input', id, state.routeSink]);
+    if (linuxShareAudio !== state) { if (movedOk) await pipewireOkAsync('pactl', ['move-sink-input', id, currentName]);return; }
+    if (movedOk && !state.moved.some(item => item.id === id)) state.moved.push({ id, sink: currentName });
   }
+}
+function scheduleLinuxDesktopAudioRoute(state, delay = 80) {
+  if (linuxShareAudio !== state) return;
+  clearTimeout(state.routeTimer);
+  state.routeTimer = setTimeout(async () => {
+    state.routeTimer = null;
+    if (linuxShareAudio !== state) return;
+    if (state.routeRunning) { state.routeAgain = true;return; }
+    state.routeRunning = true;
+    try { do { state.routeAgain = false;await routeLinuxDesktopAudio(state); } while (state.routeAgain && linuxShareAudio === state); }
+    finally { state.routeRunning = false; }
+  }, delay);
 }
 function startLinuxShareAudio(webContents) {
   if (process.platform !== 'linux') return null;
@@ -58,13 +81,13 @@ function startLinuxShareAudio(webContents) {
     return null;
   }
   const moved = [];
-  routeLinuxDesktopAudio(routeSink, moved);
   // Capture the monitor directly instead of asking Chromium to expose it as a
   // microphone. Chromium's Linux device enumeration can omit virtual monitor
   // sources even though PipeWire created them successfully, which used to make
   // a healthy share route appear as "sound unavailable".
   const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const state = { original, sink, routeSink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [] };
+  const state = { original, sink, routeSink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [], routeTimer: null, routeRunning: false, routeAgain: false, pcmChunks: [], pcmBytes: 0 };
+  linuxShareAudio = state;
   const failCaptureRoute = message => {
     if (linuxShareAudio !== state) return;
     if (webContents && !webContents.isDestroyed()) try { webContents.send('pair:linuxShareAudioError', message); } catch {}
@@ -74,10 +97,16 @@ function startLinuxShareAudio(webContents) {
   };
   capture.stdout.on('data', chunk => {
     if (linuxShareAudio !== state || !webContents || webContents.isDestroyed()) return;
-    // Copy the exact Buffer window. Sending `chunk.buffer` directly can include
-    // unrelated bytes from Node's pooled backing allocation.
-    const samples = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength);
-    try { webContents.send('pair:linuxShareAudio', samples); } catch {}
+    state.pcmChunks.push(chunk);state.pcmBytes += chunk.byteLength;
+    // One 20 ms stereo float packet per IPC message matches Opus cadence and
+    // avoids flooding Electron's renderer/main bridge with tiny parec chunks.
+    const packetBytes = 48000*.02*2*4;
+    while (state.pcmBytes >= packetBytes) {
+      const packet = Buffer.allocUnsafe(packetBytes);let offset = 0;
+      while (offset < packetBytes) { const head=state.pcmChunks[0],take=Math.min(head.byteLength,packetBytes-offset);head.copy(packet,offset,0,take);offset+=take;state.pcmBytes-=take;if(take===head.byteLength)state.pcmChunks.shift();else state.pcmChunks[0]=head.subarray(take); }
+      const samples = packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength);
+      try { webContents.send('pair:linuxShareAudio', samples); } catch {}
+    }
   });
   let captureError = '';
   capture.stderr.setEncoding('utf8');
@@ -93,22 +122,23 @@ function startLinuxShareAudio(webContents) {
     state.watch = watch;
     watch.stdout.setEncoding('utf8');
     watch.stdout.on('data', text => {
-      if (linuxShareAudio === state && /sink-input/i.test(text)) routeLinuxDesktopAudio(routeSink, moved);
+      if (linuxShareAudio === state && /sink-input/i.test(text)) scheduleLinuxDesktopAudioRoute(state);
     });
     watch.unref();
   } catch {}
   // Cover streams created between the initial move and subscription becoming
   // active; these are one-shot checks, not a constant polling loop.
-  state.audits = [50, 500].map(delay => setTimeout(() => { if (linuxShareAudio === state) routeLinuxDesktopAudio(routeSink, moved); }, delay));
-  linuxShareAudio = state;
+  state.audits = [0, 500].map(delay => setTimeout(() => scheduleLinuxDesktopAudioRoute(state, delay ? 80 : 0), delay));
   return { label: linuxShareAudio.label, source: linuxShareAudio.source };
 }
 function stopLinuxShareAudio() {
   const state = linuxShareAudio; if (!state) return;
   linuxShareAudio = null;
   if (state.watch) try { state.watch.kill(); } catch {}
+  clearTimeout(state.routeTimer);
   for (const audit of state.audits || []) clearTimeout(audit);
   if (state.capture) try { state.capture.kill(); } catch {}
+  state.pcmChunks.length = 0;state.pcmBytes = 0;
   for (const input of state.moved || []) pipewireOk('pactl', ['move-sink-input', input.id, input.sink]);
   pipewire('pactl', ['unload-module', state.loop]);
   pipewire('pactl', ['unload-module', state.module]);

@@ -1,13 +1,13 @@
 const fs = require('fs');
 const { execFileSync, spawn } = require('child_process');
+const { webmAv1Frames } = require('./native-video');
 
 const FLATPAK_APP = 'com.dec05eba.gpu_screen_recorder';
 const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
-// Keep at most about one second of 4K AV1 between the recorder and renderer.
-// A larger queue turns a short renderer/network stall into seconds of stale
-// video and lets capture memory/CPU pressure spill into the real-time mic path.
-const MAX_QUEUE_BYTES = 4 * 1024 * 1024;
-const RESUME_QUEUE_BYTES = 1 * 1024 * 1024;
+// Always drain the recorder and discard stale GOP data instead of pausing its
+// stdout. Pausing back-pressures the capture/encoder pipeline and makes the
+// desktop and Knot compositor visibly stutter when a WAN peer cannot keep up.
+const MAX_QUEUE_BYTES = 1024 * 1024;
 
 function gpuScreenRecorderCommand() {
   for (const file of ['/usr/bin/gpu-screen-recorder', '/usr/local/bin/gpu-screen-recorder']) {
@@ -41,7 +41,12 @@ function validateNativeScreenInfo(primaryGpuVendor = '', primaryGpuCard = '', in
   const encoder = vendor === 'nvidia' ? 'NVENC' : 'AMD VA-API';
   if (info.vendor !== vendor) return { supported: false, reason: `${encoder} resolved to ${info.vendor || 'an unknown GPU vendor'}, not the selected ${vendor.toUpperCase()} card` };
   if (!info.codecs?.includes('av1')) return { supported: false, reason: `The selected ${vendor.toUpperCase()} card does not expose AV1 encoding` };
-  if (primaryGpuCard && info.cardPath !== `/dev/dri/${primaryGpuCard}`) return { supported: false, reason: `${encoder} resolved to ${info.cardPath || 'an unknown card'}, not the selected ${primaryGpuCard}` };
+  // Flatpak remaps DRM node names inside its device namespace (for example the
+  // host card1 can legitimately appear as card9). Vendor validation plus the
+  // DRI_PRIME environment still pins the discrete GPU; comparing sandbox and
+  // host card names incorrectly disabled native AV1 and sent users through the
+  // much heavier Chromium fallback path.
+  if (source !== 'flatpak' && primaryGpuCard && info.cardPath !== `/dev/dri/${primaryGpuCard}`) return { supported: false, reason: `${encoder} resolved to ${info.cardPath || 'an unknown card'}, not the selected ${primaryGpuCard}` };
   return { supported: true, source, vendor, encoder, cardPath: info.cardPath, codecs: info.codecs.filter(codec => codec === 'av1' || codec === 'h264'), latencyTargetMs: 100 };
 }
 
@@ -62,9 +67,10 @@ function spawnRecorder(runner, args) {
   // gpu-screen-recorder reopens /dev/stdout. Node implements child stdout with
   // a socketpair, which cannot be reopened on Linux (ENXIO), so place a real
   // kernel pipe between the recorder and a byte-for-byte bridge to Electron.
-  // Encoding is still fully GPU-backed, but the recorder/muxer's small amount
-  // of CPU work must yield to Chromium's real-time audio threads under load.
-  return spawn('/bin/bash', ['-o', 'pipefail', '-c', '/usr/bin/nice -n 5 -- "$@" | /bin/cat', 'knot-native-screen', runner.command, ...args], {
+  // Encoding is fully GPU-backed. Keep the capture/mux process at normal
+  // priority: lowering it made portal frame acquisition starve behind games and
+  // produced a visibly low-cadence stream even while NVENC/VA-API was healthy.
+  return spawn('/bin/bash', ['-o', 'pipefail', '-c', '"$@" | /bin/cat', 'knot-native-screen', runner.command, ...args], {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true
   });
@@ -112,17 +118,25 @@ class NativeScreenService {
     const fps = Number(options.fps) === 30 ? 30 : 60;
     const width = [1280, 1920, 2560, 3840].includes(Number(options.width)) ? Number(options.width) : 3840;
     const height = [720, 1080, 1440, 2160].includes(Number(options.height)) ? Number(options.height) : 2160;
-    const bitrateKbps = Math.max(8000, Math.min(80000, Math.round(Number(options.bitrateKbps) || 56000)));
+    const bitrateKbps = Math.max(2000, Math.min(40000, Math.round(Number(options.bitrateKbps) || 6000)));
     const cursor = options.cursor === 'never' ? 'no' : 'yes';
     const testCapture = process.env.KNOT_NATIVE_SCREEN_TEST === '1' && /^[A-Za-z0-9_.-]{1,64}$/.test(options.captureSource || '') ? options.captureSource : '';
-    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'cfr', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '1', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm'];
+    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'content', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '1', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm'];
     const child = spawnRecorder(runner, args);
-    const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', active: true, stopping: false, stderr: '', seq: 0, paused: false, segmenter: new WebmClusterSegmenter() };
+    const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', active: true, stopping: false, stderr: '', seq: 0, discontinuity: false, droppedSegments: 0, segmenter: new WebmClusterSegmenter() };
     this.session = session;
     const enqueue = segment => {
-      const item = { kind: segment.kind, seq: session.seq++, data: Buffer.from(segment.data) };
+      const data = Buffer.from(segment.data);
+      const frames = segment.kind === 'cluster' ? webmAv1Frames(data, fps) : [];
+      const key = frames.some(frame => frame.type === 'key');
+      const item = { kind: segment.kind, key, frameCount: frames.length, seq: session.seq++, capturedAt: Date.now(), data };
       const waiter = session.waiters.shift();if (waiter) waiter(item);else { session.queue.push(item);session.queueBytes += item.data.length; }
-      if (!session.paused && session.queueBytes > MAX_QUEUE_BYTES) { child.stdout.pause();session.paused = true; }
+      if (session.queueBytes > MAX_QUEUE_BYTES && session.queue.length > 1) {
+        const latestKey = session.queue.findLastIndex(value => value.key);
+        const remove = latestKey > 0 ? latestKey : Math.max(1, session.queue.length-1);
+        for (const stale of session.queue.splice(0, remove)) { session.queueBytes -= stale.data.length;session.droppedSegments++; }
+        session.discontinuity = true;
+      }
     };
     child.stdout.on('data', chunk => { for (const segment of session.segmenter.push(chunk)) enqueue(segment); });
     child.stderr.on('data', chunk => { session.stderr = (session.stderr + chunk.toString()).slice(-8192); });
@@ -141,11 +155,11 @@ class NativeScreenService {
     let item = session.queue.shift();
     if (item) {
       session.queueBytes -= item.data.length;
-      if (session.paused && session.queueBytes < RESUME_QUEUE_BYTES) { session.child.stdout.resume();session.paused = false; }
     } else if (session.active) {
       item = await new Promise(resolve => { const timer = setTimeout(() => { const index = session.waiters.indexOf(done);if (index >= 0) session.waiters.splice(index, 1);resolve(null); }, timeoutMs);const done = value => { clearTimeout(timer);resolve(value); };session.waiters.push(done); });
     }
-    return item ? { active: true, kind: item.kind, seq: item.seq, data: item.data } : { active: session.active, error: session.error };
+    if (item && session.discontinuity) { item.discontinuity = true;session.discontinuity = false; }
+    return item ? { active: true, kind: item.kind, key: item.key, frameCount: item.frameCount, seq: item.seq, capturedAt: item.capturedAt, discontinuity: !!item.discontinuity, droppedSegments: session.droppedSegments, data: item.data } : { active: session.active, error: session.error };
   }
 
   stop(id) {

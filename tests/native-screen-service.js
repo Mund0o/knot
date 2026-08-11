@@ -9,6 +9,7 @@ assert.deepStrictEqual(validateNativeScreenInfo('0x1002', 'card2', amd, 'fixture
 });
 assert.strictEqual(validateNativeScreenInfo('0x1002', 'card1', amd).supported, false);
 assert.strictEqual(validateNativeScreenInfo('0x10de', 'card2', amd).supported, false);
+assert.strictEqual(validateNativeScreenInfo('0x1002', 'card1', amd, 'flatpak').supported, true);
 
 const cluster = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 const clusterWith = value => Buffer.concat([cluster, Buffer.from([0x80|value.length]), Buffer.from(value)]);
@@ -28,7 +29,10 @@ const live = nativeScreenInfo('0x10de');
 if (live.supported) {
   assert(live.codecs.includes('av1'));
   assert.strictEqual(nativeScreenInfo('0x10de', live.cardPath.split('/').at(-1)).supported, true);
-  assert.strictEqual(nativeScreenInfo('0x10de', 'card999').supported, false);
+  // Flatpak assigns its own DRM node names. The vendor remains authoritative;
+  // system installs still require an exact selected-card match (covered above).
+  if (live.source === 'flatpak') assert.strictEqual(nativeScreenInfo('0x10de', 'card999').supported, true);
+  else assert.strictEqual(nativeScreenInfo('0x10de', 'card999').supported, false);
   console.log(`PASS native screen service framing and ${live.source} ${live.encoder} capability`);
 } else {
   console.log('PASS native screen service framing and AMD capability fixture (live GPU AV1 unavailable: '+live.reason+')');

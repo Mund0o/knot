@@ -35,7 +35,10 @@ async function main() {
     assert(Number(stream.nb_read_packets) >= 120, `only encoded ${stream.nb_read_packets || 0} video packets in the capture window`);
     assert.strictEqual(errors.length, 0, errors.join('; '));
     console.log(`PASS live ${info.encoder} AV1 ${stream.width}x${stream.height} ${stream.r_frame_rate}, ${stream.nb_read_packets} packets across ${clusters} complete clusters`);
-  } finally { try { fs.unlinkSync(file); } catch {} }
+  } finally {
+    if (process.env.KNOT_KEEP_NATIVE_CAPTURE === '1') console.log(`CAPTURE ${file}`);
+    else try { fs.unlinkSync(file); } catch {}
+  }
 }
 
 main().catch(error => { console.error('Live native screen test failed:', error?.stack || error);process.exitCode=1; });
