@@ -5,6 +5,11 @@ direct messages, and servers containing text and voice channels. It uses WebRTC
 data channels and media tracks for content transport. Direct messages also use
 Web Crypto ECDH + AES-GCM on top of WebRTC's DTLS encryption.
 
+Direct-message transports connect in the background while friends are online,
+so opening another DM or server does not end the current voice call. Screen
+shares appear beside their owners and open into a single focused viewer; use a
+stream's context menu to stop watching without making the stream undiscoverable.
+
 ## Run as a PC app
 
 Install Node.js 20 or newer, then from this folder run:
