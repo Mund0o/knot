@@ -1,10 +1,10 @@
 {
-  "version": "1.1.49",
-  "notes": "Fixes NVIDIA-to-AMD AV1 black screens and 30-second share crashes with live packet recovery, voice-first scheduling, 4K60 latency protection, GPU decoder recovery, share-only fullscreen, and speaking outlines.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.49/pair-p2p-1.1.49.tar.gz",
-  "linuxSha256": "024e0137663140c0944bc6c20373fe63207a7ebca90d072030044fb759725701",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.49/Knot-1.1.49.AppImage",
-  "linuxAppImageSha256": "1804073beacf55eb920e8d6d81817384ac16d1bec03a4bd1a9c04026933a7d9c",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.49/Knot.Setup.1.1.49.exe",
-  "winSha256": "46ac2e95691d8e1a3721577f480e317ad948c05b2b1f9aea37a00e9f727fb117"
+  "version": "1.1.50",
+  "notes": "Fixes real-network screen-share lag and AMD AV1 black screens/crashes with bounded 100 ms transport, exact AMD decoder profiles, direct GPU-frame presentation, and full-app constrained-uplink recovery.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.50/pair-p2p-1.1.50.tar.gz",
+  "linuxSha256": "09f2a6968848236a3e44b6e7c3b5aa9780c6b131c01f390d5d61b8dddd9a86cd",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.50/Knot-1.1.50.AppImage",
+  "linuxAppImageSha256": "24a66adfa904139d4513396ef5288e5a0e814585362063dab79c19e26045a7a2",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.50/Knot.Setup.1.1.50.exe",
+  "winSha256": "edf75d04b9c68ee9723ca8bc85ba1937ea4c6d53f0b227591495f38f54489899"
 }
