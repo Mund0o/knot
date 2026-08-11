@@ -53,17 +53,20 @@ SHA-256 checksum, installs it, and restarts automatically.
 ## Screen sharing architecture
 
 Knot sends screen video, computer sound, and voice as separate WebRTC tracks.
-Screen capture defaults to source resolution at 60 fps, prefers H.264 on
-Windows and VP9 on Linux, retains retransmission/FEC codecs, and uses a
-resolution-aware quality ceiling (about 40 Mbps at 1080p60, 72 Mbps at 1440p60,
-and 160 Mbps at 4K60 by default). Live sender statistics show delivered
-resolution, frame rate, actual/target bitrate, codec, encode time, round-trip
-time, estimated available bandwidth, and whether the network or encoder is
-limiting the stream.
+Screen capture defaults to 1080p60, prefers broadly hardware-accelerated H.264,
+retains retransmission/FEC codecs, and keeps every video target below a 60 Mbps
+user ceiling. The 4K60 profile targets 56 Mbps, leaving useful headroom on an
+88 Mbps upload instead of forcing an SDP bitrate that can build latency. WebRTC
+can adapt below the ceiling, and repeated encoder overload first falls back to
+30 fps and then to a reduced render scale so sharing cannot make the whole app
+unresponsive. The selected AV1 mode is negotiated normally and only falls back
+to H.264 after the receiver confirms that AV1 packets arrive without decoded
+frames.
 
-`npm run test:screen` runs a strict local 4K/60 motion benchmark. It intentionally
-fails when capture, encoding, or receiving drops below 55 fps, so it can expose
-a Linux software-encoder fallback before a real call.
+`npm test` validates navigation, capture constraints, congestion-safe sender
+parameters, overload recovery, isolated audio delivery, H.264 transport, and
+AV1 transport with live decode. Set `PAIR_TEST_4K60=1` when running an individual
+codec test to turn it into a strict local 4K60 hardware stress benchmark.
 
 Screen sharing settings include **Test isolated computer audio**. It exercises
 the same OS route used by a real share and reports the capture stage, format,
