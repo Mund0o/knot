@@ -8,7 +8,7 @@ let directoryTrustedConnection=false,recordConversationMessage=()=>{},directoryP
 // Directory/call state must exist before any asynchronous settings/profile
 // restoration can render the UI. Declaring it later created a startup TDZ race
 // that only showed up reliably when two complete app windows booted together.
-let directorySocket=null,directoryReconnect=null,directoryBackoff=1000,directoryUserId='',directoryToken='',directorySnapshot={friends:[],servers:[],members:{},voiceStates:{}},activePeerId='',dmPeerId='',dmCallPeerId='',activeServerId='',activeChannelId='',activeConversationKey='',historyRendering=false,dmConnectingPeerId='';
+let directorySocket=null,directoryReconnect=null,directoryBackoff=1000,directoryUserId='',directoryToken='',directorySnapshot={friends:[],servers:[],members:{},voiceStates:{}},activePeerId='',dmPeerId='',dmCallPeerId='',activeServerId='',activeChannelId='',activeConversationKey='',historyRendering=false,dmConnectingPeerId='',conversationScrollEpoch=0,conversationScrollObserver=null,conversationScrollTimer=null,conversationScrollLoadListener=null;
 let conversationHistories={},historySaveTimer=null,serverVoiceStream=null,serverScreenStream=null,serverNativeScreenSession=null,serverNativeLocalPlayer=null,serverNativeScreenAudioStream=null,serverNativeScreenInit=null,serverNativeFallbackInFlight=false,serverVoiceMuted=false,serverScreenStarting=false,serverScreenGen=0,joinedVoiceServerId='',joinedVoiceChannelId='',joinedVoiceAt=0,voiceElapsedTimer=null,draggedChannelId='';const serverPeers=new Map();
 const persistentDmPeers=new Map();
 let socialSidebarWidth=280,pendingServerSelection=false,pendingChannelCreation=null;
@@ -990,7 +990,20 @@ function setDirectoryState(online,text){$('#directoryPresence')?.classList.toggl
 function scheduleHistorySave(){clearTimeout(historySaveTimer);historySaveTimer=setTimeout(()=>ssSet('messageHistory',JSON.stringify(conversationHistories)),180)}
 function storeConversationEntry(key,entry){if(!key||!entry||typeof entry.text!=='string')return;const list=conversationHistories[key]||(conversationHistories[key]=[]);list.push(entry);if(list.length>500)list.splice(0,list.length-500);scheduleHistorySave()}
 recordConversationMessage=entry=>{if(historyRendering||!activeConversationKey)return;storeConversationEntry(activeConversationKey,entry)};
-function scrollConversationToLatest(){const scroll=()=>{messages.scrollTop=messages.scrollHeight};scroll();requestAnimationFrame(scroll);setTimeout(scroll,0)}
+function scrollConversationToLatest(){
+  // Restored messages, link cards, and images can change the scroll height
+  // after the DM click has already rendered. Keep this one navigation pinned
+  // to its newest entry through those layout passes instead of leaving the
+  // conversation at its former top position.
+  const epoch=++conversationScrollEpoch,scroll=()=>{if(epoch!==conversationScrollEpoch)return;messages.scrollTop=Math.max(0,messages.scrollHeight-messages.clientHeight)};
+  clearTimeout(conversationScrollTimer);conversationScrollObserver?.disconnect();conversationScrollObserver=null;if(conversationScrollLoadListener)messages.removeEventListener('load',conversationScrollLoadListener,true);conversationScrollLoadListener=null;
+  scroll();requestAnimationFrame(()=>{scroll();requestAnimationFrame(scroll)});setTimeout(scroll,0);setTimeout(scroll,80);setTimeout(scroll,260);
+  if(typeof ResizeObserver!=='undefined'){
+    conversationScrollObserver=new ResizeObserver(scroll);conversationScrollObserver.observe(messages);
+  }
+  conversationScrollLoadListener=()=>scroll();messages.addEventListener('load',conversationScrollLoadListener,true);
+  conversationScrollTimer=setTimeout(()=>{if(epoch===conversationScrollEpoch){conversationScrollObserver?.disconnect();conversationScrollObserver=null}if(conversationScrollLoadListener){messages.removeEventListener('load',conversationScrollLoadListener,true);conversationScrollLoadListener=null}},900);
+}
 function openConversation(key){activeConversationKey=key;historyRendering=true;messages.replaceChildren();const list=conversationHistories[key]||[];for(const item of list){const current=item.author?.id?directoryUser(item.author.id):null;addMessage(item.text,!!item.mine,item.gif,item.author?{...item.author,...current,time:item.time}:{time:item.time})}historyRendering=false;if(!list.length){const empty=document.createElement('div');empty.className='empty';empty.innerHTML='<span>✦</span><p>Messages stay on your devices and travel directly to online peers.</p>';messages.append(empty)}scrollConversationToLatest()}
 function applyFriendProfile(friend){if(!friend)return;friendName=normalizeProfileName(friend.name,'Friend');setAvatar(friendAvatar,friend.image||'');setAvatarFrame(friendAvatar,friend.frame);setAvatarIdentity(friendAvatar,friend.id);renderParticipantNames();roomTitle.textContent=friendName;$('#chatTitle').textContent=friendName;$('#roomContextLabel').textContent='DIRECT MESSAGE';$('#chatModePill').textContent='DIRECT';messageInput.placeholder='Message '+friendName;}
 function renderCallPeerProfile(){const friend=directoryUser(dmCallPeerId);if(!friend)return;friendNameEl.textContent=normalizeProfileName(friend.name,'Friend');setAvatar(friendAvatar,friend.image||'');setAvatarFrame(friendAvatar,friend.frame);setAvatarIdentity(friendAvatar,friend.id);renderDmVoiceUI();refreshSpeakingPaint()}

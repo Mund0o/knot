@@ -67,8 +67,8 @@ if (!rendererSource.includes('remoteNativeScreenExpected=value.native===true') |
 if (!rendererSource.includes('Keep screen sound out of the video element for every share backend') || !rendererSource.includes('const audio=ensureNativeRemoteAudio();audio.srcObject=stream')) {
   throw new Error('Windows standard share audio can still be trapped in a Linux video element');
 }
-if (!rendererSource.includes('function scrollConversationToLatest()') || !rendererSource.includes('requestAnimationFrame(scroll)')) {
-  throw new Error('Conversation history can reopen above the newest message');
+if (!rendererSource.includes('function scrollConversationToLatest()') || !rendererSource.includes('requestAnimationFrame(scroll)') || !rendererSource.includes('conversationScrollObserver=new ResizeObserver(scroll)') || !rendererSource.includes("messages.addEventListener('load',conversationScrollLoadListener,true)")) {
+  throw new Error('Conversation history can reopen above the newest message after embeds finish laying out');
 }
 if (!rendererSource.includes('function renderLinkCard(') || !rendererSource.includes("p.t==='video'") || !rendererSource.includes('vimeoVideoId')) {
   throw new Error('Message links cannot render safe Discord-style cards or inline media');
