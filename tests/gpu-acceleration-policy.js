@@ -28,7 +28,6 @@ const windows = gpuAccelerationPolicy({ platform: 'win32' });
 assert(windows.switches.has('force-high-performance-gpu'));
 assert(windows.switches.has('enable-gpu-rasterization'));
 assert(windows.enableFeatures.includes('CanvasOopRasterization'));
-assert(windows.enableFeatures.includes('D3D12VideoEncodeAccelerator'));
 assert(!windows.enableFeatures.includes('WebRTCPipeWireCapturer'));
 assert(acceleratedFeature('enabled'));
 assert(acceleratedFeature('enabled_force'));

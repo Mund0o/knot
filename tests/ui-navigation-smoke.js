@@ -37,7 +37,7 @@ if (rendererSource.includes('if(pc&&!dmCallOngoing())disconnectRoom();if(serverV
 if (styleSource.includes('content:"☎"') || !htmlSource.includes('id="icon-call-start"') || !htmlSource.includes('id="icon-call-end"') || !rendererSource.includes('function renderCallButtonState')) {
   throw new Error('Call controls fell back to a duplicated or rotated text handset');
 }
-if (!rendererSource.includes("parameters.degradationPreference='maintain-resolution'") || !rendererSource.includes('encoding.scaleResolutionDownBy=1') || !rendererSource.includes("encoding.networkPriority='high'") || !rendererSource.includes("encoding.priority='high'") || !accelerationSource.includes("'D3D12VideoEncodeAccelerator'") || !rendererSource.includes("p.encodings[0].networkPriority='high'") || !rendererSource.includes("screenAudio=stream.getVideoTracks().length>0") || !rendererSource.includes("t:'screen-codec-fallback',serverId:state.context.serverId")) {
+if (!rendererSource.includes("parameters.degradationPreference='maintain-resolution'") || !rendererSource.includes('encoding.scaleResolutionDownBy=1') || !rendererSource.includes("encoding.networkPriority='high'") || !rendererSource.includes("encoding.priority='high'") || accelerationSource.includes("'D3D12VideoEncodeAccelerator'") || !rendererSource.includes("p.encodings[0].networkPriority='high'") || !rendererSource.includes("screenAudio=stream.getVideoTracks().length>0") || !rendererSource.includes("t:'screen-codec-fallback',serverId:state.context.serverId")) {
   throw new Error('Selected screen quality, server screen audio routing, or server AV1 recovery can silently regress');
 }
 if (!rendererSource.includes('FILE_DRAIN_TIMEOUT=45000') || !rendererSource.includes('direct connection stopped draining')) {
@@ -57,6 +57,9 @@ if (!rendererSource.includes("send({t:'screen-codec-fallback'})") || !rendererSo
 }
 if (!rendererSource.includes('decode:false') || !rendererSource.includes('startSoftwareDecoder') || !rendererSource.includes('av01.0.13H.08') || rendererSource.includes('window.pairEnv?.toggleFullscreen')) {
   throw new Error('Native AV1 can still overload the sender, black-screen without retrying, or fullscreen the whole app');
+}
+if (!rendererSource.includes('screenStage.requestFullscreen') || !styleSource.includes('#voicePanel .screen-section:fullscreen{position:fixed!important')) {
+  throw new Error('Screen-share fullscreen can still be overridden by the expanded-call layout');
 }
 if (!rendererSource.includes('targetNativeAv1BitrateKbps(width,height,fps)') || !rendererSource.includes("createDataChannel('knot-screen-native',nativeScreenChannelOptions())") || !rendererSource.includes('maxRetransmits:1') || !rendererSource.includes('NATIVE_SCREEN_BUFFER_HIGH=512*1024') || !rendererSource.includes('nativeScreenBufferBudget(segmentBytes=0)')) {
   throw new Error('Native AV1 can still monopolize the connection and lag voice traffic');

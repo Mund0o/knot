@@ -12,14 +12,6 @@ const LINUX_ACCELERATED_FEATURES = [
   'AcceleratedVideoDecodeLinuxGL'
 ];
 
-// Electron's Chromium build ships the D3D12 video encoder behind a feature
-// flag. Without it WebRTC can silently choose OpenH264/CPU for a 4K display
-// track, which is incapable of steady 60 fps even when a Windows GPU has a
-// hardware encoder. Unsupported drivers retain Chromium's normal fallback.
-const WINDOWS_ACCELERATED_FEATURES = [
-  'D3D12VideoEncodeAccelerator'
-];
-
 function gpuAccelerationPolicy({ platform = process.platform, gpu = null, wayland = false } = {}) {
   const switches = new Map([
     ['force-high-performance-gpu', ''],
@@ -61,10 +53,6 @@ function gpuAccelerationPolicy({ platform = process.platform, gpu = null, waylan
       // keeping WebGPU, raster, canvas, WebGL, and video work on the main GPU.
       switches.set('use-webgpu-adapter', 'opengles');
     }
-  }
-
-  if (platform === 'win32') {
-    enableFeatures.push(...WINDOWS_ACCELERATED_FEATURES);
   }
 
   return { switches, enableFeatures, disableFeatures };
