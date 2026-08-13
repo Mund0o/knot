@@ -1,10 +1,10 @@
 {
-  "version": "1.1.60",
-  "notes": "Adds a Windows 10 compatibility screen-audio route and opens conversations at the newest message.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.60/pair-p2p-1.1.60.tar.gz?build=7a56efa",
-  "linuxSha256": "38e0cd7978ad72043bcf8ac5365e410f87e331f0beb85a5360fb5f5231f666b2",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.60/Knot-1.1.60.AppImage",
-  "linuxAppImageSha256": "4923ed588ee9b286360f32ee738aa0bdd0ea92292204bdde46d8c6ca0d7d123b",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.60/Knot.Setup.1.1.60.exe",
-  "winSha256": "0f4d958290fe493f953e12ec4039a2be1e560b4a77a7f74405c1bec61fa7493e"
+  "version": "1.1.61",
+  "notes": "Polishes the voice-volume slider and adds rich, playable media link embeds.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.61/pair-p2p-1.1.61.tar.gz?build=5c6f3eb",
+  "linuxSha256": "5c116736ff9ceb01d1d61c8a073e7e88c46dee2e373c54bf446dc2e8941fb559",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.61/Knot-1.1.61.AppImage",
+  "linuxAppImageSha256": "59ed55ff4cbaaab8e1b559b3c262c031fdda35552eb9eacc0ab89d6204372789",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.61/Knot.Setup.1.1.61.exe",
+  "winSha256": "2e2e441a12b896225a64598be13705faf900724696aaf791715508568de8b52d"
 }
