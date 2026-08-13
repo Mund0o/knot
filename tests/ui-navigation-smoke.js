@@ -67,6 +67,9 @@ if (!rendererSource.includes('Keep screen sound out of the video element for eve
 if (!rendererSource.includes('function scrollConversationToLatest()') || !rendererSource.includes('requestAnimationFrame(scroll)')) {
   throw new Error('Conversation history can reopen above the newest message');
 }
+if (!rendererSource.includes('function renderLinkCard(') || !rendererSource.includes("p.t==='video'") || !rendererSource.includes('vimeoVideoId')) {
+  throw new Error('Message links cannot render safe Discord-style cards or inline media');
+}
 if (!rendererSource.includes('nativeShareFullscreen=true;screenStage.classList.add(\'fs\')') || !rendererSource.includes("$('#serverStageFullscreen').onclick") || !styleSource.includes('#voicePanel .screen-section:fullscreen{position:fixed!important') || !styleSource.includes('.server-voice-stage.fs,.server-voice-stage:fullscreen{position:fixed!important')) {
   throw new Error('Screen-share fullscreen can still be overridden by the expanded-call layout');
 }
