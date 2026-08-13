@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
-const CAPTURE_ABI = 'knot-screen-audio-v3';
+const CAPTURE_ABI = 'knot-screen-audio-v4';
 const SOURCE_RELATIVE = path.join('addon', 'pair-capture.cc');
 const BINARY_RELATIVE = path.join('addon', 'build', 'Release', 'pair-capture.node');
 const MANIFEST_RELATIVE = path.join('addon', 'build', 'Release', 'pair-capture.manifest.json');

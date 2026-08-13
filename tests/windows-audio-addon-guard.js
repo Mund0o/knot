@@ -64,9 +64,11 @@ try {
   queued.process([], output);
   assert.strictEqual(output[0][0][0], 5, 'worklet played stale queued audio after a renderer stall');
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const addonSource = fs.readFileSync(path.join(__dirname, '..', 'addon', 'pair-capture.cc'), 'utf8');
   const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert(mainSource.includes('NATIVE_AUDIO_MAX_INFLIGHT = 3') && mainSource.includes("ipcMain.on('pair:cleanAudioAck'"), 'native audio IPC is not acknowledgement-bounded');
+  assert(addonSource.includes('return initSystemLoopback();') && addonSource.includes('"system-loopback"'), 'Windows 10 fallback capture is missing');
   assert(preloadSource.includes("ipcRenderer.send('pair:cleanAudioAck'"), 'renderer bridge does not release native audio IPC backpressure');
   assert(!rendererSource.includes('createScriptProcessor') && rendererSource.includes("new AudioWorkletNode(ctx,'knot-screen-audio'"), 'Windows capture regressed to renderer-thread audio processing');
   assert(rendererSource.includes('screenShareOutputElements()') && rendererSource.includes('applyMediaElementOutput(nativeRemoteAudio)') && rendererSource.includes('state.screenAudio'), 'selected output does not cover native/server screen audio');

@@ -556,7 +556,7 @@ app.on('window-all-closed', async () => {
 // The addon is built by 'node-gyp rebuild --directory=addon' which outputs to
 // addon/build/Release/pair-capture.node.
 let nativeCapture = null;
-const NATIVE_CAPTURE_ABI = 'knot-screen-audio-v3';
+const NATIVE_CAPTURE_ABI = 'knot-screen-audio-v4';
 const NATIVE_AUDIO_FRAME_BYTES = 2 * Float32Array.BYTES_PER_ELEMENT;
 const NATIVE_AUDIO_PACKET_FRAMES = 960; // 20 ms at 48 kHz
 const NATIVE_AUDIO_PACKET_BYTES = NATIVE_AUDIO_PACKET_FRAMES * NATIVE_AUDIO_FRAME_BYTES;

@@ -17,7 +17,7 @@
 // packaging verifies that the compiled PE contains this exact marker and that
 // its manifest hashes the current source, so an older addon cannot silently be
 // copied into a new installer.
-static constexpr char kCaptureAbi[] = "knot-screen-audio-v3";
+static constexpr char kCaptureAbi[] = "knot-screen-audio-v4";
 
 // Windows process loopback lets us capture the system mix while excluding
 // Knot's process tree. This is the same class of capture Discord uses to keep
@@ -66,6 +66,7 @@ public:
   UINT32 bufFrames=0;
   HANDLE captureEvent=nullptr;
   bool comInitialized=false;
+  bool processIsolated=true;
   std::thread captureThread;
   Napi::ThreadSafeFunction dataCb,errCb;
 
@@ -107,6 +108,8 @@ public:
     o.Set("channels",Napi::Number::New(env,(double)mixFormat->nChannels));
     o.Set("bitsPerSample",Napi::Number::New(env,(double)mixFormat->wBitsPerSample));
     o.Set("sampleType",mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT?Napi::String::New(env,"float"):Napi::String::New(env,"pcm"));
+    o.Set("isolated",Napi::Boolean::New(env,processIsolated));
+    o.Set("mode",Napi::String::New(env,processIsolated?"process-loopback":"system-loopback"));
     return o;
   }
 
@@ -115,6 +118,8 @@ private:
     HRESULT hr=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
     if(SUCCEEDED(hr))comInitialized=true;
     else if(hr!=RPC_E_CHANGED_MODE)return hr;
+
+    processIsolated=true;
 
     // A window/application share captures its owning process and descendants,
     // matching Discord's application-audio model. A full-display share captures
@@ -137,12 +142,23 @@ private:
     auto activate=audioApi?reinterpret_cast<decltype(&ActivateAudioInterfaceAsync)>(GetProcAddress(audioApi,"ActivateAudioInterfaceAsync")):nullptr;
     IActivateAudioInterfaceAsyncOperation* operation=nullptr;
     hr=activate?activate(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,__uuidof(IAudioClient),&prop,handler,&operation):HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
-    if(FAILED(hr)){if(audioApi)FreeLibrary(audioApi);handler->Release();CloseHandle(state.event);return hr;}
+    if(FAILED(hr)){
+      if(audioApi)FreeLibrary(audioApi);handler->Release();CloseHandle(state.event);
+      // Process-loopback arrived in Windows 10 build 20348. Older supported
+      // Windows 10 installations reject its virtual endpoint entirely. Fall
+      // back to the default render endpoint so a share still has sound rather
+      // than silently attaching an always-empty WebRTC track.
+      processIsolated=false;
+      return initSystemLoopback();
+    }
     WaitForSingleObject(state.event,INFINITE);
     if(operation)operation->Release();
     if(audioApi)FreeLibrary(audioApi);
     handler->Release();CloseHandle(state.event);
-    if(FAILED(state.result))return state.result;
+    if(FAILED(state.result)){
+      processIsolated=false;
+      return initSystemLoopback();
+    }
     audioClient=state.client;
 
     // Request a predictable PCM format. Windows converts the process mix for
@@ -166,6 +182,32 @@ private:
     // Start synchronously so an unavailable/invalid loopback endpoint makes the
     // start IPC fail immediately. Reporting only the initialized format while a
     // worker later fails to start produced a misleading silent "live" track.
+    return audioClient->Start();
+  }
+
+  HRESULT initSystemLoopback(){
+    HRESULT hr=CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,__uuidof(IMMDeviceEnumerator),(void**)&enumerator);
+    if(FAILED(hr))return hr;
+    hr=enumerator->GetDefaultAudioEndpoint(eRender,eConsole,&device);
+    if(FAILED(hr))return hr;
+    hr=device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,(void**)&audioClient);
+    if(FAILED(hr))return hr;
+    auto* requested=(WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
+    if(!requested)return E_OUTOFMEMORY;
+    ZeroMemory(requested,sizeof(WAVEFORMATEX));
+    requested->wFormatTag=WAVE_FORMAT_PCM;requested->nChannels=2;requested->nSamplesPerSec=48000;requested->wBitsPerSample=16;
+    requested->nBlockAlign=requested->nChannels*requested->wBitsPerSample/8;requested->nAvgBytesPerSec=requested->nSamplesPerSec*requested->nBlockAlign;
+    mixFormat=requested;
+    hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,0,0,mixFormat,nullptr);
+    if(FAILED(hr))return hr;
+    hr=audioClient->GetBufferSize(&bufFrames);
+    if(FAILED(hr))return hr;
+    captureEvent=CreateEvent(nullptr,FALSE,FALSE,nullptr);
+    if(!captureEvent)return HRESULT_FROM_WIN32(GetLastError());
+    hr=audioClient->SetEventHandle(captureEvent);
+    if(FAILED(hr))return hr;
+    hr=audioClient->GetService(__uuidof(IAudioCaptureClient),(void**)&captureClient);
+    if(FAILED(hr))return hr;
     return audioClient->Start();
   }
 
