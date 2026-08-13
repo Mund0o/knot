@@ -495,8 +495,12 @@ function wire(){
           return;
         }
         if(value.t==='call-state'){
-          const active=value.active===true;if(active)dmCallPeerId=dmPeerId||activePeerId;
-          applyRemoteCallState(active,value.session);logCallEvent(active?'Friend joined the call':'Friend left the call');if(active)playSound('ring');return;
+          const active=value.active===true,session=String(value.session||'legacy'),wasActive=friendInCall,previousSession=remoteCallSessionId;if(active)dmCallPeerId=dmPeerId||activePeerId;
+          applyRemoteCallState(active,session);logCallEvent(active?'Friend joined the call':'Friend left the call');
+          // Peers may repeat their active state after an SCTP reconnect (and
+          // some older clients periodically announce it). That is presence,
+          // not a new call: ringing again here was the minute-ish beep.
+          if(active&&(!wasActive||session!==previousSession))playSound('ring');return;
         }
         if(value.t==='call-ring'){
           if(remoteCallSessionId)return;

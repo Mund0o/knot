@@ -43,6 +43,9 @@ if (!rendererSource.includes("parameters.degradationPreference='maintain-resolut
 if (!rendererSource.includes('FILE_DRAIN_TIMEOUT=45000') || !rendererSource.includes('direct connection stopped draining')) {
   throw new Error('File transfers can still wait forever on a stalled SCTP send buffer');
 }
+if (!rendererSource.includes('const active=value.active===true,session=String(value.session||\'legacy\'),wasActive=friendInCall,previousSession=remoteCallSessionId') || !rendererSource.includes('if(active&&(!wasActive||session!==previousSession))playSound(\'ring\')')) {
+  throw new Error('Repeated call-state presence can still replay the incoming-call beep');
+}
 if (!rendererSource.includes('pendingFrameDelete=pendingFrames.delete.bind') || !rendererSource.includes('pendingFrames.delete=seq=>')) {
   throw new Error('Canceled early file frames can still leak the pending-transfer budget');
 }
