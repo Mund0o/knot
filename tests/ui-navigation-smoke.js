@@ -197,10 +197,10 @@ app.whenReady().then(async () => {
       assert(!localScreenTile.hidden&&remoteScreenTile.hidden,'local and remote DM shares overlapped');
       remoteShareBadge.click();
       assert(localScreenTile.hidden&&!remoteScreenTile.hidden,'switching DM shares did not preserve a single focused stream');
-      let shareElementFullscreen=false;remoteScreen.requestFullscreen=async()=>{shareElementFullscreen=true};await toggleRemoteFs();assert(shareElementFullscreen,'fullscreen did not target the screen-share video');
-      nativeShareFullscreen=true;remoteScreen.classList.add('fs');document.body.classList.add('screen-fullscreen');
+      let shareStageFullscreen=false;screenStage.requestFullscreen=async()=>{shareStageFullscreen=true};await toggleRemoteFs();assert(shareStageFullscreen,'fullscreen did not target the complete screen-share stage');
+      nativeShareFullscreen=true;screenStage.classList.add('fs');document.body.classList.add('screen-fullscreen');
       clearRemoteScreenShare('Friend stopped sharing');
-      assert(!nativeShareFullscreen&&!remoteScreen.classList.contains('fs')&&!document.body.classList.contains('screen-fullscreen')&&remoteScreen.hidden&&!remoteScreenExpected,'remote share teardown left Knot fullscreen or retained stale share state');
+      assert(!nativeShareFullscreen&&!screenStage.classList.contains('fs')&&!document.body.classList.contains('screen-fullscreen')&&remoteScreen.hidden&&!remoteScreenExpected,'remote share teardown left Knot fullscreen or retained stale share state');
       screenPreview.srcObject=null;screenPreview.hidden=true;updateScreenLayout();
       applyRemoteCallState(true,'remote-session');applyRemoteCallState(false,'remote-session');
       assert(!friendInCall&&participantFriend.getAttribute('aria-hidden')==='true','friend leave did not immediately remove the avatar');
