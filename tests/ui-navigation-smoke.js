@@ -37,6 +37,9 @@ if (rendererSource.includes('if(pc&&!dmCallOngoing())disconnectRoom();if(serverV
 if (!rendererSource.includes('function activateDmView(friend)') || !rendererSource.includes("if(dmConnectingPeerId===id){pairHint.textContent='Connecting directly to '+friend.name+'…';return}") || !rendererSource.includes('if(samePeer&&directoryUserId<value.from)return') || !rendererSource.includes("'Waiting for someone to join'")) {
   throw new Error('DM selection can still duplicate connection attempts, race simultaneous clicks, or show an absent friend as in the call');
 }
+if (!rendererSource.includes("pendingVoiceStartPeerId=targetPeer") || !rendererSource.includes("peer.connectionState!=='connected'||callActive||callStarting||pendingVoiceStartPeerId!==dmPeerId") || !rendererSource.includes("callStatus.textContent='Connecting to start voice…'")) {
+  throw new Error('A voice-start click can still be lost while the DM media peer is connecting');
+}
 if (styleSource.includes('content:"☎"') || !htmlSource.includes('id="icon-call-start"') || !htmlSource.includes('id="icon-call-end"') || !rendererSource.includes('function renderCallButtonState')) {
   throw new Error('Call controls fell back to a duplicated or rotated text handset');
 }
