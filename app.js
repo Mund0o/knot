@@ -1689,7 +1689,12 @@ function targetScreenBitrate(width,height,fps){
 }
 async function configureScreenVideoSender(sender,track,fps,viewers=1){
   const settings=track?.getSettings?.()||{},requestedFps=fps===30?30:60,maxBitrate=Math.max(2000000,Math.round(targetScreenBitrate(settings.width,settings.height,requestedFps)/Math.max(1,Number(viewers)||1)));
-  const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];const encoding=parameters.encodings[0];encoding.maxBitrate=maxBitrate;delete encoding.minBitrate;encoding.maxFramerate=requestedFps;encoding.scaleResolutionDownBy=1;encoding.priority='medium';encoding.networkPriority='low';parameters.degradationPreference='maintain-resolution';await sender.setParameters(parameters);
+  const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];const encoding=parameters.encodings[0];encoding.maxBitrate=maxBitrate;delete encoding.minBitrate;encoding.maxFramerate=requestedFps;encoding.scaleResolutionDownBy=1;
+  // Screen video used to be explicitly deprioritized below the call. At 4K
+  // that made WebRTC drop display frames before the encoder or network were
+  // actually saturated. Keep the call audio on its own RTP stream but give an
+  // interactive share normal high-priority scheduling.
+  encoding.priority='high';encoding.networkPriority='high';parameters.degradationPreference='maintain-resolution';await sender.setParameters(parameters);
 }
 function startScreenStats(sender){
   if(screenStatsTimer)clearInterval(screenStatsTimer);screenStatsLast=null;
