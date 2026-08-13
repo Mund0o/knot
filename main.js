@@ -16,10 +16,11 @@ let activeShareSourceId = null;
 let linuxShareAudio = null;
 let nativeScreenService = null;
 let selectedPrimaryGpu = null;
-// NVIDIA Broadcast can expose a virtual audio/render surface that contains a
-// monitored microphone. Sharing that application makes a local voice echo
-// unavoidable, so it is never offered as a capture source.
-function isExcludedShareSource(source) { return /\bnvidia\s+broadcast\b/i.test(String(source?.name || '')); }
+// NVIDIA Broadcast/NVBroadcast can expose a virtual audio/render surface that
+// contains a monitored microphone. It must stay out of both the window picker
+// and the Linux PipeWire share route, otherwise a local voice echo is possible.
+function isNvidiaBroadcastLabel(...values) { return values.some(value => /(?:nvidia[\s._-]*broadcast|nvbroadcast)/i.test(String(value || ''))); }
+function isExcludedShareSource(source) { return isNvidiaBroadcastLabel(source?.name); }
 function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
 function pipewireOk(command, args) { try { execFileSync(command, args, { stdio: 'ignore' }); return true; } catch { return false; } }
 function pipewireAsync(command, args) { return new Promise(resolve => execFile(command, args, { encoding: 'utf8', timeout: 2500, maxBuffer: 4*1024*1024 }, (error, stdout) => resolve(error ? '' : String(stdout || '').trim()))); }
@@ -44,10 +45,11 @@ async function routeLinuxDesktopAudio(state) {
     const pid = Number(block.match(/application\.process\.id\s*=\s*"(\d+)"/)?.[1]);
     const appName = block.match(/application\.name\s*=\s*"([^"]+)"/)?.[1] || '';
     const binary = block.match(/application\.process\.binary\s*=\s*"([^"]+)"/)?.[1] || '';
+    const mediaName = block.match(/media\.name\s*=\s*"([^"]+)"/)?.[1] || '';
     // Move only attributable desktop application streams. Knot and its helper
     // processes stay on the normal output, so call playback never enters the
     // share monitor. Module streams have no PID and are deliberately untouched.
-    if (!pid || pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || !currentName || currentName === state.routeSink) continue;
+    if (!pid || pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || isNvidiaBroadcastLabel(appName, binary, mediaName) || !currentName || currentName === state.routeSink) continue;
     if (linuxShareAudio !== state) return;
     const movedOk = await pipewireOkAsync('pactl', ['move-sink-input', id, state.routeSink]);
     if (linuxShareAudio !== state) { if (movedOk) await pipewireOkAsync('pactl', ['move-sink-input', id, currentName]);return; }
@@ -151,7 +153,7 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'messageHistory', 'serverMembersCollapsed']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'messageHistory', 'serverMembersCollapsed']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
