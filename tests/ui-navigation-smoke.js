@@ -31,6 +31,9 @@ if (!mainSource.includes("type: s.id.startsWith('screen:') ? 'screen' : 'applica
 if (!rendererSource.includes('function viableScreenPeer') || !rendererSource.includes('skipPicker:true,expectedPc,expectedCallGen') || !rendererSource.includes('skipPicker:true,expectedVoiceStream,expectedServerId,expectedChannelId') || !rendererSource.includes('screenCaptureAttempt') || rendererSource.includes('nativeScreenBypassOnce') || rendererSource.includes('serverNativeScreenBypassOnce')) {
   throw new Error('A stale call, codec fallback, or audio capture attempt can reopen screen capture after teardown');
 }
+if (rendererSource.includes('if(pc&&!dmCallOngoing())disconnectRoom();if(serverVoiceStream||joinedVoiceChannelId)stopServerVoice()') || !rendererSource.includes('function closeServerPeer') || !rendererSource.includes('Reconcile instead of close-and-recreate') || rendererSource.includes("if(!serverVoiceStream)closeServerMesh();else{$('#serverVoiceStage').hidden=true")) {
+  throw new Error('Browsing Friends/servers can still tear down an active P2P call or rebuild the server mesh');
+}
 if (styleSource.includes('content:"☎"') || !htmlSource.includes('id="icon-call-start"') || !htmlSource.includes('id="icon-call-end"') || !rendererSource.includes('function renderCallButtonState')) {
   throw new Error('Call controls fell back to a duplicated or rotated text handset');
 }
@@ -123,6 +126,11 @@ app.whenReady().then(async () => {
       assert(!voiceTrack.enabled&&serverVoiceMuted,'server mute control did not mute the microphone');
       await selectServerChannel(serverId,generalId);
       assert(joinedVoiceChannelId===voiceId&&!document.querySelector('#serverVoiceDock').hidden,'opening text disconnected server voice');
+      const browseServerId='88888888888888888888888888888888',browseChannelId='99999999999999999999999999999999';
+      directorySnapshot.servers.push({id:browseServerId,name:'Browse Server',picture:'',owner:selfId,members:[selfId],channels:[{id:browseChannelId,type:'text',name:'lobby'}]});
+      selectServer(browseServerId);
+      assert(serverVoiceStream&&joinedVoiceServerId===serverId&&joinedVoiceChannelId===voiceId&&!document.querySelector('#serverVoiceDock').hidden,'browsing another server disconnected the active voice call');
+      selectServer(serverId);
 
       const secondId='55555555555555555555555555555555';
       directorySnapshot.members[secondId]={id:secondId,name:'Second friend',image:'',online:false};
