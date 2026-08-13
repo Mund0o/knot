@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.51",
+  "version": "1.1.52",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -20,18 +20,21 @@
     "test:screen:native": "electron tests/native-presentation-cadence.js && node tests/native-screen-live.js && electron tests/native-screen-transport.js",
     "test:screen:full": "electron tests/full-app-screen-endurance.js",
     "test:screen": "node tests/run-screen-suite.js",
+    "test:windows-audio": "node tests/windows-audio-addon-guard.js && electron tests/windows-audio-renderer-smoke.js",
     "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-service.js && electron tests/linux-gpu-runtime.js",
-    "test": "npm run test:gpu && npm run test:ui && npm run test:screen",
+    "test": "npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
     "deploy": "wrangler deploy",
     "dist": "electron-builder --linux tar.gz AppImage",
-    "dist:win": "electron-builder --win nsis",
-    "dist:all": "electron-builder --win nsis --linux tar.gz AppImage",
+    "dist:win": "npm run verify:addon && electron-builder --win nsis",
+    "dist:all": "npm run verify:addon && electron-builder --win nsis --linux tar.gz AppImage",
     "rebuild:addon": "node rebuild-addon.js",
+    "verify:addon": "node scripts/windows-audio-addon-guard.js",
     "publish": "node publish-update.js"
   },
   "devDependencies": {
     "electron": "^43.2.0",
     "electron-builder": "^26.0.12",
+    "node-gyp": "12.4.0",
     "wrangler": "^4.120.0"
   },
   "dependencies": {
@@ -40,6 +43,7 @@
   },
   "build": {
     "asar": true,
+    "beforePack": "scripts/before-pack.js",
     "appId": "com.pair.p2p",
     "productName": "Knot",
     "files": [
@@ -53,6 +57,8 @@
       "native-screen.js",
       "preload.js",
       "screen-audio-worklet.js",
+      "scripts/before-pack.js",
+      "scripts/windows-audio-addon-guard.js",
       "updater.js",
       "linux-launcher.js",
       "server.js",
@@ -82,6 +88,10 @@
         {
           "from": "addon/build/Release/pair-capture.node",
           "to": "app.asar.unpacked/addon/build/Release/pair-capture.node"
+        },
+        {
+          "from": "addon/build/Release/pair-capture.manifest.json",
+          "to": "app.asar.unpacked/addon/build/Release/pair-capture.manifest.json"
         }
       ]
     },

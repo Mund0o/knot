@@ -6,19 +6,41 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     this.frames = 0;
     this.started = false;
     this.port.onmessage = event => {
-      const samples = event.data instanceof Float32Array ? event.data : new Float32Array(event.data || 0);
-      const frames = Math.floor(samples.length / 2);
+      let samples = event.data instanceof Float32Array ? event.data : new Float32Array(event.data || 0);
+      let frames = Math.floor(samples.length / 2);
       if (!frames) return;
+      // A single delayed IPC delivery can itself be larger than the whole
+      // jitter budget. Keep its newest 80 ms rather than dropping the entire
+      // chunk or playing its stale beginning.
+      if (frames > 3840) {
+        const droppedFrames = frames - 3840;
+        samples = samples.subarray((frames - 3840) * 2);
+        frames = 3840;
+        this.port.postMessage({ type: 'trim', droppedFrames, bufferedFrames: frames });
+      }
       this.queue.push(samples);
       this.frames += frames;
       // Keep 40–160 ms of stereo audio. If IPC or rendering stalls, trim back
       // to about 80 ms instead of replaying seconds of stale desktop sound.
-      while (this.frames > 7680 && this.queue.length && this.frames > 3840) {
-        const oldest = this.queue.shift();
-        this.frames -= Math.floor(oldest.length / 2) - this.offset;
+      if (this.frames > 7680) this.trimTo(3840);
+    };
+  }
+
+  trimTo(targetFrames) {
+    let droppedFrames = 0;
+    while (this.frames > targetFrames && this.queue.length) {
+      const oldest = this.queue[0];
+      const available = Math.floor(oldest.length / 2) - this.offset;
+      const discard = Math.min(available, this.frames - targetFrames);
+      this.offset += discard;
+      this.frames -= discard;
+      droppedFrames += discard;
+      if (this.offset >= Math.floor(oldest.length / 2)) {
+        this.queue.shift();
         this.offset = 0;
       }
-    };
+    }
+    if (droppedFrames) this.port.postMessage({ type: 'trim', droppedFrames, bufferedFrames: this.frames });
   }
 
   process(_inputs, outputs) {

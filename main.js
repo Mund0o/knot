@@ -147,7 +147,7 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareFrameRate', 'directoryUserId', 'directoryToken', 'messageHistory', 'serverMembersCollapsed']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'messageHistory', 'serverMembersCollapsed']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
@@ -204,7 +204,7 @@ function systemAccountAvatar() {
 ipcMain.handle('pair:getSources', async event => {
   if (!isPairRenderer(event)) return [];
   pendingSources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } });
-  return pendingSources.map(s => ({ id: s.id, name: s.name, thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
+  return pendingSources.map(s => ({ id: s.id, name: s.name, type: s.id.startsWith('screen:') ? 'screen' : 'application', thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
 ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
 ipcMain.handle('pair:setPendingSource', (event, id) => {
@@ -469,10 +469,12 @@ app.whenReady().then(() => {
   installLinuxLauncher();
   Menu.setApplicationMenu(null);
   // Needed for the browser File System Access API used to stream large downloads.
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(permission === 'media');
+  const pairRendererPermission = (webContents, permission) =>
+    webContents === mainWin?.webContents && (permission === 'media' || permission === 'speaker-selection');
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(pairRendererPermission(webContents, permission));
   });
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => permission === 'media');
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => pairRendererPermission(webContents, permission));
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
   // System audio is deliberately not granted here. Chromium "loopback" captures
@@ -530,6 +532,108 @@ app.on('window-all-closed', async () => {
 // The addon is built by 'node-gyp rebuild --directory=addon' which outputs to
 // addon/build/Release/pair-capture.node.
 let nativeCapture = null;
+const NATIVE_CAPTURE_ABI = 'knot-screen-audio-v3';
+const NATIVE_AUDIO_FRAME_BYTES = 2 * Float32Array.BYTES_PER_ELEMENT;
+const NATIVE_AUDIO_PACKET_FRAMES = 960; // 20 ms at 48 kHz
+const NATIVE_AUDIO_PACKET_BYTES = NATIVE_AUDIO_PACKET_FRAMES * NATIVE_AUDIO_FRAME_BYTES;
+const NATIVE_AUDIO_MAX_BUFFER_BYTES = NATIVE_AUDIO_PACKET_BYTES * 6;
+const NATIVE_AUDIO_MAX_INFLIGHT = 3;
+let nativeAudioIpc = null;
+let nativeAudioNextSequence = 1;
+let nativeCaptureGeneration = 0;
+
+function resetNativeAudioIpc(webContents = null) {
+  nativeAudioIpc = webContents ? { webContents, chunks: [], bufferedBytes: 0, inflight: new Set(), oldestInflightAt: 0 } : null;
+}
+
+function takeNativeAudioPacket(state) {
+  if (state.bufferedBytes < NATIVE_AUDIO_PACKET_BYTES) return null;
+  const packet = Buffer.allocUnsafe(NATIVE_AUDIO_PACKET_BYTES);
+  const capturedAt = state.chunks[0]?.capturedAt || Date.now();
+  let written = 0;
+  while (written < packet.length && state.chunks.length) {
+    const head = state.chunks[0], length = Math.min(packet.length - written, head.data.length);
+    head.data.copy(packet, written, 0, length);written += length;state.bufferedBytes -= length;
+    if (length === head.data.length) state.chunks.shift();
+    else head.data = head.data.subarray(length);
+  }
+  return { packet, capturedAt };
+}
+
+function flushNativeAudioIpc() {
+  const state = nativeAudioIpc;
+  if (!state || state.webContents.isDestroyed()) return;
+  while (state.inflight.size < NATIVE_AUDIO_MAX_INFLIGHT && state.bufferedBytes >= NATIVE_AUDIO_PACKET_BYTES) {
+    const next = takeNativeAudioPacket(state);if (!next) break;
+    if (Date.now() - next.capturedAt > 250) continue;
+    const sequence = nativeAudioNextSequence++;
+    // Copy out of Buffer's slab before structured cloning. At most three
+    // packets may be waiting for the renderer; acknowledgements provide real
+    // IPC backpressure instead of building an unbounded Electron message queue.
+    const samples = next.packet.buffer.slice(next.packet.byteOffset, next.packet.byteOffset + next.packet.byteLength);
+    try {
+      state.webContents.send('pair:cleanAudio', samples, NATIVE_AUDIO_PACKET_FRAMES, { sequence, capturedAt: next.capturedAt });
+      state.inflight.add(sequence);
+      if (!state.oldestInflightAt) state.oldestInflightAt = Date.now();
+    } catch (error) {
+      console.warn('send cleanAudio err:', error.message);
+      break;
+    }
+  }
+  // A renderer/GPU pause can also lose acknowledgements. Release only the
+  // accounting after a bounded timeout, trim buffered history, and let the
+  // newest packet probe the recovered renderer. Late sequence acknowledgements
+  // are ignored and cannot release a current packet.
+  if (state.inflight.size >= NATIVE_AUDIO_MAX_INFLIGHT && state.oldestInflightAt && Date.now() - state.oldestInflightAt > 500) {
+    state.inflight.clear();state.oldestInflightAt = 0;
+    while (state.bufferedBytes > NATIVE_AUDIO_PACKET_BYTES * 4 && state.chunks.length) {
+      const head = state.chunks.shift();state.bufferedBytes -= head.data.length;
+    }
+    setImmediate(flushNativeAudioIpc);
+  }
+}
+
+function enqueueNativeAudioIpc(webContents, value, framesValue, capturedAtValue = Date.now()) {
+  if (!webContents || webContents.isDestroyed()) return;
+  if (!nativeAudioIpc || nativeAudioIpc.webContents !== webContents) resetNativeAudioIpc(webContents);
+  const frameCount = Math.max(0, Math.min(48000, Math.floor(Number(framesValue) || 0)));
+  if (!frameCount) return;
+  let view;
+  if (value instanceof ArrayBuffer) view = new Uint8Array(value);
+  else if (ArrayBuffer.isView(value)) view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  else return;
+  const input = Buffer.from(view);
+  let stereo;
+  if (input.length >= frameCount * NATIVE_AUDIO_FRAME_BYTES) {
+    stereo = input.subarray(0, frameCount * NATIVE_AUDIO_FRAME_BYTES);
+  } else if (input.length >= frameCount * Float32Array.BYTES_PER_ELEMENT) {
+    // Development builds predating the stereo contract emitted one float per
+    // frame. Keep them audible locally, while release packaging still rejects
+    // those obsolete binaries through the ABI/manifest guard.
+    stereo = Buffer.allocUnsafe(frameCount * NATIVE_AUDIO_FRAME_BYTES);
+    for (let frame = 0; frame < frameCount; frame++) {
+      const sample = input.readFloatLE(frame * Float32Array.BYTES_PER_ELEMENT);
+      stereo.writeFloatLE(sample, frame * NATIVE_AUDIO_FRAME_BYTES);
+      stereo.writeFloatLE(sample, frame * NATIVE_AUDIO_FRAME_BYTES + Float32Array.BYTES_PER_ELEMENT);
+    }
+  } else return;
+  const capturedAt = Number(capturedAtValue);
+  nativeAudioIpc.chunks.push({ data: Buffer.from(stereo), capturedAt: Number.isFinite(capturedAt) ? capturedAt : Date.now() });
+  nativeAudioIpc.bufferedBytes += stereo.length;
+  if (nativeAudioIpc.bufferedBytes > NATIVE_AUDIO_MAX_BUFFER_BYTES) {
+    // Retain only the newest 120 ms. When a renderer recovers from a video/UI
+    // stall, it hears current desktop sound rather than replaying old packets.
+    let discard = nativeAudioIpc.bufferedBytes - NATIVE_AUDIO_MAX_BUFFER_BYTES;
+    while (discard > 0 && nativeAudioIpc.chunks.length) {
+      const head = nativeAudioIpc.chunks[0], length = Math.min(discard, head.data.length);
+      if (length === head.data.length) nativeAudioIpc.chunks.shift();
+      else head.data = head.data.subarray(length);
+      nativeAudioIpc.bufferedBytes -= length;discard -= length;
+    }
+  }
+  flushNativeAudioIpc();
+}
+
 function loadNativeCapture(win) {
   if (nativeCapture) return nativeCapture;
   const paths = [
@@ -543,6 +647,10 @@ function loadNativeCapture(win) {
     try {
       console.log('Trying addon path:', addonPath);
       const addon = require(addonPath);
+      const captureAbi = typeof addon.captureAbi === 'function' ? addon.captureAbi() : '';
+      if (captureAbi !== NATIVE_CAPTURE_ABI) {
+        throw new Error(`capture addon ABI ${captureAbi || 'missing'}; expected ${NATIVE_CAPTURE_ABI} (run npm run rebuild:addon on Windows)`);
+      }
       nativeCapture = addon;
       console.log('Native capture addon loaded from:', addonPath);
       return addon;
@@ -561,6 +669,8 @@ function startNativeCapture(win) {
   if (!addon) { return; }
   if (addon._running) return;
   console.log('native capture: starting...');
+  const generation = ++nativeCaptureGeneration;
+  resetNativeAudioIpc(win);
   let cbCount=0;
   try {
     // Discord-style application shares capture the selected process and its
@@ -573,20 +683,22 @@ function startNativeCapture(win) {
     }
     console.log('native capture target:', includeTarget ? `include process tree ${targetPid}` : `exclude Knot process tree ${targetPid}`);
     addon.start(
-      (buf, frames) => {
+      (buf, frames, capturedAtValue) => {
+        if (!addon._running || generation !== nativeCaptureGeneration) return;
+        const capturedAt = Number(capturedAtValue);
+        if (Number.isFinite(capturedAt) && Date.now() - capturedAt > 250) return;
         cbCount++;
         if (cbCount%50===0) console.log('native capture: data cb #'+cbCount+' frames='+frames);
-        if (win && !win.isDestroyed()) {
-          try { win.send('pair:cleanAudio', buf, frames); } catch(e) { console.warn('send cleanAudio err:', e.message); }
-        }
+        enqueueNativeAudioIpc(win, buf, frames, capturedAt);
       },
       (errMsg) => {
+        if (generation !== nativeCaptureGeneration) return;
         console.warn('native capture err:', errMsg);
         if (win && !win.isDestroyed()) win.send('pair:captureError', errMsg);
         // Fatal native errors end the worker. Join and release its WASAPI/TSFN
         // resources after this TSFN callback returns, so a later share can start
         // a fresh instance without releasing the callback while it is executing.
-        setImmediate(() => { try { addon.stop(); } catch {} addon._running = false; });
+        setImmediate(() => { if (generation !== nativeCaptureGeneration) return;addon._running = false;resetNativeAudioIpc();try { addon.stop(); } catch {} });
       },
       targetPid,
       includeTarget
@@ -598,18 +710,28 @@ function startNativeCapture(win) {
   } catch(e) {
     console.warn('native capture start failed:', e.message);
     addon._running = false;
+    resetNativeAudioIpc();
     activeShareSourceId = null;
     if (win && !win.isDestroyed()) win.send('pair:captureError', 'Start failed: '+e.message);
   }
 }
 function stopNativeCapture() {
+  nativeCaptureGeneration++;
   const addon = nativeCapture;
   if (addon && addon._running) {
-    try { addon.stop(); } catch {}
     addon._running = false;
+    try { addon.stop(); } catch {}
   }
+  resetNativeAudioIpc();
   activeShareSourceId = null;
 }
+ipcMain.on('pair:cleanAudioAck', (event, sequenceValue) => {
+  if (!isPairRenderer(event)) return;
+  const state = nativeAudioIpc, sequence = Math.floor(Number(sequenceValue) || 0);
+  if (!state || state.webContents !== event.sender || !state.inflight.delete(sequence)) return;
+  state.oldestInflightAt = state.inflight.size ? Date.now() : 0;
+  flushNativeAudioIpc();
+});
 ipcMain.on('pair:startCapture', (event) => {
   if (!isPairRenderer(event)) return;
   console.log('native capture: IPC startCapture');

@@ -1,0 +1,7 @@
+{
+  "captureAbi": "knot-screen-audio-v3",
+  "arch": "x64",
+  "electronVersion": "43.2.0",
+  "sourceSha256": "74ab9a5abb11180839c61298102be14926e04eb44d47086ee62e2d67f51f0ab1",
+  "binarySha256": "76294781b82e4f04ae607b37585f24a7a0296d6e469459fa722b3fd476e1caec"
+}

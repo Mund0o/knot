@@ -1,10 +1,10 @@
 {
-  "version": "1.1.51",
-  "notes": "Fixes real-network screen-share frame drops, AV1 black screens, AMD/NVIDIA decoder recovery, GPU routing, fullscreen sharing, and speaking indicators.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.51/pair-p2p-1.1.51.tar.gz",
-  "linuxSha256": "9aa860f3ea9c5d9ef9572320b5d3232d1ce12b6fee24cee978c143ef4e0c4188",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.51/Knot-1.1.51.AppImage",
-  "linuxAppImageSha256": "953a20b3c3b0a30145cc789d69443b65c30363305feba3cbd0b41872615c3331",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.51/Knot.Setup.1.1.51.exe",
-  "winSha256": "2bcbee4bcfa70cf68d33c12e8b18f0f439d4b00c041015451bb737f75d3a48ff"
+  "version": "1.1.52",
+  "notes": "Locked screen-share quality, smoother 4K60 streaming, Windows computer audio, and improved voice controls.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.52/pair-p2p-1.1.52.tar.gz",
+  "linuxSha256": "d102cc5daf2e18e69c9be03be4e335e9b93fe76fcea985ce6c8d0b840e43290e",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.52/Knot-1.1.52.AppImage",
+  "linuxAppImageSha256": "88c6b5ed20d23482e711f5590445f3ca97534a350eb8bf8cb740326df14f6397",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.52/Knot.Setup.1.1.52.exe",
+  "winSha256": "19560ee101ab8c05545971e0354fcca7c87ec4c2ab7658f3b1b118c214b0d36a"
 }

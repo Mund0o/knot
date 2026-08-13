@@ -7,10 +7,17 @@
 #include <propvarutil.h>
 #include <thread>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
 #include <string>
+
+// Bump this whenever the native/JavaScript capture contract changes. Release
+// packaging verifies that the compiled PE contains this exact marker and that
+// its manifest hashes the current source, so an older addon cannot silently be
+// copied into a new installer.
+static constexpr char kCaptureAbi[] = "knot-screen-audio-v3";
 
 // Windows process loopback lets us capture the system mix while excluding
 // Knot's process tree. This is the same class of capture Discord uses to keep
@@ -68,10 +75,10 @@ public:
   void start(Napi::Function dataCbFn,Napi::Function errCbFn,DWORD targetPid,bool includeTarget){
     if(runningFlag.load())return;
     dataCb=Napi::ThreadSafeFunction::New(
-      dataCbFn.Env(),dataCbFn,Napi::String::New(dataCbFn.Env(),"data"),0,1
+      dataCbFn.Env(),dataCbFn,Napi::String::New(dataCbFn.Env(),"data"),4,1
     );
     errCb=Napi::ThreadSafeFunction::New(
-      errCbFn.Env(),errCbFn,Napi::String::New(errCbFn.Env(),"err"),0,1
+      errCbFn.Env(),errCbFn,Napi::String::New(errCbFn.Env(),"err"),1,1
     );
     HRESULT hr=initWasapi(targetPid,includeTarget);
     if(FAILED(hr)){
@@ -224,9 +231,11 @@ private:
     }
 
     UINT32 fCopy=frames;
-    auto status=dataCb.NonBlockingCall([buf,fCopy](Napi::Env e,Napi::Function cb){
+    const auto capturedAtMs=std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+    auto status=dataCb.NonBlockingCall([buf,fCopy,capturedAtMs](Napi::Env e,Napi::Function cb){
       auto ab=Napi::ArrayBuffer::New(e,buf,(size_t)fCopy*2*sizeof(float),[](Napi::Env, void* data){std::free(data);});
-      cb.Call({ab,Napi::Number::New(e,(double)fCopy)});
+      cb.Call({ab,Napi::Number::New(e,(double)fCopy),Napi::Number::New(e,(double)capturedAtMs)});
     });
     if(status!=napi_ok){
       free(buf);
@@ -284,12 +293,16 @@ static Napi::Value Stop(const Napi::CallbackInfo& info){
 static Napi::Value GetFormat(const Napi::CallbackInfo& info){
   return static_cast<Capture*>(info.Data())->getFormat(info.Env());
 }
+static Napi::Value CaptureAbi(const Napi::CallbackInfo& info){
+  return Napi::String::New(info.Env(),kCaptureAbi);
+}
 static Napi::Object Init(Napi::Env env,Napi::Object exports){
   auto* cap=new Capture();
   exports.Set("start",Napi::Function::New(env,Start,"start",cap));
   exports.Set("stop",Napi::Function::New(env,Stop,"stop",cap));
   exports.Set("getFormat",Napi::Function::New(env,GetFormat,"getFormat",cap));
   exports.Set("windowProcessId",Napi::Function::New(env,WindowProcessId,"windowProcessId"));
+  exports.Set("captureAbi",Napi::Function::New(env,CaptureAbi,"captureAbi"));
   napi_add_env_cleanup_hook(env,[](void* d){delete static_cast<Capture*>(d);},cap);
   return exports;
 }

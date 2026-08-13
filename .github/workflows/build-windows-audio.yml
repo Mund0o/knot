@@ -2,11 +2,42 @@ name: Build Windows audio module
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'addon/**'
+      - 'app.js'
+      - 'main.js'
+      - 'preload.js'
+      - 'screen-audio-worklet.js'
+      - 'rebuild-addon.js'
+      - 'tests/windows-audio-addon-guard.js'
+      - 'tests/windows-audio-renderer-smoke.js'
+      - 'scripts/windows-audio-addon-guard.js'
+      - 'scripts/before-pack.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build-windows-audio.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'addon/**'
+      - 'app.js'
+      - 'main.js'
+      - 'preload.js'
+      - 'screen-audio-worklet.js'
+      - 'rebuild-addon.js'
+      - 'tests/windows-audio-addon-guard.js'
+      - 'tests/windows-audio-renderer-smoke.js'
+      - 'scripts/windows-audio-addon-guard.js'
+      - 'scripts/before-pack.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/build-windows-audio.yml'
 
 jobs:
   build:
     runs-on: windows-2022
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,9 +48,19 @@ jobs:
         with:
           arch: x64
       - run: npm ci
-      - run: npx --yes node-gyp rebuild --directory addon --target=43.2.0 --arch=x64 --dist-url=https://electronjs.org/headers
+      - run: npm run rebuild:addon
+      - run: npm run verify:addon
+      - run: npm run test:windows-audio
+      - run: npm run dist:win
       - uses: actions/upload-artifact@v4
         with:
           name: pair-capture-windows-x64
-          path: addon/build/Release/pair-capture.node
+          path: |
+            addon/build/Release/pair-capture.node
+            addon/build/Release/pair-capture.manifest.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knot-windows-installer
+          path: dist/Knot Setup *.exe
           if-no-files-found: error

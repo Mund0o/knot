@@ -8,15 +8,20 @@ const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 // stdout. Pausing back-pressures the capture/encoder pipeline and makes the
 // desktop and Knot compositor visibly stutter when a WAN peer cannot keep up.
 const MAX_QUEUE_BYTES = 1024 * 1024;
+let recorderRunnerResolved = false;
+let recorderRunner = null;
+const nativeInfoCache = new Map();
 
 function gpuScreenRecorderCommand() {
+  if (recorderRunnerResolved) return recorderRunner;
+  recorderRunnerResolved = true;
   for (const file of ['/usr/bin/gpu-screen-recorder', '/usr/local/bin/gpu-screen-recorder']) {
-    if (fs.existsSync(file)) return { command: file, prefix: [], source: 'system' };
+    if (fs.existsSync(file)) return recorderRunner = { command: file, prefix: [], source: 'system' };
   }
   if (!fs.existsSync('/usr/bin/flatpak')) return null;
   try {
     execFileSync('/usr/bin/flatpak', ['info', FLATPAK_APP], { stdio: 'ignore', timeout: 4000 });
-    return { command: '/usr/bin/flatpak', prefix: ['run', '--command=gpu-screen-recorder', FLATPAK_APP], source: 'flatpak' };
+    return recorderRunner = { command: '/usr/bin/flatpak', prefix: ['run', '--command=gpu-screen-recorder', FLATPAK_APP], source: 'flatpak' };
   } catch {
     return null;
   }
@@ -53,11 +58,13 @@ function validateNativeScreenInfo(primaryGpuVendor = '', primaryGpuCard = '', in
 function nativeScreenInfo(primaryGpuVendor = '', primaryGpuCard = '') {
   if (process.platform !== 'linux') return { supported: false, reason: 'Native GPU AV1 sharing is currently available on Linux' };
   if (!['0x10de', '0x1002'].includes(String(primaryGpuVendor).toLowerCase())) return { supported: false, reason: 'A discrete NVIDIA or AMD GPU is required' };
+  const cacheKey = `${String(primaryGpuVendor).toLowerCase()}|${primaryGpuCard}`;
+  if (nativeInfoCache.has(cacheKey)) return nativeInfoCache.get(cacheKey);
   const runner = gpuScreenRecorderCommand();
   if (!runner) return { supported: false, reason: 'Install GPU Screen Recorder or its Flatpak to enable GPU AV1 sharing' };
   try {
     const output = execFileSync(runner.command, [...runner.prefix, '--info'], { encoding: 'utf8', timeout: 7000 });
-    return validateNativeScreenInfo(primaryGpuVendor, primaryGpuCard, parseInfo(output), runner.source);
+    const result = validateNativeScreenInfo(primaryGpuVendor, primaryGpuCard, parseInfo(output), runner.source);nativeInfoCache.set(cacheKey, result);return result;
   } catch (error) {
     return { supported: false, reason: error?.message || 'GPU Screen Recorder capability check failed' };
   }
@@ -116,12 +123,13 @@ class NativeScreenService {
     const runner = gpuScreenRecorderCommand();if (!runner) throw new Error('GPU Screen Recorder is unavailable');
     const codec = options.codec === 'h264' ? 'h264' : 'av1';
     const fps = Number(options.fps) === 30 ? 30 : 60;
-    const width = [1280, 1920, 2560, 3840].includes(Number(options.width)) ? Number(options.width) : 3840;
-    const height = [720, 1080, 1440, 2160].includes(Number(options.height)) ? Number(options.height) : 2160;
+    const requestedWidth = Number(options.width),requestedHeight = Number(options.height),sourceSize = requestedWidth === 0 && requestedHeight === 0;
+    const width = sourceSize ? 0 : [1280, 1920, 2560, 3840].includes(requestedWidth) ? requestedWidth : 3840;
+    const height = sourceSize ? 0 : [720, 1080, 1440, 2160].includes(requestedHeight) ? requestedHeight : 2160;
     const bitrateKbps = Math.max(2000, Math.min(40000, Math.round(Number(options.bitrateKbps) || 6000)));
     const cursor = options.cursor === 'never' ? 'no' : 'yes';
     const testCapture = process.env.KNOT_NATIVE_SCREEN_TEST === '1' && /^[A-Za-z0-9_.-]{1,64}$/.test(options.captureSource || '') ? options.captureSource : '';
-    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'content', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '1', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm'];
+    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'cfr', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '0.5', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm'];
     const child = spawnRecorder(runner, args);
     const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', active: true, stopping: false, stderr: '', seq: 0, discontinuity: false, droppedSegments: 0, segmenter: new WebmClusterSegmenter() };
     this.session = session;

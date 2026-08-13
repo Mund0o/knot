@@ -59,15 +59,26 @@ SHA-256 checksum, installs it, and restarts automatically.
 ## Screen sharing architecture
 
 Knot keeps screen video, computer sound, and voice on separate WebRTC paths.
-Screen capture defaults to 1080p60, prefers broadly hardware-accelerated H.264,
-retains retransmission/FEC codecs, and keeps every video target below a 60 Mbps
-user ceiling. Native AV1 keeps 3840×2160 capture at 60 fps while targeting 10
-Mbps so voice and control traffic have real upload headroom. Its low-priority,
-unordered, partially reliable transport abandons packets after 100 ms, bounds
-the send queue to 256 KiB, drops stale deltas, and resets only at a complete AV1
-keyframe. Mic audio remains high priority. Congestion stays on efficient AV1;
-only a sustained decoder failure or incompatible client switches that viewer to
-a 12 Mbps-capped H.264 compatibility stream.
+The share dialog explicitly selects the source, resolution, frame rate, and
+sound setting before Go Live. A selected 4K60 stream starts and remains at
+3840×2160/60 instead of stepping through lower resolutions; congestion is
+reported and stale frames may be discarded, but the selected dimensions are
+not changed. Chromium shares prefer broadly hardware-accelerated codecs and
+retain retransmission/FEC support under a user-controlled bitrate ceiling.
+
+Native AV1 keeps 3840×2160 capture at 60 fps while targeting about 8.3 Mbps so
+voice and control traffic retain upload headroom. Its low-priority, unordered,
+one-retransmit transport uses a 512 KiB segment-aware admission budget, drops
+stale deltas, and recovers at half-second keyframes. Mic audio remains high
+priority. Congestion stays on efficient AV1; only a decoder failure or
+incompatible client switches that viewer to a bandwidth-capped compatibility
+codec without changing the chosen resolution.
+
+On Windows, shared computer sound comes from process-loopback capture: an
+application share includes the selected process tree, while a full-display
+share excludes Knot so returned call audio cannot echo into the stream. PCM is
+batched into bounded 20 ms packets and rendered through an AudioWorklet, and
+all DM/server screen-audio elements follow the selected output device.
 
 With **Hardware acceleration** enabled, Knot requests the high-performance GPU
 for compositing, image and canvas rasterization, zero-copy tile presentation,

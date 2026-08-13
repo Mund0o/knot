@@ -8,6 +8,15 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <svg class="icon-definitions" aria-hidden="true" focusable="false">
+      <symbol id="icon-call-start" viewBox="0 0 24 24">
+        <path d="M5.7 3.5h2.7l1.5 4.1-2.2 1.6a14.2 14.2 0 0 0 7.1 7.1l1.6-2.2 4.1 1.5v2.7c0 .9-.7 1.7-1.7 1.7C10.8 20 4 13.2 4 5.2c0-.9.8-1.7 1.7-1.7Z" />
+        <path d="M14.5 4.2a5.3 5.3 0 0 1 5.3 5.3M14.5 7.3a2.2 2.2 0 0 1 2.2 2.2" />
+      </symbol>
+      <symbol id="icon-call-end" viewBox="0 0 24 24">
+        <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .38-.22.72-.56.89-.98.49-1.88 1.12-2.66 1.85-.18.17-.46.17-.64.01L.35 12.38a.5.5 0 0 1-.01-.7C3.39 8.74 7.5 7 12 7s8.61 1.74 11.66 4.68a.5.5 0 0 1-.01.7l-3.19 3.19c-.18.16-.46.16-.64-.01-.78-.73-1.68-1.36-2.66-1.85a.99.99 0 0 1-.56-.89v-3.1A15.17 15.17 0 0 0 12 9Z" />
+      </symbol>
+    </svg>
     <main class="app-shell">
       <aside class="app-rail" aria-label="Knot navigation">
         <div class="rail-top"><button id="homeButton" class="rail-brand" type="button" aria-label="Knot home — friends and direct messages" title="Knot home"><img src="build/icon.png" alt="" /></button><div id="serverList" class="server-list" aria-label="Your servers"></div><button id="addServer" class="rail-button rail-add" type="button" aria-label="Create or join a server" title="Create or join a server">+</button></div>
@@ -30,11 +39,11 @@
         </section>
         <section id="serverVoiceDock" class="server-voice-dock" aria-label="Voice connection controls" hidden>
           <div class="server-voice-summary"><span class="server-voice-signal" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 9v6h4l5 4V5L9 9H5Zm11.5 3a4.5 4.5 0 0 0-2-3.7v7.4a4.5 4.5 0 0 0 2-3.7Zm0-8v2.1a7 7 0 0 1 0 11.8V20a9 9 0 0 0 0-16Z"/></svg></span><div><strong>Voice Connected</strong><span id="serverVoiceDockChannel">Voice channel</span><time id="serverVoiceDockTime">0:00</time></div></div>
-          <div class="server-voice-actions"><button id="serverVoiceMute" type="button" aria-label="Mute microphone" title="Mute microphone"><span aria-hidden="true">♩</span></button><button id="serverVoiceShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="serverVoiceHangup" class="voice-dock-hangup" type="button" aria-label="Disconnect from voice" title="Disconnect"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5c-3.7 0-7.2 1.2-9.8 3.4l2.6 3.2c.4.5 1.2.6 1.7.2l2-1.5c.4-.3.6-.8.5-1.3l-.2-1c2.1-.6 4.3-.6 6.4 0l-.2 1c-.1.5.1 1 .5 1.3l2 1.5c.5.4 1.3.3 1.7-.2l2.6-3.2A15.2 15.2 0 0 0 12 8.5Z"/></svg></button></div>
+          <div class="server-voice-actions"><button id="serverVoiceMute" type="button" aria-label="Mute microphone" title="Mute microphone"><span aria-hidden="true">♩</span></button><button id="serverVoiceShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="serverVoiceHangup" class="voice-dock-hangup" type="button" aria-label="Disconnect from voice" title="Disconnect"><svg class="call-icon call-icon-end" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-call-end"></use></svg></button></div>
         </section>
         <section id="dmVoiceDock" class="server-voice-dock dm-voice-dock" aria-label="Direct call controls" hidden>
           <div class="server-voice-summary"><span class="server-voice-signal" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 9v6h4l5 4V5L9 9H5Zm11.5 3a4.5 4.5 0 0 0-2-3.7v7.4a4.5 4.5 0 0 0 2-3.7Zm0-8v2.1a7 7 0 0 1 0 11.8V20a9 9 0 0 0 0-16Z"/></svg></span><div><strong>Voice Connected</strong><span id="dmVoiceDockName">Direct call</span><time id="dmVoiceDockTime">0:00</time></div></div>
-          <div class="server-voice-actions"><button id="dmVoiceMute" type="button" aria-label="Mute microphone" title="Mute microphone"><span aria-hidden="true">♩</span></button><button id="dmVoiceShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="dmVoiceHangup" class="voice-dock-hangup" type="button" aria-label="End call" title="End call"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5c-3.7 0-7.2 1.2-9.8 3.4l2.6 3.2c.4.5 1.2.6 1.7.2l2-1.5c.4-.3.6-.8.5-1.3l-.2-1c2.1-.6 4.3-.6 6.4 0l-.2 1c-.1.5.1 1 .5 1.3l2 1.5c.5.4 1.3.3 1.7-.2l2.6-3.2A15.2 15.2 0 0 0 12 8.5Z"/></svg></button></div>
+          <div class="server-voice-actions"><button id="dmVoiceMute" type="button" aria-label="Mute microphone" title="Mute microphone"><span aria-hidden="true">♩</span></button><button id="dmVoiceShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="dmVoiceHangup" class="voice-dock-hangup" type="button" aria-label="End call" title="End call"><svg class="call-icon call-icon-end" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-call-end"></use></svg></button></div>
         </section>
         <div class="presence-card"><span id="sidebarProfileAvatar" class="sidebar-profile-avatar"><span class="avatar-letter">Y</span><i id="directoryPresence"></i></span><div><strong id="sidebarProfileName">You</strong><span id="directoryStatus">Connecting…</span></div></div>
       </aside>
@@ -50,6 +59,37 @@
       </dialog>
       <dialog id="channelDialog" class="channel-dialog" aria-labelledby="channelDialogTitle">
         <form id="channelForm"><div class="server-dialog-header"><div><span id="channelDialogKind" class="eyebrow">TEXT CHANNEL</span><h2 id="channelDialogTitle">Create channel</h2></div><button id="closeChannelDialog" class="icon-button" type="button" aria-label="Close channel dialog">×</button></div><label for="newChannelName">Channel name</label><input id="newChannelName" maxlength="48" autocomplete="off" placeholder="new-channel" /><p id="channelDialogStatus" class="settings-hint" aria-live="polite"></p><button class="primary" type="submit">Create channel</button></form>
+      </dialog>
+      <dialog id="screenShareDialog" class="screen-share-dialog" aria-labelledby="screenShareDialogTitle" aria-describedby="screenShareDialogDescription">
+        <form id="screenShareForm" method="dialog">
+          <header class="screen-share-header">
+            <div><p class="eyebrow">SCREEN SHARE</p><h2 id="screenShareDialogTitle">Share Your Screen</h2><p id="screenShareDialogDescription">Choose exactly what to stream. Nothing starts until you press Go Live.</p></div>
+            <button id="screenShareClose" class="icon-button" type="button" aria-label="Close screen share picker">×</button>
+          </header>
+          <section id="screenShareSourceStep" class="screen-share-step" aria-labelledby="screenShareSourceHeading">
+            <h3 id="screenShareSourceHeading" class="sr-only">Choose a source</h3>
+            <div class="screen-share-tabs" role="tablist" aria-label="Source type">
+              <button id="screenShareApplicationsTab" type="button" role="tab" aria-selected="true" aria-controls="screenShareSourcePanel" data-source-tab="application">Applications</button>
+              <button id="screenShareScreensTab" type="button" role="tab" aria-selected="false" aria-controls="screenShareSourcePanel" data-source-tab="screen">Screens</button>
+            </div>
+            <div id="screenShareSourcePanel" role="tabpanel" aria-live="polite">
+              <div id="screenShareSourceGrid" class="screen-share-source-grid" role="group" aria-label="Available share sources"></div>
+              <p id="screenShareSourceEmpty" class="screen-share-empty" hidden>No sources are available in this category.</p>
+            </div>
+          </section>
+          <section id="screenShareQualityStep" class="screen-share-step screen-share-quality-step" aria-labelledby="screenShareQualityHeading" hidden>
+            <div class="screen-share-preview-card">
+              <div class="screen-share-preview-media"><img id="screenSharePreviewImage" alt="" /><span id="screenSharePortalPreview" class="screen-share-portal-preview" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 4h18v13H3V4Zm2 2v9h14V6H5Zm4 13h6v2H9v-2Z"/></svg></span></div>
+              <div><span>WHAT YOU'RE STREAMING</span><strong id="screenSharePreviewName">System screen picker</strong></div>
+            </div>
+            <div class="screen-share-quality-controls">
+              <fieldset><legend id="screenShareQualityHeading">Resolution</legend><div class="screen-share-choice-grid resolution-choices" role="radiogroup" aria-labelledby="screenShareQualityHeading"><button type="button" data-share-resolution="source">Source</button><button type="button" data-share-resolution="2160"><strong>4K</strong><small>2160p</small></button><button type="button" data-share-resolution="1440">1440p</button><button type="button" data-share-resolution="1080">1080p</button><button type="button" data-share-resolution="720">720p</button></div></fieldset>
+              <fieldset><legend id="screenShareFpsHeading">Frame Rate</legend><div class="screen-share-choice-grid fps-choices" role="radiogroup" aria-labelledby="screenShareFpsHeading"><button type="button" data-share-fps="60"><strong>60</strong><small>FPS</small></button><button type="button" data-share-fps="30"><strong>30</strong><small>FPS</small></button></div></fieldset>
+            </div>
+            <label class="screen-share-audio-switch" for="screenShareAudio"><span><strong>Share computer sound</strong><small>Desktop apps and games are included; Knot voice stays separate.</small></span><input id="screenShareAudio" type="checkbox" role="switch" /></label>
+          </section>
+          <footer class="screen-share-footer"><button id="screenShareBack" type="button" class="text-button" hidden>Back</button><span></span><button id="screenShareCancel" type="button" class="text-button">Cancel</button><button id="screenShareContinue" type="submit" class="primary" disabled>Continue</button><button id="screenShareGoLive" type="submit" class="primary" hidden>Go Live</button></footer>
+        </form>
       </dialog>
       <button id="panelBackdrop" class="panel-backdrop" type="button" aria-label="Close open panel" hidden></button>
       <div class="app-content">
@@ -121,7 +161,7 @@
         <div class="server-stage-heading"><div><span class="server-stage-live">Voice Connected</span><h2 id="serverVoiceStageChannel">Voice channel</h2></div><time id="serverVoiceStageTime">0:00</time></div>
         <div id="serverVoiceStageMembers" class="server-stage-members"></div>
         <div id="serverVoiceScreens" class="server-stage-screens"><video id="serverVoiceScreenPreview" muted autoplay playsinline hidden></video></div>
-        <div class="server-stage-controls"><button id="serverStageMute" type="button" aria-label="Mute microphone" title="Mute microphone">♩</button><button id="serverStageShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="serverStageLeave" class="leave" type="button" aria-label="Disconnect from voice" title="Disconnect"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5c-3.7 0-7.2 1.2-9.8 3.4l2.6 3.2c.4.5 1.2.6 1.7.2l2-1.5c.4-.3.6-.8.5-1.3l-.2-1c2.1-.6 4.3-.6 6.4 0l-.2 1c-.1.5.1 1 .5 1.3l2 1.5c.5.4 1.3.3 1.7-.2l2.6-3.2A15.2 15.2 0 0 0 12 8.5Z"/></svg></button></div>
+        <div class="server-stage-controls"><button id="serverStageMute" type="button" aria-label="Mute microphone" title="Mute microphone">♩</button><button id="serverStageShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="serverStageLeave" class="leave" type="button" aria-label="Disconnect from voice" title="Disconnect"><svg class="call-icon call-icon-end" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-call-end"></use></svg></button></div>
       </section>
 
       <section id="voicePanel" class="voice card">
@@ -135,7 +175,7 @@
             <section class="control-cluster call-cluster" aria-labelledby="voiceControlLabel">
               <span id="voiceControlLabel" class="control-label">Voice</span>
               <div class="control-row">
-                <button id="callBtn" class="primary" disabled title="Start voice call">Start call</button>
+                <button id="callBtn" class="primary" data-call-state="start" disabled title="Start voice call" aria-label="Start voice call"><svg class="call-icon call-icon-start" data-call-icon="start" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-call-start"></use></svg><svg class="call-icon call-icon-end" data-call-icon="end" viewBox="0 0 24 24" aria-hidden="true" hidden><use href="#icon-call-end"></use></svg><span class="call-button-label">Start call</span></button>
                 <button id="muteBtn" hidden title="Mute microphone">Mute</button>
                 <label class="sr-only" for="volumeSlider">Friend volume</label><input id="volumeSlider" type="range" min="0" max="100" value="50" class="volume-slider" hidden aria-label="Friend volume" /><output id="volumeValue" class="volume-value" hidden>50%</output>
               </div>
@@ -145,18 +185,6 @@
               <span id="screenControlLabel" class="control-label">Screen share</span>
               <div class="screen-controls">
                 <button id="screenBtn" disabled title="Share screen">Share screen</button>
-                <select id="screenPreset" class="preset-select" disabled aria-label="Screen share quality">
-                  <option value="source60">Source 60fps</option>
-                  <option value="source30">Source 30fps</option>
-                  <option value="2160p60">4K 60fps</option>
-                  <option value="2160p30">4K 30fps</option>
-                  <option value="1440p60">1440p 60fps</option>
-                  <option value="1440p30">1440p 30fps</option>
-                  <option value="1080p60">1080p 60fps</option>
-                  <option value="1080p30">1080p 30fps</option>
-                  <option value="720p60">720p 60fps</option>
-                  <option value="720p30">720p 30fps</option>
-                </select>
                 <span id="screenStatus" class="screen-status">Not sharing</span>
               </div>
             </section>

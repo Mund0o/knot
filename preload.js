@@ -94,7 +94,13 @@ contextBridge.exposeInMainWorld('pairCapture', {
   // Register for isolated desktop/application audio data from the native addon.
   onCleanAudio: cb => {
     if (typeof cb !== 'function') return () => {};
-    const listener = (_e, buf, frames) => cb(buf, frames);
+    const listener = (_e, buf, frames, metadata) => {
+      try { cb(buf, frames, metadata || null); }
+      finally {
+        const sequence = Number(metadata?.sequence);
+        if (Number.isInteger(sequence) && sequence > 0) ipcRenderer.send('pair:cleanAudioAck', sequence);
+      }
+    };
     ipcRenderer.on('pair:cleanAudio', listener);
     return () => ipcRenderer.removeListener('pair:cleanAudio', listener);
   },
