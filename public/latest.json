@@ -1,10 +1,10 @@
 {
-  "version": "1.1.61",
-  "notes": "Polishes the voice-volume slider and adds rich, playable media link embeds.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.61/pair-p2p-1.1.61.tar.gz?build=5c6f3eb",
-  "linuxSha256": "5c116736ff9ceb01d1d61c8a073e7e88c46dee2e373c54bf446dc2e8941fb559",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.61/Knot-1.1.61.AppImage",
-  "linuxAppImageSha256": "59ed55ff4cbaaab8e1b559b3c262c031fdda35552eb9eacc0ab89d6204372789",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.61/Knot.Setup.1.1.61.exe",
-  "winSha256": "2e2e441a12b896225a64598be13705faf900724696aaf791715508568de8b52d"
+  "version": "1.1.62",
+  "notes": "Linux screen-share audio stays available when playback begins after sharing starts.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.62/pair-p2p-1.1.62.tar.gz",
+  "linuxSha256": "e2280b0e1912b5f0af2631bcd0005610e10bb503160751c77cbd6bc8c3aaa7c0",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.62/Knot-1.1.62.AppImage",
+  "linuxAppImageSha256": "8b63e5fe6f54eebd3caa936641ef2362d2bddceef3a022fdef11d51731dbf21e",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.62/Knot.Setup.1.1.62.exe",
+  "winSha256": "df8bae956cc21d06ec5e928d1158e88007d2357198850ca712d16d88029632fe"
 }
