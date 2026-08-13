@@ -16,6 +16,10 @@ let activeShareSourceId = null;
 let linuxShareAudio = null;
 let nativeScreenService = null;
 let selectedPrimaryGpu = null;
+// NVIDIA Broadcast can expose a virtual audio/render surface that contains a
+// monitored microphone. Sharing that application makes a local voice echo
+// unavoidable, so it is never offered as a capture source.
+function isExcludedShareSource(source) { return /\bnvidia\s+broadcast\b/i.test(String(source?.name || '')); }
 function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
 function pipewireOk(command, args) { try { execFileSync(command, args, { stdio: 'ignore' }); return true; } catch { return false; } }
 function pipewireAsync(command, args) { return new Promise(resolve => execFile(command, args, { encoding: 'utf8', timeout: 2500, maxBuffer: 4*1024*1024 }, (error, stdout) => resolve(error ? '' : String(stdout || '').trim()))); }
@@ -203,7 +207,7 @@ function systemAccountAvatar() {
 
 ipcMain.handle('pair:getSources', async event => {
   if (!isPairRenderer(event)) return [];
-  pendingSources = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } });
+  pendingSources = (await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } })).filter(source => !isExcludedShareSource(source));
   return pendingSources.map(s => ({ id: s.id, name: s.name, type: s.id.startsWith('screen:') ? 'screen' : 'application', thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
 ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
@@ -498,6 +502,14 @@ app.whenReady().then(() => {
       } else {
         const useId = pendingSourceId;
         src = useId ? pendingSources.find(source => source.id === useId) : null;
+        // Windows can invalidate desktopCapturer thumbnails while the custom
+        // quality dialog is open. Reacquire the selected id at the point the
+        // browser consumes it rather than failing the entire share as “no
+        // source selected”.
+        if (!src && useId) {
+          const fresh = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 1, height: 1 } });
+          src = fresh.find(source => source.id === useId && !isExcludedShareSource(source));
+        }
       }
       pendingSourceId = null;
       pendingSources = [];
