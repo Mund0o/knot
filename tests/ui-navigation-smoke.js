@@ -34,6 +34,9 @@ if (!rendererSource.includes('function viableScreenPeer') || !rendererSource.inc
 if (rendererSource.includes('if(pc&&!dmCallOngoing())disconnectRoom();if(serverVoiceStream||joinedVoiceChannelId)stopServerVoice()') || !rendererSource.includes('function closeServerPeer') || !rendererSource.includes('Reconcile instead of close-and-recreate') || rendererSource.includes("if(!serverVoiceStream)closeServerMesh();else{$('#serverVoiceStage').hidden=true")) {
   throw new Error('Browsing Friends/servers can still tear down an active P2P call or rebuild the server mesh');
 }
+if (!rendererSource.includes('function activateDmView(friend)') || !rendererSource.includes("if(dmConnectingPeerId===id){pairHint.textContent='Connecting directly to '+friend.name+'…';return}") || !rendererSource.includes('if(samePeer&&directoryUserId<value.from)return') || !rendererSource.includes("'Waiting for someone to join'")) {
+  throw new Error('DM selection can still duplicate connection attempts, race simultaneous clicks, or show an absent friend as in the call');
+}
 if (styleSource.includes('content:"☎"') || !htmlSource.includes('id="icon-call-start"') || !htmlSource.includes('id="icon-call-end"') || !rendererSource.includes('function renderCallButtonState')) {
   throw new Error('Call controls fell back to a duplicated or rotated text handset');
 }
