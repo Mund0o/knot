@@ -1,10 +1,10 @@
 {
-  "version": "1.1.54",
-  "notes": "Fixes Windows screen-share source handoff after the picker refreshes.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.54/pair-p2p-1.1.54.tar.gz",
-  "linuxSha256": "aca531e2d2c220812ef6cfb5f9fc676927ff2f2520e162ff81311df415d1a67a",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.54/Knot-1.1.54.AppImage",
-  "linuxAppImageSha256": "409c280daad247bf6f1de8b113baa79d9c9ce266e0d9c6ab1ef1da2d017594c9",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.54/Knot.Setup.1.1.54.exe",
-  "winSha256": "c0eb4ec29329b8d6153da889bbb4b8c19ae798fc069673ed3f532c2989beaf5c"
+  "version": "1.1.55",
+  "notes": "Enables Windows hardware screen encoding and shortens Linux AV1 4K60 recovery stalls.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.55/pair-p2p-1.1.55.tar.gz",
+  "linuxSha256": "49fc0198c542aacd23f6f4ae84843ce6febd87e17ce2fbc8cc5f1cf42b6bb7e0",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.55/Knot-1.1.55.AppImage",
+  "linuxAppImageSha256": "41ea8d300cb30aacb8c5e7897c2cb7d90491f70183a8666ddb9e866f8627f249",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.55/Knot.Setup.1.1.55.exe",
+  "winSha256": "01a901acc02370680c4a827a86161e1e169a8fd26f859178b1d1dca66b18395e"
 }
