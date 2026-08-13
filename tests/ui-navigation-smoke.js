@@ -61,6 +61,9 @@ if (!rendererSource.includes('decode:false') || !rendererSource.includes('startS
 if (!rendererSource.includes('remoteNativeScreenExpected=value.native===true') || !rendererSource.includes("value.t==='native-screen-audio'") || !rendererSource.includes('cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true})') || !rendererSource.includes("JSON.stringify({t:'native-screen-audio',active:true})")) {
   throw new Error('Linux native AV1 screen audio can still be cleared before a Windows viewer binds it');
 }
+if (!rendererSource.includes('Keep screen sound out of the video element for every share backend') || !rendererSource.includes('const audio=ensureNativeRemoteAudio();audio.srcObject=stream')) {
+  throw new Error('Windows standard share audio can still be trapped in a Linux video element');
+}
 if (!rendererSource.includes('nativeShareFullscreen=true;screenStage.classList.add(\'fs\')') || !rendererSource.includes("$('#serverStageFullscreen').onclick") || !styleSource.includes('#voicePanel .screen-section:fullscreen{position:fixed!important') || !styleSource.includes('.server-voice-stage.fs,.server-voice-stage:fullscreen{position:fixed!important')) {
   throw new Error('Screen-share fullscreen can still be overridden by the expanded-call layout');
 }

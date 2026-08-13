@@ -592,20 +592,14 @@ function setupPeer(){
       ||remoteScreenExpected
       ||(e.track.kind==='audio'&&!remoteScreen.hidden&&!!remoteScreen.srcObject));
     if(e.track.kind==='audio'&&bindsToScreen){
-      if(remoteNativeScreenExpected||nativeRemotePlayer||remoteNativeScreenChannel){const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio.volume=remoteScreen.volume;audio.muted=remoteScreenSuppressed||!screenExpanded||focusedScreen!=='remote'||audio.volume===0;e.track.enabled=!audio.muted;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};if(!audio.muted)audio.play().catch(()=>{});logCallEvent('Native screen audio received');screenAudioDebug=' · audio received';screenStatus.textContent='Friend sharing'+screenAudioDebug;updateScreenLayout();return}
-      remoteScreen.hidden=false;
-      if(!remoteScreen.srcObject)remoteScreen.srcObject=stream;
-      else if(remoteScreen.srcObject!==stream){
-        try{remoteScreen.srcObject.addTrack(e.track)}catch{
-          remoteScreen.srcObject=new MediaStream([
-            ...remoteScreen.srcObject.getVideoTracks(),
-            ...remoteScreen.srcObject.getAudioTracks().filter(t=>t.id!==e.track.id),
-            e.track
-          ]);
-        }
-      }
-      logCallEvent('Screen audio received');screenAudioDebug=' · audio received';screenStatus.textContent='Friend sharing'+screenAudioDebug;
-      const play=()=>{if(!remoteScreenSuppressed&&screenExpanded&&focusedScreen==='remote'){e.track.enabled=true;if(remoteScreen.volume>0)remoteScreen.muted=false;const p=remoteScreen.play();if(p?.catch)p.catch(()=>{})}};updateScreenLayout();play();
+      // Keep screen sound out of the video element for every share backend.
+      // On Linux a WebRTC video element can retain an old/muted audio sink
+      // after its video track is replaced, leaving Windows standard shares
+      // visibly live but silent. The dedicated element gives standard and AV1
+      // shares the same reliable playback, output-device, and volume route.
+      const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio.volume=remoteScreen.volume;audio.muted=remoteScreenSuppressed||!screenExpanded||focusedScreen!=='remote'||audio.volume===0;e.track.enabled=!audio.muted;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
+      const play=()=>{if(!remoteScreenSuppressed&&screenExpanded&&focusedScreen==='remote'&&audio.srcObject===stream){e.track.enabled=true;audio.volume=remoteScreen.volume;audio.muted=audio.volume===0;if(!audio.muted)audio.play().catch(()=>{})}};
+      logCallEvent((remoteNativeScreenExpected||nativeRemotePlayer||remoteNativeScreenChannel)?'Native screen audio received':'Screen audio received');screenAudioDebug=' · audio received';screenStatus.textContent='Friend sharing'+screenAudioDebug;updateScreenLayout();play();
       if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
