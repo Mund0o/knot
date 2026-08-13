@@ -1,10 +1,10 @@
 {
-  "version": "1.1.58",
-  "notes": "Starts shares at the chosen FPS, keeps Windows share audio live through idle startup, and repairs fullscreen stage behavior.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.58/pair-p2p-1.1.58.tar.gz?build=06664f1",
-  "linuxSha256": "8e88579e9d4e31b8fd3940ace248387628f0b6e7cdd13eae975d7218dc500e82",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.58/Knot-1.1.58.AppImage",
-  "linuxAppImageSha256": "f6ebaf30a00a8222d7c7c8c8ee82714d27769833dfb382fe1bad2246a420dfaf",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.58/Knot.Setup.1.1.58.exe",
-  "winSha256": "520f844dc5553a4e1838c28ddd47849cd75b5b934af0724dd34ac0b15a27bef3"
+  "version": "1.1.59",
+  "notes": "Routes screen-share sound through one dedicated playback path on Linux and Windows viewers.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.59/pair-p2p-1.1.59.tar.gz?build=5609d74",
+  "linuxSha256": "9391e20ca2138552ee1dbb1e48d5afeb19416e64e1964122df1c91647a679769",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.59/Knot-1.1.59.AppImage",
+  "linuxAppImageSha256": "5167849b69422ff6e7e178b668b13a1a8566994e9656363ca4b3ec1c4106437a",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.59/Knot.Setup.1.1.59.exe",
+  "winSha256": "680f8734ade111022bbbd43503a713a99eed310be37ac494c1b53266114edaa3"
 }
