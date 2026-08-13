@@ -51,7 +51,7 @@ jobs:
       - run: npm run rebuild:addon
       - run: npm run verify:addon
       - run: npm run test:windows-audio
-      - run: npm run dist:win
+      - run: npm run dist:win -- --publish never
       - uses: actions/upload-artifact@v4
         with:
           name: pair-capture-windows-x64
