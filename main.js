@@ -10,7 +10,7 @@ const APP_ICON = path.join(__dirname, 'build', 'icon.png');
 app.setName('Knot');
 
 let mainWin = null;
-let pendingSourceId = null;
+let pendingSource = null;
 let pendingSources = [];
 let activeShareSourceId = null;
 let linuxShareAudio = null;
@@ -213,9 +213,13 @@ ipcMain.handle('pair:getSources', async event => {
   return pendingSources.map(s => ({ id: s.id, name: s.name, type: s.id.startsWith('screen:') ? 'screen' : 'application', thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
 ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
-ipcMain.handle('pair:setPendingSource', (event, id) => {
-  if (!isPairRenderer(event) || typeof id !== 'string') return false;
-  pendingSourceId = id;
+ipcMain.handle('pair:setPendingSource', (event, selection) => {
+  if (!isPairRenderer(event) || !selection || typeof selection.id !== 'string') return false;
+  const source = pendingSources.find(item => item.id === selection.id);
+  if (!source || isExcludedShareSource(source)) return false;
+  // Keep immutable source identity as well as Electron's transient id. Windows
+  // can recreate an HWND capture source between the picker and getDisplayMedia.
+  pendingSource = { id: source.id, displayId: String(source.display_id || ''), type: source.id.startsWith('screen:') ? 'screen' : 'application' };
   return true;
 });
 ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio(event.sender) : null);
@@ -502,18 +506,22 @@ app.whenReady().then(() => {
         const sources = await desktopCapturer.getSources({ types: ['screen'] });
         src = sources[0];
       } else {
-        const useId = pendingSourceId;
-        src = useId ? pendingSources.find(source => source.id === useId) : null;
+        const selection = pendingSource;
+        src = selection ? pendingSources.find(source => source.id === selection.id) : null;
         // Windows can invalidate desktopCapturer thumbnails while the custom
         // quality dialog is open. Reacquire the selected id at the point the
         // browser consumes it rather than failing the entire share as “no
         // source selected”.
-        if (!src && useId) {
+        if (!src && selection) {
           const fresh = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 1, height: 1 } });
-          src = fresh.find(source => source.id === useId && !isExcludedShareSource(source));
+          const allowed = fresh.filter(source => !isExcludedShareSource(source));
+          src = allowed.find(source => source.id === selection.id)
+            // display_id is stable when Electron regenerates a Windows display
+            // source id. Never substitute an application window by title.
+            || (selection.type === 'screen' && selection.displayId ? allowed.find(source => String(source.display_id || '') === selection.displayId) : null);
         }
       }
-      pendingSourceId = null;
+      pendingSource = null;
       pendingSources = [];
       if (!src) return callback({ video: undefined });
       console.log('[screen portal] selected', src.id, src.name || 'display');
@@ -521,7 +529,7 @@ app.whenReady().then(() => {
       callback({ video: src });
     } catch (error) {
       console.log('[screen portal] source request failed:', error?.message || error);
-      pendingSourceId = null;
+      pendingSource = null;
       pendingSources = [];
       callback({ video: undefined });
     }
