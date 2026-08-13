@@ -1,10 +1,10 @@
 {
-  "version": "1.1.52",
-  "notes": "Locked screen-share quality, smoother 4K60 streaming, Windows computer audio, and improved voice controls.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.52/pair-p2p-1.1.52.tar.gz",
-  "linuxSha256": "d102cc5daf2e18e69c9be03be4e335e9b93fe76fcea985ce6c8d0b840e43290e",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.52/Knot-1.1.52.AppImage",
-  "linuxAppImageSha256": "88c6b5ed20d23482e711f5590445f3ca97534a350eb8bf8cb740326df14f6397",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.52/Knot.Setup.1.1.52.exe",
-  "winSha256": "19560ee101ab8c05545971e0354fcca7c87ec4c2ab7658f3b1b118c214b0d36a"
+  "version": "1.1.53",
+  "notes": "Persistent calls while browsing, reliable Windows sharing, full-stage fullscreen, NVIDIA Broadcast audio exclusion, and quieter call-state alerts.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.53/pair-p2p-1.1.53.tar.gz",
+  "linuxSha256": "c84f239c2948e32bdb4ba62e3eac5e245f82f3b4ba0041dfffef2b0fdc7d29cf",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.53/Knot-1.1.53.AppImage",
+  "linuxAppImageSha256": "9f664941ee733accd20e9fa4e933da32bd2ed006ee6742742b579f9b6bfb4660",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.53/Knot.Setup.1.1.53.exe",
+  "winSha256": "298bb7503a467674cbca727f559fe3cdc897df6c3d5b4404f921e78f05fac81f"
 }
