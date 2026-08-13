@@ -2,7 +2,7 @@
   "version": "1.1.55",
   "notes": "Enables Windows hardware screen encoding and shortens Linux AV1 4K60 recovery stalls.",
   "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.55/pair-p2p-1.1.55.tar.gz",
-  "linuxSha256": "040f77bddd557f5e3265c3bd80f8d1d478f00f4dd5d2c9614d6982206e0c4328",
+  "linuxSha256": "a1e2244757ca1ef991de0d331ff38a7f68ecdf570815216b93f2bddf2fb2de4a",
   "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.55/Knot-1.1.55.AppImage",
   "linuxAppImageSha256": "41ea8d300cb30aacb8c5e7897c2cb7d90491f70183a8666ddb9e866f8627f249",
   "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.55/Knot.Setup.1.1.55.exe",
