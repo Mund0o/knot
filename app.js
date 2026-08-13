@@ -1621,7 +1621,7 @@ async function testScreenAudioIsolation(button,status){
 }
 async function linuxShareAudioTrack(){
   if(!window.pairEnv?.startLinuxShareAudio||!window.pairEnv?.onLinuxShareAudio)return null;
-  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubData,unsubError,received=false,captureError='';const captureOwner={};
+  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubData,unsubError,received=false,captureError='',outputTrack=null;const captureOwner={};
   const dispose=(stopCapture=isCurrent())=>{if(unsubData)unsubData();if(unsubError)unsubError();if(stopCapture)window.pairEnv.stopLinuxShareAudio?.();try{op?.port.close()}catch{}try{op?.disconnect()}catch{}};
   try{
     ctx=takeScreenAudioContext();
@@ -1636,13 +1636,20 @@ async function linuxShareAudioTrack(){
       const arr=new Float32Array(buf);if(!arr.length)return;received=true;
       try{op.port.postMessage(arr,[arr.buffer])}catch{op.port.postMessage(arr)}
     });
-    unsubError=window.pairEnv.onLinuxShareAudioError?.(message=>{if(!isCurrent())return;captureError=String(message||'capture failed');console.warn('[AUDIO] PipeWire capture error:',captureError)});
+    unsubError=window.pairEnv.onLinuxShareAudioError?.(message=>{if(!isCurrent())return;captureError=String(message||'capture failed');console.warn('[AUDIO] PipeWire capture error:',captureError);if(outputTrack?.readyState==='live'){try{outputTrack.stop()}catch{};queueMicrotask(()=>cleanupNativeScreenCapture(captureOwner))}});
+    // A silent desktop at share start is normal. Keep the AudioWorklet connected
+    // and attach its live track as soon as PipeWire has created the isolated
+    // route, so an app/game that starts producing audio later reaches the peer
+    // instead of being rejected by an arbitrary first-PCM timeout.
+    op.connect(dest);outputTrack=dest.stream.getAudioTracks()[0]||null;if(!outputTrack)throw new Error('PipeWire output track could not be created');
+    outputTrack._knotCaptureOwner=captureOwner;try{outputTrack.contentHint='music'}catch{}
     const share=await window.pairEnv.startLinuxShareAudio();if(!isCurrent()){dispose(false);try{ctx.close()}catch{};return null}if(!share)throw new Error('PipeWire share route could not be created');
-    const deadline=Date.now()+2500;while(isCurrent()&&!received&&!captureError&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,40));if(!isCurrent()){dispose(false);try{ctx.close()}catch{};return null}
-    if(!received)throw new Error(captureError||'PipeWire monitor produced no samples');
-    op.connect(dest);screenOutCtx=ctx;screenOutDest=dest;screenNative=true;screenCaptureOwner=captureOwner;
-    const track=dest.stream.getAudioTracks()[0]||null;if(track)track._knotCaptureOwner=captureOwner;try{if(track)track.contentHint='music'}catch{}
-    screenCaptureCleanup=()=>dispose(true);if(!track){cleanupNativeScreenCapture(captureOwner);return null}return track;
+    // Give an immediately failing parec/portal route a moment to report its
+    // error, but do not require audio to already be playing.
+    const deadline=Date.now()+180;while(isCurrent()&&!captureError&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20));if(!isCurrent()){dispose(false);try{ctx.close()}catch{};return null}
+    if(captureError)throw new Error(captureError);
+    screenOutCtx=ctx;screenOutDest=dest;screenNative=true;screenCaptureOwner=captureOwner;
+    screenCaptureCleanup=()=>dispose(true);return outputTrack;
   }catch(e){
     console.warn('[AUDIO] direct PipeWire capture failed:',e?.message||e);
     screenAudioDebug=' · PipeWire capture unavailable';

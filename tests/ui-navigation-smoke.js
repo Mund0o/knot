@@ -82,6 +82,9 @@ if (!rendererSource.includes('targetNativeAv1BitrateKbps(width,height,fps)') || 
 if (rendererSource.includes('createScriptProcessor') || !rendererSource.includes("new AudioWorkletNode(ctx,'knot-screen-audio'") || !workletSource.includes('this.trimTo(3840)')) {
   throw new Error('Windows screen audio is not isolated from renderer/video stalls by the bounded AudioWorklet path');
 }
+if (!rendererSource.includes('A silent desktop at share start is normal.') || !rendererSource.includes('op.connect(dest);outputTrack=dest.stream.getAudioTracks()[0]||null') || rendererSource.includes("PipeWire monitor produced no samples")) {
+  throw new Error('Linux screen sharing still drops the computer-audio track when playback begins after the share starts');
+}
 if (!mainSource.includes('NATIVE_AUDIO_MAX_INFLIGHT = 3') || !mainSource.includes("'pair:cleanAudioAck'") || !preloadSource.includes("ipcRenderer.send('pair:cleanAudioAck'") || !mainSource.includes("permission === 'speaker-selection'")) {
   throw new Error('Windows screen audio IPC backpressure or selected-output permission can silently regress');
 }
