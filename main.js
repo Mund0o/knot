@@ -507,18 +507,20 @@ app.whenReady().then(() => {
         src = sources[0];
       } else {
         const selection = pendingSource;
-        src = selection ? pendingSources.find(source => source.id === selection.id) : null;
-        // Windows can invalidate desktopCapturer thumbnails while the custom
-        // quality dialog is open. Reacquire the selected id at the point the
-        // browser consumes it rather than failing the entire share as “no
-        // source selected”.
+        // A Windows display source is not durable across the picker → capture
+        // boundary. Display 1 often keeps its original source object alive,
+        // while Display 2 can be recreated by DWM and then starts a dead
+        // capture track. Always resolve screens again at consumption time by
+        // their stable display_id; windows keep the cached object first.
+        src = selection?.type === 'screen' ? null : selection ? pendingSources.find(source => source.id === selection.id) : null;
         if (!src && selection) {
           const fresh = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 1, height: 1 } });
           const allowed = fresh.filter(source => !isExcludedShareSource(source));
-          src = allowed.find(source => source.id === selection.id)
-            // display_id is stable when Electron regenerates a Windows display
-            // source id. Never substitute an application window by title.
-            || (selection.type === 'screen' && selection.displayId ? allowed.find(source => String(source.display_id || '') === selection.displayId) : null);
+          src = selection.type === 'screen'
+            // `display_id` identifies the physical Windows monitor, unlike a
+            // transient screen:<index> source id. Never fall back by name.
+            ? (selection.displayId ? allowed.find(source => String(source.display_id || '') === selection.displayId) : null) || allowed.find(source => source.id === selection.id)
+            : allowed.find(source => source.id === selection.id);
         }
       }
       pendingSource = null;
