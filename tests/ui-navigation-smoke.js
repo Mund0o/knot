@@ -58,6 +58,9 @@ if (!rendererSource.includes("send({t:'screen-codec-fallback'})") || !rendererSo
 if (!rendererSource.includes('decode:false') || !rendererSource.includes('startSoftwareDecoder') || !rendererSource.includes('av01.0.13H.08') || rendererSource.includes('window.pairEnv?.toggleFullscreen')) {
   throw new Error('Native AV1 can still overload the sender, black-screen without retrying, or fullscreen the whole app');
 }
+if (!rendererSource.includes('remoteNativeScreenExpected=value.native===true') || !rendererSource.includes("value.t==='native-screen-audio'") || !rendererSource.includes('cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true})') || !rendererSource.includes("JSON.stringify({t:'native-screen-audio',active:true})")) {
+  throw new Error('Linux native AV1 screen audio can still be cleared before a Windows viewer binds it');
+}
 if (!rendererSource.includes('screenStage.requestFullscreen') || !styleSource.includes('#voicePanel .screen-section:fullscreen{position:fixed!important')) {
   throw new Error('Screen-share fullscreen can still be overridden by the expanded-call layout');
 }
