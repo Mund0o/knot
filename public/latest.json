@@ -2,7 +2,7 @@
   "version": "1.1.54",
   "notes": "Fixes Windows screen-share source handoff after the picker refreshes.",
   "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.54/pair-p2p-1.1.54.tar.gz",
-  "linuxSha256": "c36a6f2733b46c563599ff848008ae5400625ef0c8c7e94963f40d7cf207ecc8",
+  "linuxSha256": "aca531e2d2c220812ef6cfb5f9fc676927ff2f2520e162ff81311df415d1a67a",
   "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.54/Knot-1.1.54.AppImage",
   "linuxAppImageSha256": "409c280daad247bf6f1de8b113baa79d9c9ce266e0d9c6ab1ef1da2d017594c9",
   "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.54/Knot.Setup.1.1.54.exe",
