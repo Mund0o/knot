@@ -2,7 +2,7 @@
   "version": "1.1.53",
   "notes": "Persistent calls while browsing, reliable Windows sharing, full-stage fullscreen, NVIDIA Broadcast audio exclusion, and quieter call-state alerts.",
   "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.53/pair-p2p-1.1.53.tar.gz",
-  "linuxSha256": "c84f239c2948e32bdb4ba62e3eac5e245f82f3b4ba0041dfffef2b0fdc7d29cf",
+  "linuxSha256": "7288cc13bfa2af4504b70446ecb87326dae8736daf204f8bfd86439e7442ca64",
   "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.53/Knot-1.1.53.AppImage",
   "linuxAppImageSha256": "9f664941ee733accd20e9fa4e933da32bd2ed006ee6742742b579f9b6bfb4660",
   "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.53/Knot.Setup.1.1.53.exe",
