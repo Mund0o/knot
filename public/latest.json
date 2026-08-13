@@ -1,10 +1,10 @@
 {
-  "version": "1.1.56",
-  "notes": "Fixes secondary Windows display capture, removes unstable black-frame encoding, and repairs share fullscreen on Linux and Windows.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.56/pair-p2p-1.1.56.tar.gz?build=695ee7d",
-  "linuxSha256": "179cf2df0b6332899107eddaf7cb833e5f982a58330f9a1aef2ed985db1a0ff0",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.56/Knot-1.1.56.AppImage",
-  "linuxAppImageSha256": "22638d3eab645d6c5388bf6f1054d1533596bc87c1116ab40501cbf21819e61c",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.56/Knot.Setup.1.1.56.exe",
-  "winSha256": "1b312407ac9dc3d241bd2f92b48f26b7e2dddd7daae93176a2b3538f9aeab008"
+  "version": "1.1.57",
+  "notes": "Fixes Linux native AV1 share audio arriving before video metadata on Windows viewers.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.57/pair-p2p-1.1.57.tar.gz?build=1afcb2c",
+  "linuxSha256": "012296cea3be86f4575a02d77b5633ae88772f8fdef0590248a25b16976b5012",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.57/Knot-1.1.57.AppImage",
+  "linuxAppImageSha256": "8da2a99b6c8fd40b14d094d93f21c1202edb88fb9b9ddbbafec77265b54823e3",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.57/Knot.Setup.1.1.57.exe",
+  "winSha256": "b67bdbacff5b47851236d39993fb4f883b7194b4d3067864fbd033cb2c5afa4b"
 }
