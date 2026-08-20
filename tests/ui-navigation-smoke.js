@@ -86,7 +86,7 @@ if (!styleSource.includes('.messages{overflow-y:auto;overscroll-behavior:contain
 if (!updaterSource.includes('let availableManifest = null') || !updaterSource.includes('async function installAvailableUpdate()') || !updaterSource.includes('waiting for approval') || !mainSource.includes("ipcMain.handle('pair:acceptUpdate'") || !preloadSource.includes("accept: () => ipcRenderer.invoke('pair:acceptUpdate')") || !htmlSource.includes('id="acceptUpdate"')) {
   throw new Error('A discovered update can still download or install without explicit approval');
 }
-if (!updaterSource.includes('function releaseNotes(value)') || !updaterSource.includes('notes: releaseNotes(manifest.notes)') || !rendererSource.includes('updateChangesList.replaceChildren') || !htmlSource.includes('id="updateChanges"')) {
+if (!updaterSource.includes('function releaseNotes(value)') || !updaterSource.includes('function hasShownReleaseNotes(version)') || !updaterSource.includes("report('released'") || !rendererSource.includes("state==='released'") || !rendererSource.includes('updateChangesList.replaceChildren') || !htmlSource.includes('id="updateChanges"')) {
   throw new Error('A new release does not show its What’s changed notes on launch');
 }
 if (!rendererSource.includes('function renderLinkCard(') || !rendererSource.includes("p.t==='video'") || !rendererSource.includes('vimeoVideoId')) {

@@ -1,10 +1,10 @@
 {
-  "version": "1.1.63",
-  "notes": "Encrypted live text without a background peer connection\nUpdates now show What’s changed and install only after approval\nFixed Windows-to-Linux screen-share sound routing\nConversations reopen at the newest message with call controls always reachable",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.63/pair-p2p-1.1.63.tar.gz",
-  "linuxSha256": "dc3d28b7c7749df332879aabdf04136eae92a7469b088a7036621c135c08de46",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.63/Knot-1.1.63.AppImage",
-  "linuxAppImageSha256": "51f955a2205593de65fa955b1868fe84af8bfa645cec396c5f010d85a3696897",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.63/Knot.Setup.1.1.63.exe",
-  "winSha256": "41771e0df795ce36d7de2b3b4072448a19ec45c5e73f381fac1bb744d143b54a"
+  "version": "1.1.64",
+  "notes": "What’s changed now appears once after Knot restarts\nNew updates wait for your approval before downloading\nFixed Windows-to-Linux screen-share sound routing\nConversations reopen at the newest message with call controls always reachable",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.64/pair-p2p-1.1.64.tar.gz",
+  "linuxSha256": "0a6089aafab3bc9e0409471a7b61cbd21c91445ff7f8e39a7555338192d953f2",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.64/Knot-1.1.64.AppImage",
+  "linuxAppImageSha256": "9cf6cb97360f0dbc1dfca794f941e05678452cd0b3fb7834b16dc552b0da5005",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.64/Knot.Setup.1.1.64.exe",
+  "winSha256": "e2ad18d0fdb627e215512873df21a9edaf8e81b5e0d77f50ca68526bed2ff6b6"
 }
