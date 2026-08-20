@@ -1,10 +1,10 @@
 {
-  "version": "1.1.71",
-  "notes": "New optional DeepFilterNet3 high-quality noise reduction\nRNNoise remains the fast low-CPU default\nBoth filters run entirely on your device before encrypted direct and server voice calls\nDeepFilterNet3 model is bundled locally with no call-time model download\nImproved 4K60 screen-share transport latency and sustained voice stability\nUnread direct messages now appear as Discord-style avatars and count badges in the left rail",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.71/pair-p2p-1.1.71.tar.gz",
-  "linuxSha256": "5a2e8d4a1a65824431bb5c8da3e15968b33e7f6e0222e2568ca3e1455e92e2e1",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.71/Knot-1.1.71.AppImage",
-  "linuxAppImageSha256": "729706ce2ba2cb78f9a3de120ef6b8c804c2864064ee3fed4cef508f54a4fe78",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.71/Knot.Setup.1.1.71.exe",
-  "winSha256": "08771bfbef079995c9f83564d0a5b241811e06532a9bc26cfd9b454d451efd08"
+  "version": "1.1.72",
+  "notes": "Notification-only DM avatars now appear above the server rail when messages are unread.\nUnread DM avatars disappear after opening the conversation, with corrected square profile-picture cropping.\nMicrophone test now monitors the selected noise-reduction mode (off, RNNoise, or DeepFilterNet3) so you can hear the difference before a call.\nDeepFilterNet3 remains local and CPU-backed; RNNoise remains the low-CPU default.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.72/pair-p2p-1.1.72.tar.gz",
+  "linuxSha256": "8eeabb75b6e95f1172746ac192dbefe09ede6e15880338311cdf18d71e544496",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.72/Knot-1.1.72.AppImage",
+  "linuxAppImageSha256": "6327e9f88401c316034881900b44236ac370c52b554454e7c8aa95b3bd1a52b0",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.72/Knot.Setup.1.1.72.exe",
+  "winSha256": "8aff71354bbd371440e3993fcfafe07460d05016ac3b97b7335df07506699037"
 }
