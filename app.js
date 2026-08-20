@@ -14,6 +14,7 @@ let conversationHistories={},historySaveTimer=null,serverVoiceStream=null,server
 const persistentDmPeers=new Map();
 let socialSidebarWidth=280,pendingServerSelection=false,pendingChannelCreation=null;
 let closedDmIds=new Set();
+let unreadDmCounts={};
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
 let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0,reconnectCall=false;
@@ -31,7 +32,7 @@ let audioTransceiver=null,screenAudioTransceiver=null;
 const LOCAL_TEST_MODE=new URLSearchParams(location.search).get('testMode')==='1';
 // Per-connection sound flags so the chimes don't double/triple: chat+files both
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
-let connectSoundDone=false,friendLeftNotified=false,friendInCall=false,friendPresenceTimer=null,selfInCall=false,selfPresenceTimer=null,callPresenceTimer=null;
+let connectSoundDone=false,friendLeftNotified=false,friendInCall=false,friendPresenceTimer=null,friendHeartbeatTimer=null,selfInCall=false,selfPresenceTimer=null,callPresenceTimer=null,callToneTimer=null;
 let screenTransceiver=null,screenActive=false,screenStarting=false,screenSharePickerPending=false,screenStream=null,screenGen=0,screenSenders=[],screenStatsTimer=null,screenStatsLast=null,screenFallbackBitrateCapMbps=0,remoteScreenExpected=false,remoteNativeScreenExpected=false,remoteScreenSuppressed=false,screenAudioDebug='',screenSharePickerEpoch=0,screenSharePickerCancel=null,primedScreenAudioCtx=null,primedScreenAudioTimer=null;
 let nativeScreenSession=null,nativeScreenChannel=null,remoteNativeScreenChannel=null,nativeLocalPlayer=null,nativeRemotePlayer=null,nativeRemoteAudio=null,nativeScreenFallbackInFlight=false,nativeScreenAnnounced=false,nativeScreenAudioStream=null;
 const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio'),connectCard=$('#connectCard'),addFriendBtn=$('#addFriend'),panelBackdrop=$('#panelBackdrop'),profileBtn=$('#profileBtn'),profileInput=$('#profileInput'),profileAdjust=$('#profileAdjust'),profileEditor=$('#profileEditor'),profileZoom=$('#profileZoom'),profileX=$('#profileX'),profileY=$('#profileY'),profileDone=$('#profileDone'),friendAvatar=$('#friendAvatar'),voicePanel=$('#voicePanel'),roomTitle=$('#roomTitle'),settingsPanel=$('#settingsPanel'),settingsAvatar=$('#settingsAvatar'),settingsChangePhoto=$('#settingsChangePhoto'),settingsAdjustPhoto=$('#settingsAdjustPhoto'),settingsRemovePhoto=$('#settingsRemovePhoto'),displayNameInput=$('#displayName'),yourNameEl=$('#yourName'),friendNameEl=$('#friendName'),inputDevice=$('#inputDevice'),outputDevice=$('#outputDevice'),voiceProcessing=$('#voiceProcessing'),voiceInputMode=$('#voiceInputMode'),pushToTalkSettings=$('#pushToTalkSettings'),pushToTalkKeyButton=$('#pushToTalkKey'),pushToTalkDelayInput=$('#pushToTalkDelay'),pushToTalkDelayValue=$('#pushToTalkDelayValue'),deviceHint=$('#deviceHint'),testMicrophone=$('#testMicrophone'),reduceMotion=$('#reduceMotion'),soundEffects=$('#soundEffects'),shareProfile=$('#shareProfile'),rememberInvite=$('#rememberInvite'),hardwareAcceleration=$('#hardwareAcceleration'),hardwareHint=$('#hardwareHint');
@@ -85,18 +86,23 @@ document.addEventListener('pointerdown',warmAudio,{once:true});
 document.addEventListener('keydown',warmAudio,{once:true});
 function tone(ctx,freq,start,dur,type='sine',gain=0.18){const o=ctx.createOscillator(),g=ctx.createGain();o.type=type;o.frequency.setValueAtTime(freq,ctx.currentTime+start);g.gain.setValueAtTime(0,ctx.currentTime+start);g.gain.linearRampToValueAtTime(gain,ctx.currentTime+start+0.02);g.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+start+dur);o.connect(g).connect(ctx.destination);o.start(ctx.currentTime+start);o.stop(ctx.currentTime+start+dur+0.02)}
 function setParticipant(el,on){if(el===participantFriend){setFriendPresence(on,{sound:false});return}if(el===participantYou){setSelfPresence(on);return}const dot=el.querySelector('.indicator');if(dot)dot.classList.toggle('on',on)}
-function syncVoiceStage(){voicePanel.classList.toggle('call-active',!!(callActive||friendInCall));renderDmVoiceUI()}
+function syncVoiceStage(){
+  const active=!!(callActive||friendInCall),waiting=!!(callActive&&!friendInCall),incoming=!!(!callActive&&friendInCall),together=!!(callActive&&friendInCall),waitingCard=$('#callWaiting');
+  voicePanel.classList.toggle('call-active',active);voicePanel.classList.toggle('call-waiting-peer',waiting);voicePanel.classList.toggle('call-incoming',incoming);voicePanel.classList.toggle('call-together',together);
+  if(waitingCard){waitingCard.hidden=!waiting;const title=$('#callWaitingTitle'),peer=directoryUser(dmCallPeerId||dmPeerId||activePeerId)?.name||friendName||'your friend';if(title)title.textContent='Waiting for '+peer}
+  renderDmVoiceUI()
+}
 function setFriendPresence(on,{animate=true,sound=true}={}){
   const wasPresent=friendInCall;friendInCall=on;if(!on&&(remoteScreenExpected||remoteScreen.srcObject||!remoteScreen.hidden))clearRemoteScreenShare('Friend left the call');syncVoiceStage();const dot=participantFriend.querySelector('.indicator');if(dot)dot.classList.toggle('on',on);
   if(friendPresenceTimer){clearTimeout(friendPresenceTimer);friendPresenceTimer=null}
   if(on){
     participantFriend.classList.remove('is-absent','is-leaving');participantFriend.removeAttribute('aria-hidden');
-    if(animate&&!wasPresent){participantFriend.classList.remove('is-entering');void participantFriend.offsetWidth;participantFriend.classList.add('is-entering');if(sound)playSound('friend-join')}
+    if(animate&&!wasPresent){participantFriend.classList.remove('is-entering');void participantFriend.offsetWidth;participantFriend.classList.add('is-entering');setTimeout(()=>{if(friendInCall)participantFriend.classList.remove('is-entering')},620);if(sound)playSound('friend-join')}
     return;
   }
   if(!wasPresent){participantFriend.classList.remove('is-entering','is-leaving');participantFriend.classList.add('is-absent');participantFriend.setAttribute('aria-hidden','true');return}
   participantFriend.classList.remove('is-entering');
-  if(animate){participantFriend.classList.add('is-leaving');friendPresenceTimer=setTimeout(()=>{if(!friendInCall){participantFriend.classList.remove('is-leaving');participantFriend.classList.add('is-absent');participantFriend.setAttribute('aria-hidden','true')}},430)}else{participantFriend.classList.remove('is-leaving');participantFriend.classList.add('is-absent');participantFriend.setAttribute('aria-hidden','true')}
+  if(animate){participantFriend.classList.add('is-leaving');friendPresenceTimer=setTimeout(()=>{if(!friendInCall){participantFriend.classList.remove('is-leaving');participantFriend.classList.add('is-absent');participantFriend.setAttribute('aria-hidden','true')}},520)}else{participantFriend.classList.remove('is-leaving');participantFriend.classList.add('is-absent');participantFriend.setAttribute('aria-hidden','true')}
   if(sound)playSound('friend-leave');
 }
 function setSelfPresence(on){
@@ -107,6 +113,8 @@ function setSelfPresence(on){
   participantYou.classList.remove('is-entering');participantYou.classList.add('is-leaving');selfPresenceTimer=setTimeout(()=>{if(!selfInCall){participantYou.classList.remove('is-leaving');participantYou.classList.add('is-absent');participantYou.setAttribute('aria-hidden','true')}},430);
 }
 let localCallSessionId='',remoteCallSessionId='';
+function stopCallTone(){if(callToneTimer){clearInterval(callToneTimer);callToneTimer=null}}
+function startCallTone(kind,maxPulses=5){stopCallTone();let pulses=0;const pulse=()=>{const valid=kind==='ring'?friendInCall&&!callActive:callActive&&!friendInCall;if(!valid||pulses>=maxPulses){stopCallTone();return}pulses++;playSound(kind)};pulse();callToneTimer=setInterval(pulse,3200)}
 function publishCallState(active){
   if(active&&!localCallSessionId)localCallSessionId=clientHex(8);
   try{send({t:'call-state',active:!!active,session:localCallSessionId,at:Date.now()})}catch{}
@@ -115,16 +123,22 @@ function publishCallState(active){
   if(!active)localCallSessionId='';
 }
 function applyRemoteCallState(active,session=''){
-  if(active){remoteCallSessionId=String(session||remoteCallSessionId||'legacy');friendLeftNotified=false;setFriendPresence(true,{animate:true,sound:false});renderCallPeerProfile();setRemoteCallAudio(callActive);if(callActive)ensureRemoteSpeakingMonitor();return}
-  remoteCallSessionId='';setFriendPresence(false,{animate:false,sound:false});stopSpeakingMonitor('dm-friend');clearRemoteScreenShare('Friend left the call');if(!callActive)dmCallPeerId='';if(!friendLeftNotified){friendLeftNotified=true;playSound('leave')}callStatus.textContent='Friend left the call';callStatus.className='call-status';renderDmVoiceUI();renderFriends();
+  if(friendHeartbeatTimer){clearTimeout(friendHeartbeatTimer);friendHeartbeatTimer=null}
+  if(active){const wasPresent=friendInCall;remoteCallSessionId=String(session||remoteCallSessionId||'legacy');friendLeftNotified=false;setFriendPresence(true,{animate:true,sound:callActive});renderCallPeerProfile();setRemoteCallAudio(callActive);if(callActive){stopCallTone();ensureRemoteSpeakingMonitor()}else if(!wasPresent)startCallTone('ring',6);friendHeartbeatTimer=setTimeout(()=>{friendHeartbeatTimer=null;if(friendInCall)applyRemoteCallState(false,'heartbeat-expired')},12000);return}
+  const wasPresent=friendInCall;remoteCallSessionId='';stopCallTone();setFriendPresence(false,{animate:true,sound:false});stopSpeakingMonitor('dm-friend');clearRemoteScreenShare('Friend left the call');if(!callActive)dmCallPeerId='';if(wasPresent&&!friendLeftNotified){friendLeftNotified=true;playSound(callActive?'friend-leave':'leave')}if(callActive){callStatus.textContent='Waiting for your friend';callStatus.className='call-status ringing';startCallTone('calling',3)}else{callStatus.textContent='Friend left the call';callStatus.className='call-status'}renderDmVoiceUI();renderFriends();
 }
 function logCallEvent(text){const e=document.createElement('div'),time=document.createElement('span');e.className='log-entry';time.className='log-time';time.textContent=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});e.append(time,document.createTextNode(String(text)));voiceLog.append(e)}
 function playSound(kind){
   if(!soundEnabled)return;
   const ctx=sfxCtx();if(!ctx)return;
-  if(kind==='connect'){tone(ctx,659.25,0,0.16,'sine',0.16);tone(ctx,987.77,0.12,0.22,'sine',0.16)}
-  else if(kind==='leave'){tone(ctx,493.88,0,0.10,'triangle',0.11);tone(ctx,293.66,0.06,0.22,'sine',0.12)}
-  else if(kind==='ring'){tone(ctx,523.25,0,0.09,'sine',0.12);tone(ctx,783.99,0.065,0.18,'sine',0.15)}
+  if(kind==='connect'){tone(ctx,440,0,.12,'sine',.07);tone(ctx,659.25,.07,.17,'sine',.09);tone(ctx,987.77,.15,.25,'sine',.08)}
+  else if(kind==='connecting'){tone(ctx,293.66,0,.13,'sine',.065);tone(ctx,369.99,.13,.13,'sine',.065);tone(ctx,440,.26,.2,'sine',.07)}
+  else if(kind==='calling'){tone(ctx,392,0,.12,'sine',.075);tone(ctx,523.25,.09,.16,'triangle',.08);tone(ctx,659.25,.2,.28,'sine',.07)}
+  else if(kind==='ring'){tone(ctx,659.25,0,.12,'sine',.09);tone(ctx,830.61,.09,.17,'triangle',.095);tone(ctx,987.77,.22,.3,'sine',.08)}
+  else if(kind==='friend-join'){tone(ctx,523.25,0,.12,'sine',.08);tone(ctx,659.25,.06,.2,'sine',.09);tone(ctx,1046.5,.16,.28,'triangle',.07)}
+  else if(kind==='friend-leave'){tone(ctx,659.25,0,.12,'triangle',.075);tone(ctx,493.88,.08,.17,'sine',.075);tone(ctx,329.63,.18,.25,'sine',.065)}
+  else if(kind==='hangup'){tone(ctx,440,0,.11,'triangle',.085);tone(ctx,349.23,.07,.14,'sine',.08);tone(ctx,261.63,.16,.24,'sine',.07)}
+  else if(kind==='leave'){tone(ctx,493.88,0,.10,'triangle',.07);tone(ctx,293.66,.06,.22,'sine',.075)}
 }
 function setupPermanentAudioSink(){
   try{
@@ -493,8 +507,9 @@ function stopWatchingRemoteShare(){
 }
 function receiveDirectMessage(message,peerIdOverride=''){
   const peerId=peerIdOverride||dmPeerId||dmCallPeerId||activePeerId,key=peerId?'dm:'+peerId:'';
-  if(!key||activeConversationKey===key){addMessage(message.text,false,message.gif);return}
+  if(peerId)markDmUnread(peerId,message);
   const friend=directoryUser(peerId),entry={text:message.text,mine:false,gif:message.gif?.url?{url:message.gif.url,thumb:message.gif.thumb||message.gif.url}:null,author:{id:peerId,name:friend?.name||'Friend',image:'',frame:normalizeFrame(friend?.frame)},time:Date.now()};
+  if(!key||activeConversationKey===key){addMessage(message.text,false,message.gif,{id:peerId,name:friend?.name||'Friend',image:friend?.image||'',frame:normalizeFrame(friend?.frame)});return}
   storeConversationEntry(key,entry);
 }
 function setupChannels(){chat=pc.createDataChannel('chat');if(!relayVoiceMode)files=pc.createDataChannel('files');wire()}
@@ -513,17 +528,15 @@ function wire(){
           return;
         }
         if(value.t==='call-state'){
-          const active=value.active===true,session=String(value.session||'legacy'),wasActive=friendInCall,previousSession=remoteCallSessionId;if(active)dmCallPeerId=dmPeerId||activePeerId;
+          const active=value.active===true,session=String(value.session||'legacy');if(active)dmCallPeerId=dmPeerId||activePeerId;
           applyRemoteCallState(active,session);logCallEvent(active?'Friend joined the call':'Friend left the call');
-          // Peers may repeat their active state after an SCTP reconnect (and
-          // some older clients periodically announce it with a new session).
-          // That is presence, not a new call: only ring when the friend was
-          // genuinely absent, otherwise a reconnect becomes a minute-ish beep.
-          if(active&&!wasActive)playSound('ring');return;
+          // Peers repeat their active state as a heartbeat. The centralized
+          // presence transition only rings or animates on a genuine join.
+          return;
         }
         if(value.t==='call-ring'){
           if(remoteCallSessionId)return;
-          dmCallPeerId=dmPeerId||activePeerId;applyRemoteCallState(true,'legacy');logCallEvent('Friend joined the call');playSound('ring');return;
+          dmCallPeerId=dmPeerId||activePeerId;applyRemoteCallState(true,'legacy');logCallEvent('Friend joined the call');return;
         }
         if(value.t==='call-end'){
           if(!remoteCallSessionId&&!friendInCall)return;
@@ -882,12 +895,16 @@ window.addEventListener('keydown',event=>{if(pushToTalkCapturing){if(event.code=
 inputDevice.onchange=()=>{inputDeviceId=inputDevice.value;ssSet('inputDevice',inputDeviceId);if(micTestStream)stopMicrophoneTest()};outputDevice.onchange=()=>{outputDeviceId=outputDevice.value;ssSet('outputDevice',outputDeviceId);applyOutputDevice()};voiceProcessing.onchange=()=>{voiceProcessingEnabled=voiceProcessing.checked;ssSet('voiceProcessing',voiceProcessingEnabled?'on':'off');if(micTestStream)stopMicrophoneTest();deviceHint.textContent=voiceProcessingEnabled?'Echo cancellation enabled; noise suppression and auto-gain stay off.':'Raw stereo microphone mode enabled for the cleanest raw sound.'};$('#refreshDevices').onclick=()=>refreshAudioDevices();$('#testSound').onclick=()=>playSound('ring');testMicrophone.onclick=()=>toggleMicrophoneTest();navigator.mediaDevices?.addEventListener?.('devicechange',refreshAudioDevices);
 const THEMES=new Set(['midnight','violet','forest','ember','ocean','rose','slate','solar','frost']);
 function applyTheme(theme,persist=true){const selected=THEMES.has(theme)?theme:'midnight';document.documentElement.dataset.theme=selected;document.querySelectorAll('.theme-option').forEach(button=>{const active=button.dataset.theme===selected;button.classList.toggle('selected',active);button.setAttribute('aria-pressed',String(active))});if(persist)ssSet('theme',selected)}
+const FONTS=new Set(['modern','rounded','humanist','easy-read','classic','mono']);
+function applyFont(font,persist=true){const selected=FONTS.has(font)?font:'modern';document.documentElement.dataset.font=selected;const select=$('#fontFamily');if(select)select.value=selected;if(persist)ssSet('fontFamily',selected)}
 function syncPanelBackdrop(){panelBackdrop.hidden=!!settingsPanel.hidden&&!connectCard.open}
 function closePanels(){if(micTestStream)stopMicrophoneTest();connectCard.open=false;settingsPanel.hidden=true;document.body.classList.remove('settings-open');syncPanelBackdrop()}
 $('#addFriend').onclick=()=>{settingsPanel.hidden=true;document.body.classList.remove('settings-open');connectCard.open=true;syncPanelBackdrop();setTimeout(()=>signalIn.focus(),0)};
 connectCard.addEventListener('toggle',syncPanelBackdrop);panelBackdrop.onclick=closePanels;
 document.querySelectorAll('.theme-option').forEach(button=>button.onclick=()=>applyTheme(button.dataset.theme));
 (async()=>{applyTheme(await ss('theme'),false)})();
+$('#fontFamily').onchange=()=>applyFont($('#fontFamily').value);
+(async()=>{applyFont(await ss('fontFamily'),false)})();
 reduceMotion.onchange=()=>{document.documentElement.dataset.reduceMotion=String(reduceMotion.checked);ssSet('reduceMotion',reduceMotion.checked?'on':'off')};soundEffects.onchange=()=>{soundEnabled=soundEffects.checked;ssSet('soundEffects',soundEnabled?'on':'off')};shareProfile.onchange=()=>{profileSharing=shareProfile.checked;ssSet('shareProfile',profileSharing?'on':'off');announceProfile();directoryProfilePush()};rememberInvite.onchange=()=>{rememberInviteCode=rememberInvite.checked;ssSet('rememberInvite',rememberInviteCode?'on':'off');if(!rememberInviteCode)ssSet('savedInviteCode',null)};$('#clearSavedInvite').onclick=()=>{signalIn.value='';ssSet('savedInviteCode',null);pairHint.textContent='Saved pairing code cleared from this device.'};hardwareAcceleration.onchange=()=>{const enabled=hardwareAcceleration.checked;ssSet('hardwareAcceleration',enabled?'on':'off');hardwareHint.textContent='Restart Knot to '+(enabled?'enable':'disable')+' hardware acceleration.'};$('#restartPair').onclick=()=>{if(window.pairEnv?.relaunch)window.pairEnv.relaunch();else hardwareHint.textContent='Close and reopen Knot to apply this setting.'};
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&(!settingsPanel.hidden||connectCard.open))closePanels()});
 function validProfileData(data){return typeof data==='string'&&data.length<=MAX_PROFILE_DATA&&/^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(data)}
@@ -939,7 +956,7 @@ function renderAccountSummary(){const summary=$('#accountSummary'),username=$('#
 function accountCredentials(usernameElement=$('#accountUsername'),passwordElement=$('#accountPassword'),status=$('#accountStatus')){const username=usernameElement.value.trim().toLowerCase(),password=passwordElement.value;if(!/^[a-z0-9][a-z0-9_.-]{2,23}$/.test(username)){status.textContent='Use 3–24 letters, numbers, dots, dashes, or underscores.';return null}if(password.length<8||password.length>128){status.textContent='Use a password between 8 and 128 characters.';return null}passwordElement.value='';return{username,password,status}}
 async function accountPasswordVerifier(password,passwordSalt){if(!/^[A-Za-z0-9_.-]{22,64}$/.test(passwordSalt))throw new Error('The sign-in challenge was invalid.');const material=await crypto.subtle.importKey('raw',enc.encode(password),'PBKDF2',false,['deriveBits']),salt=base64UrlDecode(passwordSalt),bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt,iterations:600000},material,256);return base64UrlEncode(new Uint8Array(bits))}
 async function createKnotAccount(usernameElement,passwordElement,status){const input=accountCredentials(usernameElement,passwordElement,status);if(!input)return;if(directorySocket?.readyState!==WebSocket.OPEN){input.status.textContent='Knot is offline. Reconnect and try again.';return}try{input.status.textContent='Securing password on this device…';const passwordSalt=base64UrlEncode(crypto.getRandomValues(new Uint8Array(16))),verifier=await accountPasswordVerifier(input.password,passwordSalt);input.status.textContent='Creating account…';if(!directorySend({type:'create-account',username:input.username,passwordSalt,verifier}))input.status.textContent='Knot is offline. Reconnect and try again.'}catch(error){input.status.textContent=error?.message||'Could not secure the password.'}}
-async function signInKnotAccount(usernameElement,passwordElement,status){const input=accountCredentials(usernameElement,passwordElement,status);if(!input)return;input.status.textContent='Contacting Knot…';const socket=new WebSocket(directoryAddress());let finished=false,loginSent=false;const timer=setTimeout(()=>{finished=true;try{socket.close()}catch{};input.status.textContent='Sign-in timed out. Try again.'},20000);socket.onopen=()=>socket.send(JSON.stringify({type:'account-challenge',username:input.username}));socket.onmessage=async event=>{let value;try{value=JSON.parse(event.data)}catch{return}if(value.type==='error'){finished=true;clearTimeout(timer);input.status.textContent=value.message||'Sign-in failed.';socket.close();return}if(value.type==='account-challenge'&&!loginSent){loginSent=true;try{input.status.textContent='Securing password on this device…';const verifier=await accountPasswordVerifier(input.password,value.passwordSalt);if(finished)return;input.status.textContent='Signing in…';socket.send(JSON.stringify({type:'account-login',username:input.username,verifier}))}catch(error){finished=true;clearTimeout(timer);input.status.textContent=error?.message||'Could not secure the password.';socket.close()}return}if(value.type!=='account-session'||value.mode!=='login')return;finished=true;clearTimeout(timer);const changed=value.userId!==directoryUserId;await Promise.all([ssSet('directoryUserId',value.userId),ssSet('directoryToken',value.token),ssSet('directoryAccountName',value.username),ssSet('accountOnboardingDismissed','yes')]);directoryUserId=value.userId;directoryToken=value.token;directoryAccountName=value.username;if(changed){conversationHistories={};await ssSet('messageHistory','{}');closedDmIds.clear();await ssSet('closedDmIds','[]')}input.status.textContent='Signed in as @'+value.username+'. Reconnecting…';renderAccountSummary();$('#accountDialog')?.close();socket.close();try{directorySocket?.close()}catch{};directorySocket=null;connectDirectory()};socket.onerror=()=>{if(finished)return;finished=true;clearTimeout(timer);input.status.textContent='Could not reach Knot to sign in.'}}
+async function signInKnotAccount(usernameElement,passwordElement,status){const input=accountCredentials(usernameElement,passwordElement,status);if(!input)return;input.status.textContent='Contacting Knot…';const socket=new WebSocket(directoryAddress());let finished=false,loginSent=false;const timer=setTimeout(()=>{finished=true;try{socket.close()}catch{};input.status.textContent='Sign-in timed out. Try again.'},20000);socket.onopen=()=>socket.send(JSON.stringify({type:'account-challenge',username:input.username}));socket.onmessage=async event=>{let value;try{value=JSON.parse(event.data)}catch{return}if(value.type==='error'){finished=true;clearTimeout(timer);input.status.textContent=value.message||'Sign-in failed.';socket.close();return}if(value.type==='account-challenge'&&!loginSent){loginSent=true;try{input.status.textContent='Securing password on this device…';const verifier=await accountPasswordVerifier(input.password,value.passwordSalt);if(finished)return;input.status.textContent='Signing in…';socket.send(JSON.stringify({type:'account-login',username:input.username,verifier}))}catch(error){finished=true;clearTimeout(timer);input.status.textContent=error?.message||'Could not secure the password.';socket.close()}return}if(value.type!=='account-session'||value.mode!=='login')return;finished=true;clearTimeout(timer);const changed=value.userId!==directoryUserId;await Promise.all([ssSet('directoryUserId',value.userId),ssSet('directoryToken',value.token),ssSet('directoryAccountName',value.username),ssSet('accountOnboardingDismissed','yes')]);directoryUserId=value.userId;directoryToken=value.token;directoryAccountName=value.username;if(changed){conversationHistories={};await ssSet('messageHistory','{}');closedDmIds.clear();await ssSet('closedDmIds','[]');unreadDmCounts={};await ssSet('unreadDmCounts','{}');renderUnreadBadges()}input.status.textContent='Signed in as @'+value.username+'. Reconnecting…';renderAccountSummary();$('#accountDialog')?.close();socket.close();try{directorySocket?.close()}catch{};directorySocket=null;connectDirectory()};socket.onerror=()=>{if(finished)return;finished=true;clearTimeout(timer);input.status.textContent='Could not reach Knot to sign in.'}}
 async function maybeShowAccountOnboarding(){const dialog=$('#accountDialog');if(!window.pairEnv?.isApp||!dialog||dialog.open||directoryAccountName||(await ss('accountOnboardingDismissed'))==='yes')return;dialog.showModal();setTimeout(()=>$('#authUsername')?.focus(),0)}
 function installAccountOnboarding(){const dialog=$('#accountDialog'),signup=$('#authSignupTab'),signin=$('#authSigninTab'),submit=$('#authSubmit'),username=$('#authUsername'),password=$('#authPassword'),status=$('#authStatus');if(!dialog)return;let mode='signup';const paint=next=>{mode=next==='signin'?'signin':'signup';signup.classList.toggle('active',mode==='signup');signin.classList.toggle('active',mode==='signin');signup.setAttribute('aria-selected',String(mode==='signup'));signin.setAttribute('aria-selected',String(mode==='signin'));password.autocomplete=mode==='signup'?'new-password':'current-password';submit.textContent=mode==='signup'?'Create secure account':'Sign in securely';status.textContent=mode==='signup'?'Usernames are unique. The 600,000-round password protection runs on this device; only a derived verifier crosses WSS/TLS.':'Sign in to restore the same identity, friends, and servers on this computer. Your password never leaves this device.'};signup.onclick=()=>paint('signup');signin.onclick=()=>paint('signin');submit.onclick=()=>mode==='signup'?createKnotAccount(username,password,status):signInKnotAccount(username,password,status);password.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();submit.click()}});$('#authContinueLocal').onclick=async()=>{await ssSet('accountOnboardingDismissed','yes');dialog.close()};dialog.addEventListener('cancel',event=>event.preventDefault());paint('signup')}
 function directoryUser(id){return directorySnapshot.friends.find(friend=>friend.id===id)||directorySnapshot.members?.[id]||null}
@@ -1063,6 +1080,24 @@ function setDirectoryState(online,text){$('#directoryPresence')?.classList.toggl
 function scheduleHistorySave(){clearTimeout(historySaveTimer);historySaveTimer=setTimeout(()=>ssSet('messageHistory',JSON.stringify(conversationHistories)),180)}
 function storeConversationEntry(key,entry){if(!key||!entry||typeof entry.text!=='string')return;const list=conversationHistories[key]||(conversationHistories[key]=[]);list.push(entry);if(list.length>500)list.splice(0,list.length-500);scheduleHistorySave()}
 recordConversationMessage=entry=>{if(historyRendering||!activeConversationKey)return;storeConversationEntry(activeConversationKey,entry)};
+function persistUnreadDms(){ssSet('unreadDmCounts',JSON.stringify(unreadDmCounts))}
+function unreadDmCount(id){return Math.max(0,Math.floor(Number(unreadDmCounts[id])||0))}
+function renderUnreadBadges(){
+  const total=Object.values(unreadDmCounts).reduce((sum,value)=>sum+Math.max(0,Math.floor(Number(value)||0)),0),badge=$('#totalUnreadBadge'),home=$('#homeButton');
+  if(badge){badge.textContent=total>99?'99+':String(total);badge.hidden=!total;badge.setAttribute('aria-label',total?total+' unread direct '+(total===1?'message':'messages'):'No unread direct messages')}
+  if(home)home.title=total?'Knot home · '+total+' unread':'Knot home';
+  document.title=(total?'('+total+') ':'')+'Knot '+(window.pairEnv?.version||'')+' — private P2P chat';
+}
+function clearDmUnread(id,{render=true}={}){if(!unreadDmCount(id))return;delete unreadDmCounts[id];persistUnreadDms();renderUnreadBadges();if(render)renderFriends()}
+function showMessageNotification(peerId,message){
+  if(typeof Notification==='undefined')return;const friend=directoryUser(peerId),title=(friend?.name||'A friend')+' sent you a message',body=String(message?.text||'').trim().slice(0,180)||((message?.gif?.url)?'Sent a GIF':'New encrypted message');
+  const show=()=>{try{const note=new Notification(title,{body,icon:validProfileData(friend?.image)?friend.image:'build/icon.png',tag:'dm-'+peerId,silent:false});note.onclick=()=>{window.focus();selectFriend(peerId);note.close()}}catch{}};
+  if(Notification.permission==='granted')show();else if(Notification.permission==='default')Notification.requestPermission().then(permission=>permission==='granted'&&show()).catch(()=>{});
+}
+function markDmUnread(peerId,message){
+  const key='dm:'+peerId,isReading=activeConversationKey===key&&document.visibilityState==='visible'&&document.hasFocus();if(isReading)return false;
+  unreadDmCounts[peerId]=Math.min(9999,unreadDmCount(peerId)+1);closedDmIds.delete(peerId);persistClosedDms();persistUnreadDms();renderUnreadBadges();renderFriends();showMessageNotification(peerId,message);return true;
+}
 function scrollConversationToLatest(){
   // Restored messages, link cards, and images can change the scroll height
   // after the DM click has already rendered. Keep this one navigation pinned
@@ -1096,7 +1131,7 @@ function showFriends({expand=true}={}){if(expand)setSocialSidebarCollapsed(false
   // mesh alive while its view is hidden, just as a direct call stays alive in
   // the background.  Explicit Leave/room removal still calls closeServerMesh.
   if(serverVoiceStream){$('#serverVoiceStage').hidden=true;renderServerVoiceUI()}if(!activePeerId)showFriendsLanding();renderDmVoiceUI()}
-function activateDmView(friend){if(!friend)return;closedDmIds.delete(friend.id);persistClosedDms();activePeerId=friend.id;showFriends();messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;applyFriendProfile(friend);openConversation('dm:'+friend.id);renderFriends();syncActiveDmTransport()}
+function activateDmView(friend){if(!friend)return;closedDmIds.delete(friend.id);persistClosedDms();activePeerId=friend.id;showFriends();messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;applyFriendProfile(friend);openConversation('dm:'+friend.id);clearDmUnread(friend.id,{render:false});renderFriends();syncActiveDmTransport()}
 async function selectFriend(id,{connect=true}={}){
   const friend=directoryUser(id);if(!friend)return;const backgroundCall=dmCallOngoing()&&dmCallPeerId&&id!==dmCallPeerId;
   activateDmView(friend);
@@ -1161,11 +1196,11 @@ async function ensureDmMediaConnection(peerId=activePeerId){
 }
 function paintDirectoryAvatar(avatar,user){setAvatar(avatar,user?.image||'');setAvatarFrame(avatar,user?.frame);setAvatarIdentity(avatar,user?.id||'');if(!validProfileData(user?.image))avatar.textContent=(user?.name||'?').slice(0,1).toUpperCase()}
 function renderFriends(){
-  const list=$('#friendList');if(!list)return;const query=($('#friendSearch')?.value||'').trim().toLocaleLowerCase(),friends=(directorySnapshot.friends||[]).filter(friend=>(query||!closedDmIds.has(friend.id))&&(!query||(friend.name||'Knot user').toLocaleLowerCase().includes(query)));list.replaceChildren();
+  const list=$('#friendList');if(!list)return;const query=($('#friendSearch')?.value||'').trim().toLocaleLowerCase(),friends=(directorySnapshot.friends||[]).filter(friend=>(query||!closedDmIds.has(friend.id)||unreadDmCount(friend.id)>0)&&(!query||(friend.name||'Knot user').toLocaleLowerCase().includes(query)));list.replaceChildren();
   for(const friend of friends){
     const inCall=friend.id===dmCallPeerId&&dmCallOngoing(),button=document.createElement('button');button.type='button';button.className='friend-entry'+(friend.id===activePeerId&&!activeServerId?' active':'')+(inCall?' in-call':'');button.dataset.id=friend.id;button.setAttribute('aria-label',(friend.name||'Knot user')+', '+(inCall?'in voice':friend.online?'online':'offline'));
     const avatar=document.createElement('span');avatar.className='friend-avatar';paintDirectoryAvatar(avatar,friend);const dot=document.createElement('i');dot.classList.toggle('online',!!friend.online);avatar.append(dot);if(inCall)avatar.dataset.speakingId='dm-friend';
-    const copy=document.createElement('span');copy.className='friend-copy';const name=document.createElement('strong');name.textContent=friend.name||'Knot user';const status=document.createElement('small');status.textContent=inCall?'In voice':friend.online?'Online':'Offline · messages queue';copy.append(name,status);button.append(avatar,copy);button.onclick=()=>selectFriend(friend.id);const row=document.createElement('div');row.className='friend-row';const close=document.createElement('button');close.type='button';close.className='dm-close';close.textContent='×';close.title='Close direct message';close.setAttribute('aria-label','Close direct message with '+(friend.name||'Knot user'));close.onclick=event=>{event.stopPropagation();closeDm(friend.id)};row.append(button,close);list.append(row)
+    const copy=document.createElement('span');copy.className='friend-copy';const name=document.createElement('strong');name.textContent=friend.name||'Knot user';const status=document.createElement('small');status.textContent=inCall?'In voice':friend.online?'Online':'Offline · messages queue';copy.append(name,status);button.append(avatar,copy);const unread=unreadDmCount(friend.id);if(unread){const badge=document.createElement('span');badge.className='dm-unread-badge';badge.textContent=unread>99?'99+':String(unread);badge.setAttribute('aria-label',unread+' unread '+(unread===1?'message':'messages'));button.append(badge);button.classList.add('has-unread')}button.onclick=()=>selectFriend(friend.id);const row=document.createElement('div');row.className='friend-row';const close=document.createElement('button');close.type='button';close.className='dm-close';close.textContent='×';close.title='Close direct message';close.setAttribute('aria-label','Close direct message with '+(friend.name||'Knot user'));close.onclick=event=>{event.stopPropagation();closeDm(friend.id)};row.append(button,close);list.append(row)
   }
   if(!list.children.length){const empty=document.createElement('p');empty.className='social-empty';empty.textContent=query?'No direct messages match your search.':'Create a five-digit friend code to add someone.';list.append(empty)}refreshSpeakingPaint();
 }
@@ -1357,7 +1392,7 @@ function updateDirectorySnapshot(snapshot){
   if(newServer){pendingServerSelection=false;const dialog=$('#serverDialog');if(dialog?.open)dialog.close();selectServer(newServer.id)}if(newChannel){pendingChannelCreation=null;const dialog=$('#channelDialog');if(dialog?.open)dialog.close();selectServerChannel(pendingServer.id,newChannel.id)}if(profilesChanged&&activeConversationKey)openConversation(activeConversationKey)
 }
 async function connectDirectory(){
-  clearTimeout(directoryReconnect);const saved=await Promise.all([ss('directoryUserId'),ss('directoryToken'),ss('messageHistory'),ss('directoryAccountName'),ss('closedDmIds')]);directoryUserId=/^[a-f0-9]{32}$/.test(saved[0]||'')?saved[0]:clientHex(16);directoryToken=/^[a-f0-9]{64}$/.test(saved[1]||'')?saved[1]:clientHex(32);directoryAccountName=/^[a-z0-9][a-z0-9_.-]{2,23}$/.test(saved[3]||'')?saved[3]:'';if(directoryUserId!==saved[0])await ssSet('directoryUserId',directoryUserId);if(directoryToken!==saved[1])await ssSet('directoryToken',directoryToken);try{const parsed=JSON.parse(saved[2]||'{}');if(parsed&&typeof parsed==='object')conversationHistories=parsed}catch{}try{const closed=JSON.parse(saved[4]||'[]');if(Array.isArray(closed))closedDmIds=new Set(closed.filter(id=>/^[a-f0-9]{32}$/.test(id)))}catch{}renderAccountSummary();
+  clearTimeout(directoryReconnect);const saved=await Promise.all([ss('directoryUserId'),ss('directoryToken'),ss('messageHistory'),ss('directoryAccountName'),ss('closedDmIds'),ss('unreadDmCounts')]);directoryUserId=/^[a-f0-9]{32}$/.test(saved[0]||'')?saved[0]:clientHex(16);directoryToken=/^[a-f0-9]{64}$/.test(saved[1]||'')?saved[1]:clientHex(32);directoryAccountName=/^[a-z0-9][a-z0-9_.-]{2,23}$/.test(saved[3]||'')?saved[3]:'';if(directoryUserId!==saved[0])await ssSet('directoryUserId',directoryUserId);if(directoryToken!==saved[1])await ssSet('directoryToken',directoryToken);try{const parsed=JSON.parse(saved[2]||'{}');if(parsed&&typeof parsed==='object')conversationHistories=parsed}catch{}try{const closed=JSON.parse(saved[4]||'[]');if(Array.isArray(closed))closedDmIds=new Set(closed.filter(id=>/^[a-f0-9]{32}$/.test(id)))}catch{}try{const unread=JSON.parse(saved[5]||'{}');if(unread&&typeof unread==='object'&&!Array.isArray(unread))unreadDmCounts=Object.fromEntries(Object.entries(unread).filter(([id,count])=>/^[a-f0-9]{32}$/.test(id)&&Number(count)>0).map(([id,count])=>[id,Math.min(9999,Math.floor(Number(count)))]))}catch{}renderUnreadBadges();renderAccountSummary();
   setDirectoryState(false,'Connecting…');const socket=new WebSocket(directoryAddress());directorySocket=socket;
   socket.onopen=async()=>{directoryBackoff=1000;try{const profile=await directoryProfile();if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'hello',userId:directoryUserId,token:directoryToken,...profile}))}catch(error){console.warn('directory profile',error);if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'hello',userId:directoryUserId,token:directoryToken,name:profileName,image:'',frame:normalizeFrame(profileFrame)}))}};
   socket.onmessage=event=>{try{
@@ -1393,7 +1428,7 @@ async function connectDirectory(){
   }catch(error){console.warn('directory message',error)}};
   socket.onclose=event=>{if(directorySocket!==socket)return;directorySocket=null;for(const peerId of [...persistentDmPeers.keys()])closePersistentDmPeer(peerId);if(event.code===1008&&/authenticat|account|credential|session/i.test(event.reason||'')){setDirectoryState(false,'Sign in required');ssSet('directoryToken',null);const dialog=$('#accountDialog');if(dialog&&!dialog.open)dialog.showModal();$('#authSigninTab')?.click();if($('#authStatus'))$('#authStatus').textContent='Your saved session expired or was revoked. Sign in again.';return}setDirectoryState(false,'Offline — retrying');directoryReconnect=setTimeout(connectDirectory,directoryBackoff);directoryBackoff=Math.min(30000,directoryBackoff*2)};socket.onerror=()=>setDirectoryState(false,'Connection error');
 }
-function installFriendNavigation(){const search=$('#friendSearch');search.oninput=renderFriends;search.onkeydown=event=>{if(event.key!=='Enter')return;const first=$('#friendList .friend-entry');if(first){event.preventDefault();first.click()}};$('#friendsHome').onclick=()=>{search.value='';activePeerId='';showFriends();showFriendsLanding();search.focus()}}
+function installFriendNavigation(){const search=$('#friendSearch');search.oninput=renderFriends;search.onkeydown=event=>{if(event.key!=='Enter')return;const first=$('#friendList .friend-entry');if(first){event.preventDefault();first.click()}};$('#friendsHome').onclick=()=>{search.value='';activePeerId='';showFriends();showFriendsLanding();search.focus()};const clearVisibleUnread=()=>{if(document.visibilityState==='visible'&&document.hasFocus()&&activePeerId&&!activeServerId)clearDmUnread(activePeerId)};window.addEventListener('focus',clearVisibleUnread);document.addEventListener('visibilitychange',clearVisibleUnread)}
 function installChannelDialog(){const dialog=$('#channelDialog'),form=$('#channelForm'),input=$('#newChannelName'),kind=$('#channelDialogKind'),status=$('#channelDialogStatus'),submit=form.querySelector('.primary');let channelType='text';const open=type=>{if(!canEditServer())return;channelType=type==='voice'?'voice':'text';kind.textContent=channelType.toUpperCase()+' CHANNEL';input.placeholder=channelType==='voice'?'New voice':'new-channel';input.value=channelType==='voice'?'New voice':'new-channel';status.textContent='';submit.disabled=false;dialog.showModal();setTimeout(()=>input.select(),0)};$('#addTextChannel').onclick=()=>open('text');$('#addVoiceChannel').onclick=()=>open('voice');$('#closeChannelDialog').onclick=()=>dialog.close();dialog.addEventListener('click',event=>{const box=dialog.getBoundingClientRect();if(event.target===dialog&&(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom))dialog.close()});form.onsubmit=event=>{event.preventDefault();const server=activeServer(),name=cleanClientName(input.value,channelType==='voice'?'New voice':'new-channel');if(!canEditServer(server)){dialog.close();return}if(!directorySend({type:'create-channel',serverId:server.id,channelType,name})){status.textContent='Knot is offline. Reconnect before creating a channel.';return}pendingChannelCreation={serverId:server.id,type:channelType,beforeIds:new Set(server.channels.map(channel=>channel.id))};status.textContent='Creating '+name+'…';submit.disabled=true}}
 function installServerDialog(){const dialog=$('#serverDialog'),status=$('#serverDialogStatus'),createForm=$('#createServerForm'),joinForm=$('#joinServerForm'),name=$('#newServerName'),code=$('#serverInviteCode'),buttons=[...dialog.querySelectorAll('form button')];const setBusy=text=>{status.textContent=text;buttons.forEach(button=>button.disabled=true)};const open=()=>{status.textContent='';buttons.forEach(button=>button.disabled=false);dialog.showModal();setTimeout(()=>name.select(),0)};$('#addServer').onclick=open;$('#closeServerDialog').onclick=()=>dialog.close();dialog.addEventListener('close',()=>{buttons.forEach(button=>button.disabled=false);if(!pendingServerSelection)status.textContent=''});dialog.addEventListener('click',event=>{const box=dialog.getBoundingClientRect();if(event.target===dialog&&(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom))dialog.close()});code.addEventListener('input',()=>{code.value=code.value.replace(/\D/g,'').slice(0,5)});createForm.onsubmit=event=>{event.preventDefault();const serverName=cleanClientName(name.value,'New server');if(!directorySend({type:'create-server',name:serverName})){status.textContent='Knot is offline. Reconnect before creating a server.';return}pendingServerSelection=true;setBusy('Creating '+serverName+'…')};joinForm.onsubmit=event=>{event.preventDefault();const invite=code.value.trim();if(!/^\d{5}$/.test(invite)){status.textContent='Enter the five-digit server invite code.';code.focus();return}if(!directorySend({type:'redeem-invite',code:invite})){status.textContent='Knot is offline. Reconnect before joining a server.';return}pendingServerSelection=true;setBusy('Joining server…')}}
   function installDirectoryUI(){const originalSubmit=messageForm.onsubmit;messageForm.onsubmit=async event=>{if(!activeServerId)return originalSubmit(event);event.preventDefault();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;sendServerMessage(text,gif);messageInput.value='';setPendingGif(null)};$('#homeButton').onclick=()=>{showFriends();if(activePeerId)selectFriend(activePeerId,{connect:false})};$('#addFriend').onclick=()=>{settingsPanel.hidden=true;document.body.classList.remove('settings-open');connectCard.open=true;syncPanelBackdrop();pairHint.textContent='Create a friend code, or enter the five digits your friend sent you.';$('#hostRoom').textContent='Create friend code';$('#joinRoom').textContent='Add friend';setTimeout(()=>$('#roomCode').focus(),0)};$('#hostRoom').onclick=()=>{if(!directorySend({type:'create-invite',kind:'friend'}))pairHint.textContent='Knot presence is offline. Reconnect before creating a friend code.'};$('#joinRoom').onclick=()=>{const code=$('#roomCode').value.trim();if(!/^\d{5}$/.test(code))return pairHint.textContent='Enter a five-digit friend code.';directorySend({type:'redeem-invite',code});pairHint.textContent='Adding friend…'};$('#inviteServer').onclick=()=>activeServerId&&directorySend({type:'create-invite',kind:'server',serverId:activeServerId});$('#editServerPicture').onclick=()=>{if(canEditServer())$('#serverPictureInput').click()};$('#serverPictureInput').onchange=async()=>{const file=$('#serverPictureInput').files?.[0];$('#serverPictureInput').value='';if(!file||!canEditServer())return;try{const picture=await resizeProfile(file);if(picture.length>512*1024)throw new Error('Choose a server image smaller than about 380 KB');directorySend({type:'update-server',serverId:activeServerId,picture})}catch(error){alert(error?.message||'Could not use that server picture')}};const directCall=callBtn.onclick;callBtn.onclick=()=>{if(!activeServerId)return directCall();if(serverVoiceStream)stopServerVoice();else if(activeChannel()?.type==='voice')joinServerVoice();else callStatus.textContent='Select a voice channel first.'};$('#serverStageLeave').onclick=stopServerVoice;$('#serverVoiceMute').onclick=$('#serverStageMute').onclick=toggleServerVoiceMute;const toggleServerShare=()=>serverScreenSharing()?stopServerScreenShare():startServerScreenShare();$('#serverVoiceShare').onclick=$('#serverStageShare').onclick=toggleServerShare;$('#serverStageFullscreen').onclick=async()=>{const stage=$('#serverVoiceStage');if(document.fullscreenElement===stage||stage.classList.contains('fs')){stage.classList.remove('fs');try{await document.exitFullscreen?.()}catch{}}else{stage.classList.add('fs');try{await stage.requestFullscreen?.()}catch{}}};installSidebarLayout();installFriendNavigation();installServerDialog();showFriends({expand:false});connectDirectory()}
@@ -1482,7 +1517,7 @@ function disconnectRoom(){abortScreenSharePicker();if(pc&&pc._connectTimer){clea
   screenBtn.textContent='Share screen';screenBtn.title='Share screen';screenBtn.disabled=true;
   screenStatus.textContent='Not sharing';
   clearRemoteScreenShare();
-  try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.close()}catch{}signaling=null}sharedKey=null;setAvatar(friendAvatar,'');setAvatarIdentity(friendAvatar,'');remoteVoiceTrack=null;remoteVoiceTransceiver=null;stopSpeakingMonitor('dm-friend');try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{}
+  try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.close()}catch{}signaling=null}sharedKey=null;setAvatar(friendAvatar,'');setAvatarIdentity(friendAvatar,'');remoteVoiceTrack=null;remoteVoiceTransceiver=null;stopCallTone();if(friendHeartbeatTimer){clearTimeout(friendHeartbeatTimer);friendHeartbeatTimer=null}stopSpeakingMonitor('dm-friend');try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{}
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
@@ -1513,7 +1548,7 @@ async function startLocalTestCall(){
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints());
     monitorSpeaking('dm-self',localStream);
-    dmCallPeerId=dmPeerId||activePeerId;callActive=true;callStart=Date.now();renderCallButtonState('end','End call','End local mic test');callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';applyMicTransmission();setParticipant(participantYou,true);playSound('ring');callStatus.textContent='Testing microphone locally';callStatus.className='call-status live';
+    dmCallPeerId=dmPeerId||activePeerId;callActive=true;callStart=Date.now();renderCallButtonState('end','End call','End local mic test');callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';applyMicTransmission();setParticipant(participantYou,true);playSound('connect');callStatus.textContent='Testing microphone locally';callStatus.className='call-status live';
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);callTimerEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');renderDmVoiceUI()},1000);
   }catch(e){callStatus.textContent='Mic test unavailable';callStatus.className='call-status'}finally{callStarting=false}
 }
@@ -1525,7 +1560,7 @@ async function startCall(){
   const targetPeer=activePeerId||dmPeerId;
   if(!pc||pc.connectionState!=='connected'){
     if(LOCAL_TEST_MODE&&!pc)return startLocalTestCall();
-    pendingVoiceStartPeerId=targetPeer;
+    pendingVoiceStartPeerId=targetPeer;playSound('connecting');
     callBtn.disabled=true;callStatus.textContent='Connecting to start voice…';callStatus.className='call-status ringing';
     // Text does not create a peer. Preserve the click and start the explicit
     // media path only now; this avoids DM-open races and idle WebRTC meshes.
@@ -1562,9 +1597,9 @@ async function startCall(){
     if(!pc){try{sender.replaceTrack(null)}catch{};if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}return}
     dmCallPeerId=dmPeerId||activePeerId;callActive=true;callStart=Date.now();monitorSpeaking('dm-self',localStream);setRemoteCallAudio(true);renderCallButtonState('end','End call','End voice call');callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';muteBtn.title='Mute microphone';applyMicTransmission();
     try{remoteAudio.volume=0}catch{};setCallVolume(volumeSlider.value,false);volumeSlider.hidden=false;volumeValue.hidden=false;
-    setParticipant(participantYou,true);logCallEvent('You joined the call');
-    playSound('ring');publishCallState(true);try{send({t:'call-ring'})}catch{}
-    callStatus.textContent='Voice live';callStatus.className='call-status live';
+    setParticipant(participantYou,true);logCallEvent('You joined the call');stopCallTone();
+    if(friendInCall)playSound('friend-join');else startCallTone('calling',5);publishCallState(true);try{send({t:'call-ring'})}catch{}
+    callStatus.textContent=friendInCall?'Voice live':'Waiting for your friend';callStatus.className=friendInCall?'call-status live':'call-status ringing';
     callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0');renderDmVoiceUI()},1000);
   }catch(e){try{send({t:'call-end'})}catch{};endCall(true);const m=String(e?.message||e||'');if(/not\s*found/i.test(m))callStatus.textContent='No mic found — check your microphone connection';else if(/permission|denied|not\s*allowed/i.test(m))callStatus.textContent='Mic access blocked — allow microphone in browser/app settings';else callStatus.textContent='Mic error — '+(e?.message||e);callStatus.className='call-status';
   }finally{callStarting=false}
@@ -1572,7 +1607,7 @@ async function startCall(){
 // Tear down the call and release the mic. `silent` skips UI churn when called
 // from a disconnect.
 async function endCall(silent){
-  callGen++;abortScreenSharePicker();screenGen++;
+  callGen++;abortScreenSharePicker();screenGen++;stopCallTone();
   if(callActive)publishCallState(false);
   stopSpeakingMonitor('dm-self');
   if(!silent){setParticipant(participantYou,false);logCallEvent('You left the call')}
@@ -1593,7 +1628,7 @@ async function endCall(silent){
   callActive=false;micMuted=false;syncVoiceStage();setRemoteCallAudio(false);
   if(!friendInCall)dmCallPeerId='';
   renderCallButtonState('start','Start call','Start voice call');muteBtn.hidden=true;volumeSlider.hidden=true;volumeValue.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';
-  if(!silent){callBtn.disabled=!pc&&!LOCAL_TEST_MODE;playSound('leave');try{send({t:'call-end'})}catch{}}
+  if(!silent){callBtn.disabled=!pc&&!LOCAL_TEST_MODE;playSound('hangup');try{send({t:'call-end'})}catch{}}
 }
 function toggleMute(){
   if(!localStream)return;

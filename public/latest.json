@@ -1,10 +1,10 @@
 {
-  "version": "1.1.69",
-  "notes": "Fixed the account page remaining on Reconnecting after a successful sign-in\nAccount status now confirms the username and live connection\nCorrected Settings text to reflect device-side password derivation",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.69/pair-p2p-1.1.69.tar.gz",
-  "linuxSha256": "db1caf1b28787ebdef28bf77e854c27ed72c29384e2dc98c3f285b6212e4e24d",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.69/Knot-1.1.69.AppImage",
-  "linuxAppImageSha256": "afbd8e5f63e2746f7b8fb4912214d60778eb3f37c3fc22e55fd1af6dbf74674c",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.69/Knot.Setup.1.1.69.exe",
-  "winSha256": "39957cb99f923d6338f1404c4ad8289956699f5bf3acf7d8afb4dcbf881b7fdc"
+  "version": "1.1.70",
+  "notes": "Fresh animated call UI with a living aurora stage\nFriend profile cards now pop in on join and animate out on leave\nSolo calls show a polished waiting-for-friend experience\nCall presence expires safely after missed heartbeats so stale avatars disappear\nNew layered sounds for connecting, calling, ringing, joining, leaving, and hang-up\nUnread DMs now show per-conversation and total red count badges\nDesktop message notifications open the correct conversation\nSix saved app font styles are available in Appearance\nDirect-message text now uses the sender profile photo reliably\nGIF, emoji, and add menus stay above expanded screen shares\nSmoother hover, focus, dock, participant, and composer motion throughout Knot",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.70/pair-p2p-1.1.70.tar.gz",
+  "linuxSha256": "3b1beb6e4d57524a39651a398a8270986b3b8dad264d4242b34df29bae54c7cb",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.70/Knot-1.1.70.AppImage",
+  "linuxAppImageSha256": "1b2ec92730a8ea61070e80ab01258fd191b8dea8f2222261aee0af986ce66851",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.70/Knot.Setup.1.1.70.exe",
+  "winSha256": "fa6ee5e638abd0d49b1bd00a1e16f3c78f7da2cc76b9bba3683e95e0f5b47f84"
 }
