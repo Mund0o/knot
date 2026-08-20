@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell } = require('electron');
+const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, safeStorage } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
@@ -154,7 +154,8 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership']);
+const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
@@ -405,15 +406,26 @@ function readSettings() {
 function writeSettings(obj) {
   try { fs.writeFileSync(sp(), JSON.stringify(obj), { encoding: 'utf8', mode: 0o600 }); fs.chmodSync(sp(), 0o600); } catch {}
 }
+function protectSetting(value) {
+  if (typeof value !== 'string') return value;
+  try { return { format: 'safeStorage-v1', data: safeStorage.encryptString(value).toString('base64') }; } catch { return value; }
+}
+function revealSetting(value) {
+  if (!value || typeof value !== 'object' || value.format !== 'safeStorage-v1' || typeof value.data !== 'string') return value;
+  try { return safeStorage.decryptString(Buffer.from(value.data, 'base64')); } catch { return undefined; }
+}
 ipcMain.handle('pair:getSetting', (event, key) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return undefined;
-  return (readSettings())[key];
+  const settings = readSettings(), stored = settings[key], value = revealSetting(stored);
+  // Transparently migrate sensitive values written by older Knot versions.
+  if (ENCRYPTED_SETTING_KEYS.has(key) && typeof stored === 'string' && typeof value === 'string') { settings[key] = protectSetting(value); writeSettings(settings); }
+  return value;
 });
 ipcMain.handle('pair:setSetting', (event, key, value) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return false;
   if (value != null && (typeof value !== 'string' || value.length > MAX_SETTING_VALUE)) return false;
   const s = readSettings();
-  if (value == null) delete s[key]; else s[key] = value;
+  if (value == null) delete s[key]; else s[key] = ENCRYPTED_SETTING_KEYS.has(key) ? protectSetting(value) : value;
   writeSettings(s);
   return true;
 });
@@ -442,6 +454,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
       // Calls and the isolated PipeWire audio bridge must keep real-time timing
       // when the shared game/window has focus instead of Knot.
       backgroundThrottling: false,

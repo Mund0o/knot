@@ -2,11 +2,18 @@ const MAX_ROOM_PEERS = 2;
 const MAX_SIGNAL_BYTES = 2 * 1024 * 1024;
 const MAX_DIRECTORY_BYTES = 768 * 1024;
 const MAX_SOCKET_BYTES_PER_SECOND = 4 * 1024 * 1024;
+const MAX_SOCKET_MESSAGES_PER_SECOND = 240;
 const INVITE_TTL_MS = 15 * 60 * 1000;
 const MAX_RELAY_CIPHERTEXT_BYTES = 96 * 1024;
 const DM_MAILBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const DM_MAILBOX_MAX_MESSAGES = 256;
 const DM_MAILBOX_MAX_BYTES = 8 * 1024 * 1024;
+const ACCOUNT_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 10;
+const MAX_USER_SOCKETS = 8;
+const LOGIN_GLOBAL_LIMIT_PER_MINUTE = 120;
+const SIGNUP_GLOBAL_LIMIT_PER_HOUR = 30;
 
 function normalizeRoom(value) {
   const room = String(value || '').trim().toUpperCase();
@@ -66,6 +73,28 @@ function jsonResponse(body, status = 200) {
 async function tokenHash(token) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function normalizeUsername(value) {
+  const username = String(value || '').trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9_.-]{2,23}$/.test(username) ? username : '';
+}
+
+function cleanPassword(value) {
+  const password = typeof value === 'string' ? value : '';
+  return password.length >= 8 && password.length <= 128 ? password : '';
+}
+
+async function passwordHash(password, salt) {
+  const encoder = new TextEncoder(), key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: 600000 }, key, 256);
+  return [...new Uint8Array(bits)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function secureEqual(left, right) {
+  const a = String(left || ''), b = String(right || ''); let difference = a.length ^ b.length;
+  for (let index = 0; index < Math.max(a.length, b.length); index++) difference |= (a.charCodeAt(index) || 0) ^ (b.charCodeAt(index) || 0);
+  return difference === 0;
 }
 
 function randomHex(bytes = 16) {
@@ -135,7 +164,7 @@ export class PairRoom {
   joinedSockets(room) { return this.state.getWebSockets().filter(socket => { const a = socket.deserializeAttachment() || {}; return socket.readyState === 1 && a.joined && a.room === room; }); }
   broadcast(sender, message, room) { for (const socket of this.joinedSockets(room)) if (socket !== sender) this.safeSend(socket, message); }
   safeSend(socket, message) { try { socket.send(message); } catch {} }
-  withinRate(socket, attachment, bytes) { const now = Date.now(); if (!attachment.rateAt || now - attachment.rateAt >= 1000) { attachment.rateAt = now; attachment.rateBytes = 0; } attachment.rateBytes = (attachment.rateBytes || 0) + bytes; socket.serializeAttachment(attachment); if (attachment.rateBytes <= MAX_SOCKET_BYTES_PER_SECOND) return true; socket.close(1008, 'rate limit'); return false; }
+  withinRate(socket, attachment, bytes) { const now = Date.now(); if (!attachment.rateAt || now - attachment.rateAt >= 1000) { attachment.rateAt = now; attachment.rateBytes = 0;attachment.rateMessages = 0; } attachment.rateBytes = (attachment.rateBytes || 0) + bytes;attachment.rateMessages = (attachment.rateMessages || 0) + 1; socket.serializeAttachment(attachment); if (attachment.rateBytes <= MAX_SOCKET_BYTES_PER_SECOND && attachment.rateMessages <= MAX_SOCKET_MESSAGES_PER_SECOND) return true; socket.close(1008, 'rate limit'); return false; }
 }
 
 export class PairDirectory {
@@ -159,7 +188,17 @@ export class PairDirectory {
     const user = await this.user(attachment.userId);
     if (!user) return socket.close(1008, 'account missing');
     try {
-      if (value.type === 'update-profile') {
+      if (value.type === 'create-account') {
+        await this.createAccount(socket, user, value);
+      } else if (value.type === 'remove-friend') {
+        const peerId = normalizeId(value.peerId), friend = await this.user(peerId);
+        if (!peerId || !friend || !user.friends.includes(peerId)) throw new Error('friend is missing');
+        user.friends = user.friends.filter(id => id !== peerId); friend.friends = friend.friends.filter(id => id !== user.id);
+        await this.putUser(user); await this.putUser(friend); await this.broadcastSnapshots();
+      } else if (value.type === 'call-presence') {
+        const peerId = normalizeId(value.peerId); if (!peerId || !user.friends.includes(peerId)) throw new Error('call recipient is not a friend');
+        this.sendUser(peerId, { type: 'call-presence', from: user.id, active: !!value.active, session: cleanText(value.session, 32, ''), at: Date.now() });
+      } else if (value.type === 'update-profile') {
         user.name = cleanText(value.name, 32, user.name || 'Knot user');
         user.image = cleanImage(value.image);
         user.frame = cleanFrame(value.frame);
@@ -226,15 +265,58 @@ export class PairDirectory {
   }
 
   async authenticate(socket, attachment, value) {
+    if (value?.type === 'account-login') return this.loginAccount(socket, attachment, value);
     if (value?.type !== 'hello') return socket.close(1008, 'authenticate first');
     const id = normalizeId(value.userId), token = normalizeToken(value.token);
     if (!id || !token) return socket.close(1008, 'invalid credentials');
     const hash = await tokenHash(token); let user = await this.user(id);
-    if (user && user.tokenHash !== hash) return socket.close(1008, 'authentication failed');
+    if (user) {
+      const now = Date.now(), sessions = (user.sessions || []).filter(session => session && typeof session.hash === 'string' && Number(session.expiresAt) > now).slice(-8);
+      const legacyValid = user.tokenHash === hash, sessionValid = sessions.some(session => secureEqual(session.hash, hash));
+      if (!legacyValid && !sessionValid) return socket.close(1008, 'authentication failed');
+      // Once an anonymous identity becomes an account, even its original device
+      // credential becomes an expiring, revocable session instead of a forever token.
+      if (user.username && legacyValid) { sessions.push({ hash, expiresAt: now + ACCOUNT_SESSION_TTL_MS }); delete user.tokenHash; }
+      user.sessions = [...new Map(sessions.map(session => [session.hash, session])).values()].slice(-8);
+    }
     if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Knot user'), image: cleanImage(value.image), frame: cleanFrame(value.frame), deviceKey: cleanDeviceKey(value.deviceKey), friends: [], servers: [] };
     else { user.name = cleanText(value.name, 32, user.name); user.image = cleanImage(value.image); user.frame = cleanFrame(value.frame); user.deviceKey = cleanDeviceKey(value.deviceKey) || user.deviceKey || null; }
-    await this.putUser(user); attachment.authed = true; attachment.userId = id; socket.serializeAttachment(attachment);
-    this.safeSend(socket, JSON.stringify({ type: 'authenticated', userId: id })); await this.broadcastSnapshots();await this.deliverMailbox(user.id);
+    await this.putUser(user); attachment.authed = true; attachment.userId = id; attachment.connectedAt = Date.now(); socket.serializeAttachment(attachment);this.limitUserSockets(id, socket);
+    this.safeSend(socket, JSON.stringify({ type: 'authenticated', userId: id, username: user.username || '' })); await this.broadcastSnapshots();await this.deliverMailbox(user.id);
+  }
+
+  async createAccount(socket, user, value) {
+    await this.consumeSecurityBudget('signup', 60 * 60 * 1000, SIGNUP_GLOBAL_LIMIT_PER_HOUR);
+    const username = normalizeUsername(value.username), password = cleanPassword(value.password);
+    if (!username) throw new Error('username must be 3–24 letters, numbers, dots, dashes, or underscores');
+    if (!password) throw new Error('password must be 8–128 characters');
+    if (user.username && user.username !== username) throw new Error('this identity already has an account');
+    const salt = randomHex(16), hash = await passwordHash(password, salt);
+    await this.state.storage.transaction(async transaction => {
+      const existing = await transaction.get(`account:${username}`);
+      if (existing && existing.userId !== user.id) throw new Error('that username is already taken');
+      await transaction.put(`account:${username}`, { userId: user.id, salt, hash });
+    });
+    const now = Date.now();if (user.tokenHash) { user.sessions = [...(user.sessions || []), { hash: user.tokenHash, expiresAt: now + ACCOUNT_SESSION_TTL_MS }].slice(-8);delete user.tokenHash; }
+    user.username = username; await this.putUser(user);
+    this.safeSend(socket, JSON.stringify({ type: 'account-session', mode: 'created', userId: user.id, username }));
+  }
+
+  async loginAccount(socket, attachment, value) {
+    try { await this.consumeSecurityBudget('login', 60 * 1000, LOGIN_GLOBAL_LIMIT_PER_MINUTE); } catch { this.safeSend(socket, JSON.stringify({ type: 'error', action: 'account-login', message: 'username or password is incorrect, or sign-in is temporarily limited' }));return; }
+    const username = normalizeUsername(value.username), password = cleanPassword(value.password), account = username ? await this.state.storage.get(`account:${username}`) : null, now = Date.now();
+    // Run the same expensive hash for unknown and malformed accounts to avoid
+    // turning response timing into a username-enumeration oracle.
+    const supplied = await passwordHash(password || 'invalid-password', account?.salt || randomHex(16)), locked = Number(account?.login?.blockedUntil) > now;
+    if (!account || !password || locked || !secureEqual(supplied, account.hash)) {
+      if (account) { const current = account.login && now - Number(account.login.windowStarted) < LOGIN_WINDOW_MS ? account.login : { windowStarted: now, failures: 0, blockedUntil: 0 };current.failures++;if (current.failures >= LOGIN_MAX_FAILURES) current.blockedUntil = now + LOGIN_WINDOW_MS;account.login = current;await this.state.storage.put(`account:${username}`, account); }
+      this.safeSend(socket, JSON.stringify({ type: 'error', action: 'account-login', message: 'username or password is incorrect, or sign-in is temporarily limited' })); return;
+    }
+    if (account.login) { delete account.login;await this.state.storage.put(`account:${username}`, account); }
+    const user = await this.user(account.userId); if (!user) return socket.close(1008, 'account identity is missing');
+    const token = randomHex(32), hash = await tokenHash(token); user.sessions = [...(user.sessions || []).filter(session => Number(session?.expiresAt) > now), { hash, expiresAt: now + ACCOUNT_SESSION_TTL_MS }].slice(-8); user.username = username; await this.putUser(user);
+    attachment.authed = true; attachment.userId = user.id; attachment.connectedAt = now; socket.serializeAttachment(attachment);this.limitUserSockets(user.id, socket);
+    this.safeSend(socket, JSON.stringify({ type: 'account-session', mode: 'login', userId: user.id, token, username }));
   }
 
   async createInvite(kind, targetId) {
@@ -362,11 +444,13 @@ export class PairDirectory {
     return { type: 'snapshot', self: this.publicUser(user), friends, servers, members, voiceStates: this.voiceStates(servers) };
   }
 
-  publicUser(user) { return { id: user.id, name: user.name, image: user.image, frame: cleanFrame(user.frame), deviceKey: cleanDeviceKey(user.deviceKey), online: this.isOnline(user.id) }; }
+  publicUser(user) { return { id: user.id, name: user.name, username: user.username || '', image: user.image, frame: cleanFrame(user.frame), deviceKey: cleanDeviceKey(user.deviceKey), online: this.isOnline(user.id) }; }
   voiceStates(servers) { const allowed = new Set(servers.map(server => server.id)), states = {}; for (const socket of this.state.getWebSockets()) { if (socket.readyState !== 1) continue; const attachment = socket.deserializeAttachment() || {}; if (!attachment.authed || !allowed.has(attachment.voiceServerId) || !normalizeId(attachment.voiceChannelId)) continue; const list = states[attachment.voiceChannelId] || (states[attachment.voiceChannelId] = []); if (!list.some(entry => entry.id === attachment.userId)) list.push({ id: attachment.userId, joinedAt: Number(attachment.voiceJoinedAt) || Date.now() }); } return states; }
   isOnline(userId) { return this.state.getWebSockets().some(socket => { const a = socket.deserializeAttachment() || {}; return socket.readyState === 1 && a.authed && a.userId === userId; }); }
   async broadcastSnapshots() { const ids = [...new Set(this.state.getWebSockets().map(socket => (socket.deserializeAttachment() || {}).userId).filter(Boolean))]; for (const id of ids) { const snapshot = await this.snapshot(id); if (snapshot) this.sendUser(id, snapshot); } }
   sendUser(userId, value) { let sent = false, data = JSON.stringify(value); for (const socket of this.state.getWebSockets()) { const a = socket.deserializeAttachment() || {}; if (socket.readyState === 1 && a.authed && a.userId === userId) { this.safeSend(socket, data); sent = true; } } return sent; }
+  async consumeSecurityBudget(name, windowMs, limit) { const key = `security-budget:${name}`, now = Date.now();await this.state.storage.transaction(async transaction => { const previous = await transaction.get(key), budget = previous && now - Number(previous.startedAt) < windowMs ? previous : { startedAt: now, count: 0 };if (budget.count >= limit) throw new Error('security rate limit reached; try again later');budget.count++;await transaction.put(key, budget); }); }
+  limitUserSockets(userId, current) { const sockets = this.state.getWebSockets().filter(socket => { const attachment = socket.deserializeAttachment() || {}; return socket.readyState === 1 && attachment.authed && attachment.userId === userId; }).sort((left, right) => Number((left.deserializeAttachment() || {}).connectedAt) - Number((right.deserializeAttachment() || {}).connectedAt));while (sockets.length > MAX_USER_SOCKETS) { const socket = sockets.shift();if (socket !== current) try { socket.close(1008, 'too many account sessions'); } catch {} } }
   async canContact(user, peerId) { if (user.friends.includes(peerId)) return true; for (const id of user.servers) { const server = await this.server(id); if (server?.members.includes(peerId)) return true; } return false; }
   cleanContext(value) { const context = value && typeof value === 'object' ? value : {}, type = context.type === 'server' ? 'server' : context.type === 'dm-persistent' ? 'dm-persistent' : 'dm'; return { type, serverId: normalizeId(context.serverId), channelId: normalizeId(context.channelId), relay: type === 'dm' && context.relay === true }; }
   async user(id) { return normalizeId(id) ? this.state.storage.get(`user:${id}`) : null; }
@@ -375,7 +459,7 @@ export class PairDirectory {
   requireMember(server, userId) { if (!server || !server.members.includes(userId)) throw new Error('not a server member'); }
   requireOwner(server, userId) { this.requireMember(server, userId); if (server.owner !== userId) throw new Error('only the server owner can edit this server'); }
   safeSend(socket, message) { try { socket.send(message); } catch {} }
-  withinRate(socket, attachment, bytes) { const now = Date.now(); if (!attachment.rateAt || now - attachment.rateAt >= 1000) { attachment.rateAt = now; attachment.rateBytes = 0; } attachment.rateBytes = (attachment.rateBytes || 0) + bytes; socket.serializeAttachment(attachment); if (attachment.rateBytes <= MAX_SOCKET_BYTES_PER_SECOND) return true; socket.close(1008, 'rate limit'); return false; }
+  withinRate(socket, attachment, bytes) { const now = Date.now(); if (!attachment.rateAt || now - attachment.rateAt >= 1000) { attachment.rateAt = now; attachment.rateBytes = 0;attachment.rateMessages = 0; } attachment.rateBytes = (attachment.rateBytes || 0) + bytes;attachment.rateMessages = (attachment.rateMessages || 0) + 1; socket.serializeAttachment(attachment); if (attachment.rateBytes <= MAX_SOCKET_BYTES_PER_SECOND && attachment.rateMessages <= MAX_SOCKET_MESSAGES_PER_SECOND) return true; socket.close(1008, 'rate limit'); return false; }
   async webSocketClose(socket) { const userId = (socket.deserializeAttachment() || {}).userId; if (userId) await this.broadcastSnapshots(); }
   async webSocketError(socket) { const userId = (socket.deserializeAttachment() || {}).userId; if (userId) await this.broadcastSnapshots(); }
 }

@@ -8,6 +8,7 @@ class Storage {
   async put(key, value) { this.values.set(key, structuredClone(value)); }
   async delete(key) { this.values.delete(key); }
   async list({ prefix = '' } = {}) { return new Map([...this.values].filter(([key]) => key.startsWith(prefix)).sort(([a], [b]) => a.localeCompare(b))); }
+  async transaction(callback) { return callback(this); }
 }
 
 (async () => {
@@ -27,5 +28,17 @@ class Storage {
   assert(delivered.some(value => value.type === 'relay-text' && value.id === messageId && value.offline), 'queued ciphertext was not delivered after reconnect');
   await directory.ackRelayText(recipient, { id: messageId });
   assert.strictEqual((await storage.list({ prefix: `mail:${recipientId}:` })).size, 0, 'acknowledged ciphertext was not deleted');
-  console.log('PASS encrypted offline DM mailbox delivery and acknowledgement');
+  const accountMessages = [], accountSocket = { readyState: 1, send: value => accountMessages.push(JSON.parse(value)) };
+  await directory.createAccount(accountSocket, sender, { username: 'mundo_test', password: 'correct horse battery staple' });
+  assert.strictEqual((await storage.get('account:mundo_test')).userId, senderId, 'account did not retain the existing friend identity');
+  assert(!(await storage.get('account:mundo_test')).password, 'account stored a plaintext password');
+  const duplicate = { id: 'd'.repeat(32), friends: [], servers: [] };await storage.put(`user:${duplicate.id}`, duplicate);
+  await assert.rejects(() => directory.createAccount(accountSocket, duplicate, { username: 'MUNDO_TEST', password: 'another correct password' }), /already taken/, 'case-insensitive duplicate username was accepted');
+  assert.strictEqual((await storage.get('account:mundo_test')).userId, senderId, 'duplicate signup replaced the original username owner');
+  const loginMessages = [], attachment = {}, loginSocket = { readyState: 1, send: value => loginMessages.push(JSON.parse(value)), serializeAttachment: value => Object.assign(attachment, value), close: () => {} };
+  await directory.loginAccount(loginSocket, attachment, { username: 'mundo_test', password: 'correct horse battery staple' });
+  const session = loginMessages.find(value => value.type === 'account-session');
+  assert(session && session.userId === senderId && /^[a-f0-9]{64}$/.test(session.token), 'account login did not recover the original identity');
+  assert.strictEqual(attachment.authed, true, 'account login socket was not authenticated');
+  console.log('PASS encrypted offline mailbox and recoverable salted-password accounts');
 })().catch(error => { console.error(error);process.exitCode = 1; });

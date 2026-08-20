@@ -46,7 +46,16 @@ function httpsUrl(value) {
   } catch { return null; }
 }
 
+function trustedArtifactUrl(value) {
+  const url = httpsUrl(value);if (!url) return null;
+  try { const parsed = new URL(url), host = parsed.hostname.toLowerCase();if (host === 'github.com') return parsed.pathname.startsWith('/Mund0o/knot/releases/download/') ? parsed.href : null;if (host === 'objects.githubusercontent.com' || host.endsWith('.githubusercontent.com')) return parsed.href;return null; } catch { return null; }
+}
+
 function readFeedUrl() {
+  // Packaged builds are pinned to Knot's repository. Local overrides are a
+  // development convenience only; accepting them in production would let a
+  // modified environment or dotfile choose both an installer and its checksum.
+  if (app.isPackaged) return DEFAULT_FEED;
   const configured = process.env.PAIR_FEED || (() => {
     try { return fs.readFileSync(path.join(os.homedir(), '.pair-update-url'), 'utf8').trim(); } catch { return ''; }
   })();
@@ -113,7 +122,7 @@ async function fetchManifest(feedUrl) {
 }
 
 async function download(url, output, expectedHash, onProgress, depth = 0) {
-  if (depth > 3 || !httpsUrl(url)) throw new Error('unsafe update URL');
+  if (depth > 3 || !trustedArtifactUrl(url)) throw new Error('unsafe update URL');
   const result = await request(url, MAX_UPDATE_BYTES, (response, resolve, reject) => {
     const file = fs.createWriteStream(output, { mode: 0o700, flags: 'wx' });
     const hash = crypto.createHash('sha256');
@@ -234,7 +243,7 @@ function runLinuxUpdate(archive, stage) {
 async function install(manifest) {
   if (installing) return;
   const fields = updateFields(manifest);
-  const url = httpsUrl(fields?.url);
+  const url = trustedArtifactUrl(fields?.url);
   const sha256 = String(fields?.sha256 || '').toLowerCase();
   if (!url || !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('invalid update metadata');
   installing = true;
