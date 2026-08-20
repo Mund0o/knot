@@ -32,18 +32,6 @@ function releaseNotes(value) {
   return value.split(/\r?\n/).map(note => note.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean).slice(0, 8).map(note => note.slice(0, 280));
 }
 
-function releaseNotesStateFile() {
-  return path.join(app.getPath('userData'), 'release-notes-state.json');
-}
-
-function hasShownReleaseNotes(version) {
-  try { return JSON.parse(fs.readFileSync(releaseNotesStateFile(), 'utf8')).version === version; } catch { return false; }
-}
-
-function markReleaseNotesShown(version) {
-  try { fs.writeFileSync(releaseNotesStateFile(), JSON.stringify({ version }), { mode: 0o600 }); } catch {}
-}
-
 function report(state, message = '', extra = {}) {
   updateStatus = { state, message, ...extra };
   for (const win of BrowserWindow.getAllWindows()) {
@@ -278,14 +266,6 @@ async function checkOnce(feedUrl) {
     const notes = releaseNotes(manifest.notes);
     if (!isNewer(app.getVersion(), manifest.version)) {
       availableManifest = null;
-      // This is the first launch after installing this version. It also covers
-      // people updated by an older Knot build that downloaded before approval
-      // was added, because the newly launched version reads its own manifest.
-      if (manifest.version === app.getVersion() && notes.length && !hasShownReleaseNotes(manifest.version)) {
-        markReleaseNotesShown(manifest.version);
-        report('released', `Knot ${manifest.version} is ready.`, { version: manifest.version, notes });
-        return;
-      }
       report('current', `${PRODUCT_NAME} ${app.getVersion()} is up to date.`);
       return;
     }

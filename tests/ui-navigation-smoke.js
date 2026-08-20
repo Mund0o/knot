@@ -56,7 +56,7 @@ if (!rendererSource.includes("parameters.degradationPreference='maintain-resolut
 if (!rendererSource.includes('FILE_DRAIN_TIMEOUT=45000') || !rendererSource.includes('direct connection stopped draining') || !rendererSource.includes('async function waitForDirectFileChannel') || !rendererSource.includes('Connecting directly for file transfer…') || !rendererSource.includes('Files are never relayed through Cloudflare.')) {
   throw new Error('Files do not wait for a direct peer or can still be routed through the text relay');
 }
-if (!rendererSource.includes('const active=value.active===true,session=String(value.session||\'legacy\'),wasActive=friendInCall,previousSession=remoteCallSessionId') || !rendererSource.includes('if(active&&(!wasActive||session!==previousSession))playSound(\'ring\')')) {
+if (!rendererSource.includes('const active=value.active===true,session=String(value.session||\'legacy\'),wasActive=friendInCall,previousSession=remoteCallSessionId') || !rendererSource.includes("if(active&&!wasActive)playSound('ring')")) {
   throw new Error('Repeated call-state presence can still replay the incoming-call beep');
 }
 if (!rendererSource.includes('pendingFrameDelete=pendingFrames.delete.bind') || !rendererSource.includes('pendingFrames.delete=seq=>')) {
@@ -86,8 +86,8 @@ if (!styleSource.includes('.messages{overflow-y:auto;overscroll-behavior:contain
 if (!updaterSource.includes('let availableManifest = null') || !updaterSource.includes('async function installAvailableUpdate()') || !updaterSource.includes('waiting for approval') || !mainSource.includes("ipcMain.handle('pair:acceptUpdate'") || !preloadSource.includes("accept: () => ipcRenderer.invoke('pair:acceptUpdate')") || !htmlSource.includes('id="acceptUpdate"')) {
   throw new Error('A discovered update can still download or install without explicit approval');
 }
-if (!updaterSource.includes('function releaseNotes(value)') || !updaterSource.includes('function hasShownReleaseNotes(version)') || !updaterSource.includes("report('released'") || !rendererSource.includes("state==='released'") || !rendererSource.includes('updateChangesList.replaceChildren') || !htmlSource.includes('id="updateChanges"')) {
-  throw new Error('A new release does not show its What’s changed notes on launch');
+if (!updaterSource.includes('function releaseNotes(value)') || updaterSource.includes('function hasShownReleaseNotes(version)') || updaterSource.includes("report('released'") || !rendererSource.includes("showNotes=state==='available'") || !rendererSource.includes('updateChangesList.replaceChildren') || !htmlSource.includes('id="updateChanges"')) {
+  throw new Error('What’s changed notes are not limited to the pre-download update prompt');
 }
 if (!rendererSource.includes('function renderLinkCard(') || !rendererSource.includes("p.t==='video'") || !rendererSource.includes('vimeoVideoId')) {
   throw new Error('Message links cannot render safe Discord-style cards or inline media');

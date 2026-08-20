@@ -68,6 +68,7 @@ try {
   const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert(mainSource.includes('NATIVE_AUDIO_MAX_INFLIGHT = 3') && mainSource.includes("ipcMain.on('pair:cleanAudioAck'"), 'native audio IPC is not acknowledgement-bounded');
+  assert(mainSource.includes("'module-loopback'") && mainSource.includes('source=${sink}.monitor') && !mainSource.includes("'module-combine-sink'"), 'Linux desktop audio regressed to the PipeWire fan-out route that can starve capture under load');
   assert(addonSource.includes('return initSystemLoopback();') && addonSource.includes('"system-loopback"'), 'Windows 10 fallback capture is missing');
   assert(preloadSource.includes("ipcRenderer.send('pair:cleanAudioAck'"), 'renderer bridge does not release native audio IPC backpressure');
   assert(!rendererSource.includes('createScriptProcessor') && rendererSource.includes("new AudioWorkletNode(ctx,'knot-screen-audio'"), 'Windows capture regressed to renderer-thread audio processing');

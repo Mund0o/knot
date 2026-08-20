@@ -51,7 +51,31 @@ app.whenReady().then(async () => {
       assert(['dm-standard','dm-native','server-standard','server-native'].every(route=>calls.includes(route+':test-output')),'selected device was not applied to every screen-audio route');
       serverPeers.delete('windows-audio-sink-test');nativeRemoteAudio=previousNative;outputDeviceId=previousOutput;
       if(remoteDescriptor)Object.defineProperty(remoteScreen,'setSinkId',remoteDescriptor);else delete remoteScreen.setSinkId;
-      return{peak,trim,calls};
+
+      // Exercise the cross-platform handoff used by Windows standard shares and
+      // Linux native AV1 shares: the normal call audio occupies the established
+      // m-line and a later, separate desktop-audio m-line must reach the
+      // dedicated screen-audio element instead of the muted voice route.
+      if(pc){try{pc.close()}catch{}pc=null}
+      cleanupRemoteNativeScreen();remoteScreenExpected=true;remoteNativeScreenExpected=true;remoteScreenSuppressed=false;remoteScreen.hidden=false;screenExpanded=false;focusedScreen='remote';callActive=true;
+      setupPeer();const receiver=pc,sender=new RTCPeerConnection({iceServers:[]});
+      receiver.onicecandidate=event=>{if(event.candidate)sender.addIceCandidate(event.candidate).catch(()=>{})};
+      sender.onicecandidate=event=>{if(event.candidate)receiver.addIceCandidate(event.candidate).catch(()=>{})};
+      const makeTone=async frequency=>{const context=new AudioContext({sampleRate:48000}),destination=context.createMediaStreamDestination(),oscillator=context.createOscillator(),gain=context.createGain();oscillator.frequency.value=frequency;gain.gain.value=.08;oscillator.connect(gain).connect(destination);oscillator.start();await context.resume().catch(()=>{});return{context,destination,oscillator,track:destination.stream.getAudioTracks()[0]}};
+      const voice=await makeTone(337),screen=await makeTone(719);
+      sender.addTrack(voice.track,voice.destination.stream);
+      sender.addTrack(screen.track,screen.destination.stream);
+      const offer=await sender.createOffer();await sender.setLocalDescription(offer);await receiver.setRemoteDescription(offer);const answer=await receiver.createAnswer();await receiver.setLocalDescription(answer);await sender.setRemoteDescription(answer);
+      await new Promise(resolve=>setTimeout(resolve,500));
+      const routedScreenTrack=nativeRemoteAudio?.srcObject?.getAudioTracks?.()[0];
+      assert(remoteAudio.srcObject?.getAudioTracks?.().length===1,'the established call track was not kept on the voice route');
+      assert(routedScreenTrack?.readyState==='live','the later desktop-audio m-line was not routed to the dedicated screen element');
+      watchDmShare('remote');await new Promise(resolve=>setTimeout(resolve,120));
+      assert(screenExpanded&&focusedScreen==='remote'&&!nativeRemoteAudio.muted&&!nativeRemoteAudio.paused&&routedScreenTrack.enabled,'watching a remote share did not unmute/play its desktop-audio track');
+      let inboundAudio=0;for(const report of (await receiver.getStats()).values())if(report.type==='inbound-rtp'&&(report.kind==='audio'||report.mediaType==='audio'))inboundAudio+=Number(report.bytesReceived)||0;
+      assert(inboundAudio>0,'the receiver did not receive cross-platform call/screen audio RTP');
+      sender.close();receiver.close();pc=null;voice.oscillator.stop();screen.oscillator.stop();voice.track.stop();screen.track.stop();voice.context.close().catch(()=>{});screen.context.close().catch(()=>{});cleanupRemoteNativeScreen();remoteScreenExpected=false;remoteNativeScreenExpected=false;remoteScreen.hidden=true;screenExpanded=false;callActive=false;
+      return{peak,trim,calls,inboundAudio};
     })()`, true);
     console.log('PASS Windows audio renderer packet flow and output routing', JSON.stringify(result));
     window.destroy();

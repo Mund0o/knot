@@ -49,9 +49,9 @@ async function routeLinuxDesktopAudio(state) {
     // Move only attributable desktop application streams. Knot and its helper
     // processes stay on the normal output, so call playback never enters the
     // share monitor. Module streams have no PID and are deliberately untouched.
-    if (!pid || pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || isNvidiaBroadcastLabel(appName, binary, mediaName) || !currentName || currentName === state.routeSink) continue;
+    if (!pid || pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || isNvidiaBroadcastLabel(appName, binary, mediaName) || !currentName || currentName === state.sink) continue;
     if (linuxShareAudio !== state) return;
-    const movedOk = await pipewireOkAsync('pactl', ['move-sink-input', id, state.routeSink]);
+    const movedOk = await pipewireOkAsync('pactl', ['move-sink-input', id, state.sink]);
     if (linuxShareAudio !== state) { if (movedOk) await pipewireOkAsync('pactl', ['move-sink-input', id, currentName]);return; }
     if (movedOk && !state.moved.some(item => item.id === id)) state.moved.push({ id, sink: currentName });
   }
@@ -75,13 +75,14 @@ function startLinuxShareAudio(webContents) {
   const original = pipewire('pactl', ['get-default-sink']);
   if (!original) return null;
   const sink = `pair_share_${process.pid}`;
-  const routeSink = `pair_route_${process.pid}`;
   const module = pipewire('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Knot_Share_Audio']);
   if (!module) return null;
-  // Duplicate selected desktop streams to both the user's normal output and the
-  // isolated share sink. This lets the sharer keep hearing games/videos while
-  // the friend receives the same playback. Knot itself is never moved here.
-  const loop = pipewire('pactl', ['load-module', 'module-combine-sink', `sink_name=${routeSink}`, `slaves=${original},${sink}`, 'sink_properties=device.description=Knot_Share_Route']);
+  // Move selected desktop streams to the private share sink, then loop that
+  // monitor back once to the normal speakers. The previous combine-sink design
+  // fanned every stream into two sinks; PipeWire could exhaust its playback
+  // buffers on a busy call, making a burst/beep and starving the share monitor.
+  // A one-way loopback keeps local playback and isolated capture independent.
+  const loop = pipewire('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${original}`, 'latency_msec=40']);
   if (!loop) {
     pipewire('pactl', ['unload-module', module]);
     return null;
@@ -92,7 +93,7 @@ function startLinuxShareAudio(webContents) {
   // sources even though PipeWire created them successfully, which used to make
   // a healthy share route appear as "sound unavailable".
   const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const state = { original, sink, routeSink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [], routeTimer: null, routeRunning: false, routeAgain: false, pcmChunks: [], pcmBytes: 0 };
+  const state = { original, sink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [], routeTimer: null, routeRunning: false, routeAgain: false, pcmChunks: [], pcmBytes: 0 };
   linuxShareAudio = state;
   const failCaptureRoute = message => {
     if (linuxShareAudio !== state) return;

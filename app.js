@@ -1,7 +1,7 @@
 /* Knot: manual-signaling, two-person P2P chat with application-level E2EE. */
 const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$('#signalIn'),copySignal=$('#copySignal'),processSignal=$('#processSignal'),pairCodeMeta=$('#pairCodeMeta'),statusText=$('#statusText'),messages=$('#messages'),messageForm=$('#messageForm'),messageInput=$('#messageInput'),fileInput=$('#fileInput'),chooseFiles=$('#chooseFiles'),transfers=$('#transfers'),pairHint=$('#pairHint'),participantYou=$('#participantYou'),participantFriend=$('#participantFriend'),voiceLog=$('#voiceLog'),screenBtn=$('#screenBtn'),screenStatus=$('#screenStatus'),screenPreview=$('#screenPreview'),remoteScreen=$('#remoteScreen');
 const updateBanner=$('#updateBanner'),updateTitle=$('#updateTitle'),updateDetails=$('#updateDetails'),updateChanges=$('#updateChanges'),updateChangesList=$('#updateChangesList'),updateActions=$('#updateActions'),acceptUpdate=$('#acceptUpdate');let updateHideTimer=null;
-function renderUpdateStatus(status){if(!updateBanner||!status)return;clearTimeout(updateHideTimer);const state=String(status.state||'idle'),canAccept=state==='available'&&status.canInstall!==false,showNotes=(state==='available'||state==='released'),notes=Array.isArray(status.notes)?status.notes.filter(note=>typeof note==='string'&&note.trim()).slice(0,8):[];updateBanner.className='update-banner update-'+state;updateTitle.textContent=status.message||'Checking for updates…';updateDetails.textContent=status.version&&state!=='released'?'Knot '+status.version:'';updateBanner.hidden=state==='idle'||state==='current';if(updateChanges&&updateChangesList){updateChangesList.replaceChildren(...notes.map(note=>{const item=document.createElement('li');item.textContent=note;return item}));updateChanges.hidden=!showNotes||!notes.length}if(updateActions)updateActions.hidden=!canAccept;if(acceptUpdate)acceptUpdate.disabled=!canAccept;if(state==='current')updateHideTimer=setTimeout(()=>{updateBanner.hidden=true},1200)}
+function renderUpdateStatus(status){if(!updateBanner||!status)return;clearTimeout(updateHideTimer);const state=String(status.state||'idle'),canAccept=state==='available'&&status.canInstall!==false,showNotes=state==='available',notes=Array.isArray(status.notes)?status.notes.filter(note=>typeof note==='string'&&note.trim()).slice(0,8):[];updateBanner.className='update-banner update-'+state;updateTitle.textContent=status.message||'Checking for updates…';updateDetails.textContent=status.version?'Knot '+status.version:'';updateBanner.hidden=state==='idle'||state==='current';if(updateChanges&&updateChangesList){updateChangesList.replaceChildren(...notes.map(note=>{const item=document.createElement('li');item.textContent=note;return item}));updateChanges.hidden=!showNotes||!notes.length}if(updateActions)updateActions.hidden=!canAccept;if(acceptUpdate)acceptUpdate.disabled=!canAccept;if(state==='current')updateHideTimer=setTimeout(()=>{updateBanner.hidden=true},1200)}
 if(window.pairUpdates){window.pairUpdates.getStatus().then(renderUpdateStatus).catch(()=>{});window.pairUpdates.onStatus(renderUpdateStatus)}
 if(acceptUpdate)acceptUpdate.onclick=async()=>{if(!window.pairUpdates?.accept)return;acceptUpdate.disabled=true;await window.pairUpdates.accept().catch(()=>{acceptUpdate.disabled=false})};
 let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promise.resolve(),pairSignalBusy=false,pairReplyAccepted=false;let CHUNK=1024*1024;const MAX=200*1024**3;
@@ -509,9 +509,10 @@ function wire(){
           const active=value.active===true,session=String(value.session||'legacy'),wasActive=friendInCall,previousSession=remoteCallSessionId;if(active)dmCallPeerId=dmPeerId||activePeerId;
           applyRemoteCallState(active,session);logCallEvent(active?'Friend joined the call':'Friend left the call');
           // Peers may repeat their active state after an SCTP reconnect (and
-          // some older clients periodically announce it). That is presence,
-          // not a new call: ringing again here was the minute-ish beep.
-          if(active&&(!wasActive||session!==previousSession))playSound('ring');return;
+          // some older clients periodically announce it with a new session).
+          // That is presence, not a new call: only ring when the friend was
+          // genuinely absent, otherwise a reconnect becomes a minute-ish beep.
+          if(active&&!wasActive)playSound('ring');return;
         }
         if(value.t==='call-ring'){
           if(remoteCallSessionId)return;
