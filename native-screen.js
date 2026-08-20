@@ -130,10 +130,10 @@ class NativeScreenService {
     const cursor = options.cursor === 'never' ? 'no' : 'yes';
     const testCapture = process.env.KNOT_NATIVE_SCREEN_TEST === '1' && /^[A-Za-z0-9_.-]{1,64}$/.test(options.captureSource || '') ? options.captureSource : '';
     // The native transport is intentionally lossy to avoid SCTP head-of-line
-    // stalls. At the old half-second GOP, one dropped 4K cluster left the
-    // viewer frozen until the next keyframe. A quarter-second recovery point
-    // bounds that interruption without changing the chosen dimensions or fps.
-    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'cfr', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '0.25', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm'];
+    // stalls. A 150 ms recovery point gives the MediaSource fallback enough
+    // cadence to stay below the 300 ms screen-latency ceiling without asking
+    // the viewer to run faster than display cadence (which tears 4K60).
+    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'cfr', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '0.15', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm'];
     const child = spawnRecorder(runner, args);
     const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', active: true, stopping: false, stderr: '', seq: 0, discontinuity: false, droppedSegments: 0, segmenter: new WebmClusterSegmenter() };
     this.session = session;

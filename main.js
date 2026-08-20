@@ -154,11 +154,16 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
+const DEEPFILTER_ASSETS = Object.freeze({
+  wasm: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'pkg', 'df_bg.wasm'),
+  model: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'models', 'DeepFilterNet3_onnx.tar.gz')
+});
+const MAX_DEEPFILTER_ASSET_SIZE = 20 * 1024 * 1024;
 const SYSTEM_AVATAR_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
 function imageMime(buffer, extension = '') {
   if (SYSTEM_AVATAR_MIME[extension]) return SYSTEM_AVATAR_MIME[extension];
@@ -215,6 +220,15 @@ ipcMain.handle('pair:getSources', async event => {
   return pendingSources.map(s => ({ id: s.id, name: s.name, type: s.id.startsWith('screen:') ? 'screen' : 'application', thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
 ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
+// DeepFilterNet's model is shipped with Knot.  The renderer may request only
+// these two known files, never an arbitrary local path or a network URL.
+ipcMain.handle('pair:getDeepFilterAsset', (event, name) => {
+  if (!isPairRenderer(event) || !Object.hasOwn(DEEPFILTER_ASSETS, name)) return null;
+  try {
+    const bytes = fs.readFileSync(DEEPFILTER_ASSETS[name]);
+    return bytes.length > 0 && bytes.length <= MAX_DEEPFILTER_ASSET_SIZE ? bytes : null;
+  } catch { return null; }
+});
 ipcMain.handle('pair:setPendingSource', (event, selection) => {
   if (!isPairRenderer(event) || !selection || typeof selection.id !== 'string') return false;
   const source = pendingSources.find(item => item.id === selection.id);

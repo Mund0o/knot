@@ -40,6 +40,14 @@ contextBridge.exposeInMainWorld('pairSettings', {
   set: (key, value) => ipcRenderer.invoke('pair:setSetting', key, value)
 });
 
+// Read-only, allowlisted DeepFilterNet assets.  Keeping model access here
+// prevents renderer code from ever receiving filesystem access.
+contextBridge.exposeInMainWorld('pairDeepFilter', {
+  getAsset: name => (name === 'wasm' || name === 'model')
+    ? ipcRenderer.invoke('pair:getDeepFilterAsset', name)
+    : Promise.resolve(null)
+});
+
 contextBridge.exposeInMainWorld('pairUpdates', {
   getStatus: () => ipcRenderer.invoke('pair:getUpdateStatus'),
   accept: () => ipcRenderer.invoke('pair:acceptUpdate'),

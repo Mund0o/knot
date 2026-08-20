@@ -10,14 +10,14 @@ let directoryTrustedConnection=false,recordConversationMessage=()=>{},directoryP
 // restoration can render the UI. Declaring it later created a startup TDZ race
 // that only showed up reliably when two complete app windows booted together.
 let directorySocket=null,directoryReconnect=null,directoryBackoff=1000,directoryUserId='',directoryToken='',directoryAccountName='',directorySnapshot={friends:[],servers:[],members:{},voiceStates:{}},activePeerId='',dmPeerId='',dmCallPeerId='',activeServerId='',activeChannelId='',activeConversationKey='',historyRendering=false,dmConnectingPeerId='',pendingVoiceStartPeerId='',conversationScrollEpoch=0,conversationScrollObserver=null,conversationScrollTimer=null,conversationScrollLoadListener=null;
-let conversationHistories={},historySaveTimer=null,serverVoiceStream=null,serverScreenStream=null,serverNativeScreenSession=null,serverNativeLocalPlayer=null,serverNativeScreenAudioStream=null,serverNativeScreenInit=null,serverNativeFallbackInFlight=false,serverVoiceMuted=false,serverScreenStarting=false,serverScreenGen=0,joinedVoiceServerId='',joinedVoiceChannelId='',joinedVoiceAt=0,voiceElapsedTimer=null,draggedChannelId='';const serverPeers=new Map();
+let conversationHistories={},historySaveTimer=null,serverVoiceStream=null,serverVoiceRawStream=null,serverVoiceNoisePipeline=null,serverScreenStream=null,serverNativeScreenSession=null,serverNativeLocalPlayer=null,serverNativeScreenAudioStream=null,serverNativeScreenInit=null,serverNativeFallbackInFlight=false,serverVoiceMuted=false,serverScreenStarting=false,serverScreenGen=0,joinedVoiceServerId='',joinedVoiceChannelId='',joinedVoiceAt=0,voiceElapsedTimer=null,draggedChannelId='';const serverPeers=new Map();
 const persistentDmPeers=new Map();
 let socialSidebarWidth=280,pendingServerSelection=false,pendingChannelCreation=null;
 let closedDmIds=new Set();
 let unreadDmCounts={};
 // Voice: a live two-way WebRTC audio call on the SAME peer connection. Media is
 // encrypted by WebRTC's built-in DTLS-SRTP, so it reuses the existing E2EE link.
-let localStream=null,localMicrophoneStream=null,voiceNoisePipeline=null,activeNoiseProcessor='raw',rnnoiseModulePromise=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0,reconnectCall=false;
+let localStream=null,localMicrophoneStream=null,voiceNoisePipeline=null,activeNoiseProcessor='raw',rnnoiseModulePromise=null,deepFilterModulePromise=null,micMuted=false,callActive=false,callStart=0,callTimerId=null,callStarting=false,callGen=0,reconnectCall=false;
 // Screen share: video via getDisplayMedia; system audio only via native
 // process-loopback / PipeWire so Knot's own call playback is never re-captured.
 let screenNative=false,screenOutCtx=null,screenOutDest=null,screenCaptureCleanup=null,screenCaptureOwner=null,screenCaptureAttempt=0;
@@ -879,7 +879,7 @@ document.querySelectorAll('.settings-tab').forEach(tab=>tab.onclick=()=>openSett
 const screenShareSettingsReady=restoreScreenShareSettings();
 function makeDeviceOption(value,label){const option=document.createElement('option');option.value=value;option.textContent=label;return option}
 async function refreshAudioDevices(){try{const devices=await navigator.mediaDevices.enumerateDevices();const inputs=devices.filter(device=>device.kind==='audioinput'),outputs=devices.filter(device=>device.kind==='audiooutput');inputDevice.replaceChildren(makeDeviceOption('default','System default'));outputDevice.replaceChildren(makeDeviceOption('default','System default'));inputs.forEach((device,index)=>inputDevice.append(makeDeviceOption(device.deviceId,device.label||'Microphone '+(index+1))));outputs.forEach((device,index)=>outputDevice.append(makeDeviceOption(device.deviceId,device.label||'Speaker '+(index+1))));inputDevice.value=[...inputDevice.options].some(option=>option.value===inputDeviceId)?inputDeviceId:'default';outputDevice.value=[...outputDevice.options].some(option=>option.value===outputDeviceId)?outputDeviceId:'default';deviceHint.textContent=(inputs.length||outputs.length)?'Device list updated.':'Connect or allow a microphone to reveal device names.'}catch{deviceHint.textContent='Knot could not read audio devices yet.'}}
-function deepFilterBackendAvailable(){return false}
+function deepFilterBackendAvailable(){return !!(window.pairDeepFilter&&typeof window.pairDeepFilter.getAsset==='function'&&typeof AudioWorkletNode!=='undefined'&&(window.AudioContext||window.webkitAudioContext))}
 function renderNoiseProcessingUI(){
   if(!noiseReduction||!noiseHardware||!noiseProcessingHint)return;
   noiseReduction.value=noiseReductionMode;
@@ -887,24 +887,47 @@ function renderNoiseProcessingUI(){
     noiseHardware.value='cpu';noiseHardware.disabled=true;
     noiseProcessingHint.textContent='RNNoise runs locally on the CPU for stable low-latency calls. Your audio never leaves Knot before WebRTC encryption.';
   }else if(noiseReductionMode==='deepfilter'){
-    noiseHardware.value=noiseHardwareMode;noiseHardware.disabled=!deepFilterBackendAvailable();
-    noiseProcessingHint.textContent=deepFilterBackendAvailable()?'DeepFilterNet runs locally. Auto will use the lowest-latency supported processor.':'DeepFilterNet is reserved for the high-quality native backend. Until it is packaged, Knot uses the browser’s local noise suppression and keeps the requested CPU/GPU choice saved.';
+    noiseHardware.value=noiseHardwareMode==='gpu'?'auto':noiseHardwareMode;noiseHardware.disabled=!deepFilterBackendAvailable();
+    noiseProcessingHint.textContent=deepFilterBackendAvailable()?'DeepFilterNet3 runs entirely on this device in CPU/WASM. The bundled model is loaded locally; no microphone audio or model request is sent to a service. GPU is not available in this backend.':'DeepFilterNet3 is unavailable in this build. Choose RNNoise or raw microphone.';
   }else{
     noiseHardware.value='auto';noiseHardware.disabled=true;
     noiseProcessingHint.textContent='Raw microphone mode sends no Knot noise filter. Echo cancellation remains available separately.';
   }
 }
 renderNoiseProcessingUI();
-function microphoneConstraints({echoCancellation=voiceProcessingEnabled}={}){const browserNoiseFallback=noiseReductionMode==='deepfilter'&&!deepFilterBackendAvailable(),audio={sampleRate:{ideal:48000},sampleSize:{ideal:32},channelCount:{ideal:2},latency:{ideal:.01},echoCancellation,noiseSuppression:browserNoiseFallback,autoGainControl:false,voiceIsolation:false,googEchoCancellation:echoCancellation,googAutoGainControl:false,googNoiseSuppression:browserNoiseFallback,googHighpassFilter:false,googTypingNoiseDetection:false,googAudioMirroring:false};if(inputDeviceId&&inputDeviceId!=='default')audio.deviceId={exact:inputDeviceId};return {audio,video:false}}
+function microphoneConstraints({echoCancellation=voiceProcessingEnabled}={}){const knotNoiseFilter=noiseReductionMode==='rnnoise'||noiseReductionMode==='deepfilter'&&deepFilterBackendAvailable(),audio={sampleRate:{ideal:48000},sampleSize:{ideal:32},channelCount:{ideal:2},latency:{ideal:.01},echoCancellation,noiseSuppression:!knotNoiseFilter&&noiseReductionMode==='deepfilter',autoGainControl:false,voiceIsolation:false,googEchoCancellation:echoCancellation,googAutoGainControl:false,googNoiseSuppression:!knotNoiseFilter&&noiseReductionMode==='deepfilter',googHighpassFilter:false,googTypingNoiseDetection:false,googAudioMirroring:false};if(inputDeviceId&&inputDeviceId!=='default')audio.deviceId={exact:inputDeviceId};return {audio,video:false}}
 function voiceInputTracks(){return localMicrophoneStream?.getAudioTracks?.().length?localMicrophoneStream.getAudioTracks():localStream?.getAudioTracks?.()||[]}
-function stopVoiceNoisePipeline(){
-  const pipeline=voiceNoisePipeline;voiceNoisePipeline=null;
+function stopVoiceNoisePipeline(pipeline=voiceNoisePipeline){
+  if(pipeline===voiceNoisePipeline)voiceNoisePipeline=null;
   if(!pipeline)return;
-  try{pipeline.node?.update(false)}catch{}try{pipeline.source?.disconnect()}catch{}try{pipeline.node?.disconnect()}catch{}try{pipeline.destination?.disconnect()}catch{}try{pipeline.context?.close()}catch{}
+  try{pipeline.node?.update(false)}catch{}try{pipeline.source?.disconnect()}catch{}try{pipeline.node?.disconnect()}catch{}try{pipeline.destination?.disconnect()}catch{}try{pipeline.processor?.destroy()}catch{}for(const url of pipeline.urls||[])try{URL.revokeObjectURL(url)}catch{}try{pipeline.context?.close()}catch{}
 }
 async function rnnoiseLibrary(){
   if(!rnnoiseModulePromise){const root=new URL('./node_modules/simple-rnnoise-wasm/dist/',location.href);rnnoiseModulePromise=import(new URL('rnnoise.mjs',root).href).then(module=>({module,root})).catch(error=>{rnnoiseModulePromise=null;throw error})}
   return rnnoiseModulePromise;
+}
+async function deepFilterLibrary(){
+  if(!deepFilterModulePromise)deepFilterModulePromise=import('./node_modules/deepfilternet3-noise-filter/dist/index.esm.js').catch(error=>{deepFilterModulePromise=null;throw error});
+  return deepFilterModulePromise;
+}
+function deepFilterBytes(value,name){
+  if(value instanceof ArrayBuffer)return value;
+  if(ArrayBuffer.isView(value))return value.buffer.slice(value.byteOffset,value.byteOffset+value.byteLength);
+  throw new Error('The bundled DeepFilterNet '+name+' asset was unavailable');
+}
+async function createDeepFilterMicrophone(rawStream){
+  if(!deepFilterBackendAvailable())throw new Error('DeepFilterNet3 is not available in this build');
+  const context=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000,latencyHint:'interactive'});let urls=[];
+  try{
+    await context.resume();const [wasmAsset,modelAsset]=await Promise.all([window.pairDeepFilter.getAsset('wasm'),window.pairDeepFilter.getAsset('model')]);
+    const wasmBytes=deepFilterBytes(wasmAsset,'WASM'),modelBytes=deepFilterBytes(modelAsset,'model');
+    urls=[URL.createObjectURL(new Blob([wasmBytes],{type:'application/wasm'})),URL.createObjectURL(new Blob([modelBytes],{type:'application/gzip'}))];
+    const {DeepFilterNet3Core}=await deepFilterLibrary(),processor=new DeepFilterNet3Core({sampleRate:48000,noiseReductionLevel:80});
+    processor.assetLoader.getAssetUrls=()=>({wasm:urls[0],model:urls[1]});await processor.initialize();
+    const source=context.createMediaStreamSource(rawStream),node=await processor.createAudioWorkletNode(context),destination=context.createMediaStreamDestination();source.connect(node).connect(destination);
+    const track=destination.stream.getAudioTracks()[0];if(!track)throw new Error('DeepFilterNet3 did not create a microphone track');
+    return {context,source,node,destination,processor,urls,stream:new MediaStream([track])};
+  }catch(error){for(const url of urls)try{URL.revokeObjectURL(url)}catch{}try{await context.close()}catch{}throw error}
 }
 async function createRnnoiseMicrophone(rawStream){
   if(typeof AudioWorkletNode==='undefined'||!(window.AudioContext||window.webkitAudioContext))throw new Error('AudioWorklet is not available in this build');
@@ -919,8 +942,8 @@ async function createRnnoiseMicrophone(rawStream){
 }
 async function acquireCallMicrophone(){
   const raw=await navigator.mediaDevices.getUserMedia(microphoneConstraints());localMicrophoneStream=raw;activeNoiseProcessor=noiseReductionMode==='off'?'raw':noiseReductionMode==='deepfilter'?'browser':'raw';
-  if(noiseReductionMode!=='rnnoise')return raw;
-  try{const pipeline=await createRnnoiseMicrophone(raw);voiceNoisePipeline=pipeline;activeNoiseProcessor='rnnoise';return pipeline.stream}catch(error){deviceHint.textContent='RNNoise could not start, so Knot is using your raw microphone for this call.';console.warn('RNNoise microphone filter unavailable:',error);return raw}
+  if(noiseReductionMode==='off')return raw;
+  try{const pipeline=noiseReductionMode==='deepfilter'?await createDeepFilterMicrophone(raw):await createRnnoiseMicrophone(raw);voiceNoisePipeline=pipeline;activeNoiseProcessor=noiseReductionMode;return pipeline.stream}catch(error){const name=noiseReductionMode==='deepfilter'?'DeepFilterNet3':'RNNoise';deviceHint.textContent=name+' could not start, so Knot is using your raw microphone for this call.';console.warn(name+' microphone filter unavailable:',error);return raw}
 }
 function releaseCallMicrophone(){
   const streams=[localStream,localMicrophoneStream];localStream=null;localMicrophoneStream=null;
@@ -1130,9 +1153,20 @@ recordConversationMessage=entry=>{if(historyRendering||!activeConversationKey)re
 function persistUnreadDms(){ssSet('unreadDmCounts',JSON.stringify(unreadDmCounts))}
 function unreadDmCount(id){return Math.max(0,Math.floor(Number(unreadDmCounts[id])||0))}
 function renderUnreadBadges(){
-  const total=Object.values(unreadDmCounts).reduce((sum,value)=>sum+Math.max(0,Math.floor(Number(value)||0)),0),badge=$('#totalUnreadBadge'),home=$('#homeButton');
+  const total=Object.values(unreadDmCounts).reduce((sum,value)=>sum+Math.max(0,Math.floor(Number(value)||0)),0),badge=$('#totalUnreadBadge'),home=$('#homeButton'),dock=$('#unreadDmDock');
   if(badge){badge.textContent=total>99?'99+':String(total);badge.hidden=!total;badge.setAttribute('aria-label',total?total+' unread direct '+(total===1?'message':'messages'):'No unread direct messages')}
   if(home)home.title=total?'Knot home · '+total+' unread':'Knot home';
+  if(dock){
+    dock.replaceChildren();
+    // This is the compact direct-message dock, like Discord's left rail:
+    // open conversations stay visible above servers and an unread message
+    // brings a previously closed conversation back into that dock.
+    const friends=(directorySnapshot.friends||[]).filter(friend=>!closedDmIds.has(friend.id)||unreadDmCount(friend.id)>0);
+    for(const friend of friends){
+      const unread=unreadDmCount(friend.id),button=document.createElement('button');button.type='button';button.className='rail-button unread-dm-rail-button'+(friend.id===activePeerId&&!activeServerId?' active':'');button.title=(friend.name||'Knot user')+(unread?' · '+unread+' unread':'');button.setAttribute('aria-label',(friend.name||'Knot user')+(unread?', '+unread+' unread '+(unread===1?'message':'messages'):''));
+      const avatar=document.createElement('span');avatar.className='unread-dm-rail-avatar';paintDirectoryAvatar(avatar,friend);button.append(avatar);if(unread){const count=document.createElement('span');count.className='unread-dm-rail-badge';count.textContent=unread>99?'99+':String(unread);count.setAttribute('aria-hidden','true');button.append(count)}button.onclick=()=>selectFriend(friend.id);dock.append(button);
+    }
+  }
   document.title=(total?'('+total+') ':'')+'Knot '+(window.pairEnv?.version||'')+' — private P2P chat';
 }
 function clearDmUnread(id,{render=true}={}){if(!unreadDmCount(id))return;delete unreadDmCounts[id];persistUnreadDms();renderUnreadBadges();if(render)renderFriends()}
@@ -1427,13 +1461,13 @@ async function attachServerScreenAudio(gen,stream){
   try{audioTrack.enabled=true;try{audioTrack.contentHint='music'}catch{}stream.addTrack(audioTrack);const starts=[];for(const [peerId,state] of serverPeers){if(!voicePeerAllowed(peerId))continue;attached.push(state);starts.push(setServerScreenAudioTrack(state,audioTrack))}const results=await Promise.allSettled(starts);if(results.some(result=>result.status==='rejected'))throw results.find(result=>result.status==='rejected').reason;if(gen!==serverScreenGen||serverScreenStream!==stream)discard();else setServerStatus('Sharing · computer sound live',true)}catch(error){console.warn('[AUDIO] server screen attach failed:',error?.message||error);discard()}
 }
 async function stopServerScreenShare(){const stream=serverScreenStream,nativeSession=serverNativeScreenSession;serverScreenGen++;serverScreenStarting=false;if(!stream&&!nativeSession)return;serverScreenStream=null;serverNativeScreenSession=null;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);serverNativeLocalPlayer?.destroy();serverNativeLocalPlayer=null;serverNativeScreenInit=null;if(serverNativeScreenAudioStream){serverNativeScreenAudioStream.getTracks().forEach(track=>track.stop());serverNativeScreenAudioStream=null}stream?.getTracks().forEach(track=>track.stop());cleanupNativeScreenCapture();const preview=$('#serverVoiceScreenPreview');preview.pause();preview.srcObject=null;try{preview.removeAttribute('src');preview.load()}catch{}preview.hidden=true;serverFocusedShareId=serverFocusedShareId===directoryUserId?'':serverFocusedShareId;const stops=[];for(const [peerId,state] of serverPeers){if(state.nativeSendChannel){if(state.nativeSendChannel.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-end',serverId:state.context.serverId}))}catch{}try{state.nativeSendChannel.close()}catch{}state.nativeSendChannel=null}await setServerScreenAudioTrack(state,null).catch(()=>{});for(const sender of state.screenSenders||[])try{state.pc.removeTrack(sender)}catch{}state.screenSenders=[];stops.push(renegotiateServerPeer(peerId,state))}await Promise.allSettled(stops);renderServerVoiceUI()}
-async function joinServerVoice(){const channel=activeChannel();if(!channel||channel.type!=='voice')return callStatus.textContent='Select a voice channel first.';if(dmCallOngoing()){callStatus.textContent='Leave your direct call before joining server voice.';return}if(serverVoiceStream&&joinedVoiceChannelId===channel.id)return;stopServerVoice();try{serverVoiceStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints());serverVoiceMuted=false;serverVoiceStream.getAudioTracks().forEach(track=>track.enabled=true);joinedVoiceServerId=activeServerId;joinedVoiceChannelId=channel.id;joinedVoiceAt=Date.now();monitorSpeaking('server:'+directoryUserId,serverVoiceStream);directorySend({type:'voice-state',serverId:joinedVoiceServerId,channelId:channel.id,joined:true});callStatus.textContent='Joined '+channel.name;callStatus.className='call-status live';renderCallButtonState('end','Leave voice','Leave voice channel');renderChannels();syncServerMesh()}catch(error){callStatus.textContent='Could not join voice: '+(error?.message||error);callStatus.className='call-status';syncServerMesh();renderServerVoiceUI()}}
-function stopServerVoice(){abortScreenSharePicker();serverScreenGen++;serverScreenStarting=false;stopSpeakingMonitor('server:'+directoryUserId);const serverId=joinedVoiceServerId||activeServerId,channelId=joinedVoiceChannelId;if(channelId&&serverId)directorySend({type:'voice-state',serverId,channelId,joined:false});if(serverScreenSharing())stopServerScreenShare();if(serverVoiceStream){serverVoiceStream.getTracks().forEach(track=>track.stop());serverVoiceStream=null}joinedVoiceServerId='';joinedVoiceChannelId='';joinedVoiceAt=0;serverVoiceMuted=false;serverFocusedShareId='';serverSuppressedShares.clear();clearInterval(voiceElapsedTimer);closeServerMesh();renderServerVoiceUI();if(activeServerId){const voice=activeChannel()?.type==='voice';renderCallButtonState('start',voice?'Join voice':'Start call',voice?'Join voice channel':'Start voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderChannels()}}
+async function joinServerVoice(){const channel=activeChannel();if(!channel||channel.type!=='voice')return callStatus.textContent='Select a voice channel first.';if(dmCallOngoing()){callStatus.textContent='Leave your direct call before joining server voice.';return}if(serverVoiceStream&&joinedVoiceChannelId===channel.id)return;stopServerVoice();try{const raw=await navigator.mediaDevices.getUserMedia(microphoneConstraints());serverVoiceRawStream=raw;serverVoiceStream=raw;if(noiseReductionMode!=='off')try{const pipeline=noiseReductionMode==='deepfilter'?await createDeepFilterMicrophone(raw):await createRnnoiseMicrophone(raw);serverVoiceNoisePipeline=pipeline;serverVoiceStream=pipeline.stream;activeNoiseProcessor=noiseReductionMode}catch(error){const name=noiseReductionMode==='deepfilter'?'DeepFilterNet3':'RNNoise';deviceHint.textContent=name+' could not start, so Knot is using your raw microphone in this voice channel.';console.warn(name+' server microphone filter unavailable:',error)}serverVoiceMuted=false;serverVoiceStream.getAudioTracks().forEach(track=>track.enabled=true);joinedVoiceServerId=activeServerId;joinedVoiceChannelId=channel.id;joinedVoiceAt=Date.now();monitorSpeaking('server:'+directoryUserId,serverVoiceStream);directorySend({type:'voice-state',serverId:joinedVoiceServerId,channelId:channel.id,joined:true});callStatus.textContent='Joined '+channel.name;callStatus.className='call-status live';renderCallButtonState('end','Leave voice','Leave voice channel');renderChannels();syncServerMesh()}catch(error){callStatus.textContent='Could not join voice: '+(error?.message||error);callStatus.className='call-status';syncServerMesh();renderServerVoiceUI()}}
+function stopServerVoice(){abortScreenSharePicker();serverScreenGen++;serverScreenStarting=false;stopSpeakingMonitor('server:'+directoryUserId);const serverId=joinedVoiceServerId||activeServerId,channelId=joinedVoiceChannelId;if(channelId&&serverId)directorySend({type:'voice-state',serverId,channelId,joined:false});if(serverScreenSharing())stopServerScreenShare();const streams=[serverVoiceStream,serverVoiceRawStream];serverVoiceStream=null;serverVoiceRawStream=null;for(const stream of new Set(streams.filter(Boolean)))try{stream.getTracks().forEach(track=>track.stop())}catch{}stopVoiceNoisePipeline(serverVoiceNoisePipeline);serverVoiceNoisePipeline=null;joinedVoiceServerId='';joinedVoiceChannelId='';joinedVoiceAt=0;serverVoiceMuted=false;serverFocusedShareId='';serverSuppressedShares.clear();clearInterval(voiceElapsedTimer);closeServerMesh();renderServerVoiceUI();if(activeServerId){const voice=activeChannel()?.type==='voice';renderCallButtonState('start',voice?'Join voice':'Start call',voice?'Join voice channel':'Start voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderChannels()}}
 async function sendServerMessage(text,gif){const server=activeServer(),channel=activeChannel();if(!server||!channel||channel.type!=='text')return false;let group=await serverTextKey(server,{create:true});if(!group){await requestServerTextKey(server);pairHint.textContent='Waiting for an online member to share this server’s secure text key.';return false}const id=clientHex(16),time=Date.now(),payload=chatPayload(text,gif),cipher=await sealRelay(group.key,JSON.stringify({payload,time}),relayAad('server',id,directoryUserId,'',server.id,channel.id));if(!directorySend({type:'relay-text',scope:'server',id,serverId:server.id,channelId:channel.id,cipher})){pairHint.textContent='Encrypted text relay is offline.';return false}const entry=normalizeServerHistoryEntry({id,text,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url}:null,author:{id:directoryUserId,name:profileName,image:'',frame:normalizeFrame(profileFrame)},time},server,directoryUserId);if(entry)storeServerHistory(server.id,channel.id,[entry]);return true}
 function profileSnapshotSignature(snapshot){const profiles=[...(snapshot?.friends||[]),...Object.values(snapshot?.members||{})];return JSON.stringify(profiles.map(user=>[user.id,user.name,user.image,user.frame]))}
 function updateDirectorySnapshot(snapshot){
   const previous=directorySnapshot,profilesChanged=profileSnapshotSignature(previous)!==profileSnapshotSignature(snapshot),oldServerIds=new Set((previous.servers||[]).map(server=>server.id)),newServer=pendingServerSelection?(snapshot.servers||[]).find(server=>!oldServerIds.has(server.id)):null,pendingServer=pendingChannelCreation?(snapshot.servers||[]).find(server=>server.id===pendingChannelCreation.serverId):null,newChannel=pendingServer?.channels?.find(channel=>channel.type===pendingChannelCreation?.type&&!pendingChannelCreation.beforeIds.has(channel.id));
-  snapshot.voiceStates=snapshot.voiceStates||{};directorySnapshot=snapshot;const friendIds=new Set((snapshot.friends||[]).map(friend=>friend.id));for(const id of [...closedDmIds])if(!friendIds.has(id))closedDmIds.delete(id);void serverTextMembershipSync();renderServers();syncPersistentDmPeers();if(!activePeerId&&!activeServerId)showFriendsLanding();
+  snapshot.voiceStates=snapshot.voiceStates||{};directorySnapshot=snapshot;const friendIds=new Set((snapshot.friends||[]).map(friend=>friend.id));for(const id of [...closedDmIds])if(!friendIds.has(id))closedDmIds.delete(id);void serverTextMembershipSync();renderServers();renderUnreadBadges();syncPersistentDmPeers();if(!activePeerId&&!activeServerId)showFriendsLanding();
   if(activePeerId){const friend=directoryUser(activePeerId);if(friend)applyFriendProfile(friend)}if(dmCallPeerId)renderCallPeerProfile();
   if(activeServerId){const server=activeServer();if(joinedVoiceChannelId&&!server?.channels?.some(channel=>channel.id===joinedVoiceChannelId))stopServerVoice();if(activeChannelId&&!server?.channels?.some(channel=>channel.id===activeChannelId)){const fallback=server?.channels?.find(channel=>channel.type==='text')||server?.channels?.[0];if(fallback)selectServerChannel(server.id,fallback.id)}else{renderChannels();syncServerMesh()}}
   if(newServer){pendingServerSelection=false;const dialog=$('#serverDialog');if(dialog?.open)dialog.close();selectServer(newServer.id)}if(newChannel){pendingChannelCreation=null;const dialog=$('#channelDialog');if(dialog?.open)dialog.close();selectServerChannel(pendingServer.id,newChannel.id)}if(profilesChanged&&activeConversationKey)openConversation(activeConversationKey)
@@ -2119,7 +2153,13 @@ function createWebCodecsNativeScreenPlayer(video,codec,onError=()=>{},options={}
 }
 function createMseNativeScreenPlayer(video,codec,onError=()=>{},options={}){
   const mime=nativeScreenMime(codec);if(!mime||!window.MediaSource?.isTypeSupported?.(mime))throw new Error('Native '+codec+' playback is not supported');
-  const configuredWidth=Number(options.width)||0,configuredHeight=Number(options.height)||0,targetLag=.25,startLag=.18,hardCatchupLag=.6;
+  // MediaSource is the reliable fallback for Linux drivers which reject the
+  // low-latency WebCodecs AV1 path. Keep it close enough to live that the
+  // fallback feels like a call (not a broadcast), while retaining ~10 frames
+  // of decode headroom at 60 fps. The old 250 ms target measured around
+  // 330 ms at p95 under a healthy 4K60 call because MSE append/presentation
+  // adds its own scheduling delay.
+  const configuredWidth=Number(options.width)||0,configuredHeight=Number(options.height)||0,targetLag=.17,startLag=.12,hardCatchupLag=.38;
   let source=null,url='',buffer=null,queue=[],queuedBytes=0,latestInit=null,destroyed=false,failed=false,cleaning=false,playbackStarted=false,playbackActive=true,replayPending=false,recoverAfterSerial=0,appendSerial=0,appendingSerial=0,completedAppendSerial=0,pipelineGeneration=0,renderedFrames=0,firstPaintAt=0,lastRenderedAt=0,powerKnown=false,powerEfficient=false;const renderIntervals=[],latencySamples=[];
   const fail=error=>{if(destroyed||failed)return;failed=true;onError(error instanceof Error?error:new Error(String(error||'Native screen playback failed')))};
   const closePipeline=()=>{pipelineGeneration++;try{buffer?.abort()}catch{}buffer=null;source=null;cleaning=false;try{video.pause();video.removeAttribute('src');video.load()}catch{}if(url)URL.revokeObjectURL(url);url=''};

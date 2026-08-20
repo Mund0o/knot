@@ -107,7 +107,7 @@ async function main() {
   const droppedRatio=result.droppedFrames/Math.max(1,result.totalFrames);assert(droppedRatio<.1,`receiver dropped ${(droppedRatio*100).toFixed(1)}% of decoded frames`);
   if(result.renderFps)assert(result.renderFps>=50,`receiver presentation averaged only ${result.renderFps.toFixed(1)} fps`);
   if(result.renderCadenceP95Ms)assert(result.renderCadenceP95Ms<=40,`receiver presentation cadence p95 was ${result.renderCadenceP95Ms.toFixed(1)} ms`);
-  if(result.backend==='mse'&&result.steadyStateP95Ms)assert(result.steadyStateP95Ms<=750,`MediaSource live latency escaped its bounded buffer: ${result.steadyStateP95Ms.toFixed(0)}ms`);
+  if(result.backend==='mse'&&result.steadyStateP95Ms)assert(result.steadyStateP95Ms<=300,`MediaSource live latency exceeded the 300ms ceiling: ${result.steadyStateP95Ms.toFixed(0)}ms`);
   assert.strictEqual(result.localMode, 'placeholder', 'sender created a local AV1 decoder');
   assert.strictEqual(result.localDecodeDisabled, true, 'sender preview decode was not disabled');
   assert(result.localDecodeQueueSize === 0, `sender preview queued ${result.localDecodeQueueSize} frames`);

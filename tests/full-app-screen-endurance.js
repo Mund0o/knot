@@ -247,7 +247,7 @@ async function main() {
   assert(receiver.presentationDroppedFrames/receiver.decodedFrames<.08,`receiver presentation dropped ${(receiver.presentationDroppedFrames/receiver.decodedFrames*100).toFixed(1)}% of frames`);
   if(cadenceReceiver.renderFps)assert(cadenceReceiver.renderFps>=50,`receiver live presentation averaged only ${cadenceReceiver.renderFps.toFixed(1)} fps`);
   if(cadenceReceiver.renderCadenceP95Ms)assert(cadenceReceiver.renderCadenceP95Ms<=40,`receiver live presentation cadence p95 was ${cadenceReceiver.renderCadenceP95Ms.toFixed(1)}ms`);
-  if(cadenceReceiver.backend==='mse'&&cadenceReceiver.steadyStateP95Ms)assert(cadenceReceiver.steadyStateP95Ms<=650,`MediaSource live latency reached ${cadenceReceiver.steadyStateP95Ms.toFixed(0)}ms`);
+  if(cadenceReceiver.backend==='mse'&&cadenceReceiver.steadyStateP95Ms)assert(cadenceReceiver.steadyStateP95Ms<=300,`MediaSource live latency exceeded the 300ms ceiling: ${cadenceReceiver.steadyStateP95Ms.toFixed(0)}ms`);
   assert.deepStrictEqual({width:receiver.width,height:receiver.height},{width:3840,height:2160});
   assert(sender.audioPackets>=Math.floor(durationMs/1000*30),`sender voice produced only ${sender.audioPackets} packets`);
   assert(receiver.audioPackets>=Math.floor(durationMs/1000*30),`receiver voice received only ${receiver.audioPackets} packets`);
