@@ -1,10 +1,10 @@
 {
-  "version": "1.1.72",
-  "notes": "Notification-only DM avatars now appear above the server rail when messages are unread.\nUnread DM avatars disappear after opening the conversation, with corrected square profile-picture cropping.\nMicrophone test now monitors the selected noise-reduction mode (off, RNNoise, or DeepFilterNet3) so you can hear the difference before a call.\nDeepFilterNet3 remains local and CPU-backed; RNNoise remains the low-CPU default.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.72/pair-p2p-1.1.72.tar.gz",
-  "linuxSha256": "8eeabb75b6e95f1172746ac192dbefe09ede6e15880338311cdf18d71e544496",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.72/Knot-1.1.72.AppImage",
-  "linuxAppImageSha256": "6327e9f88401c316034881900b44236ac370c52b554454e7c8aa95b3bd1a52b0",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.72/Knot.Setup.1.1.72.exe",
-  "winSha256": "8aff71354bbd371440e3993fcfafe07460d05016ac3b97b7335df07506699037"
+  "version": "1.1.73",
+  "notes": "DeepFilterNet3 microphone scheduling target increased to 30 ms for smoother typing and UI activity.\nKept full 48 kHz processing and switched capture to mono to avoid duplicate filter work.\nRNNoise and DeepFilterNet3 remain local; no microphone audio is sent to a processing service.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.73/pair-p2p-1.1.73.tar.gz",
+  "linuxSha256": "87a1c82598640ebe917b5419ebcdba0c430a73f6930f93c59b964713e2194a67",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.73/Knot-1.1.73.AppImage",
+  "linuxAppImageSha256": "9dfb277411f82292c9c433f91f88a92fba00687f085cbd5e7e5db06e0759e3d4",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.73/Knot.Setup.1.1.73.exe",
+  "winSha256": "22fa68836552c067d3ffa201c38d429a67e6be6d8b567306e8aee2bf8d9907d6"
 }

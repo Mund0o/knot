@@ -895,7 +895,10 @@ function renderNoiseProcessingUI(){
   }
 }
 renderNoiseProcessingUI();
-function microphoneConstraints({echoCancellation=voiceProcessingEnabled}={}){const knotNoiseFilter=noiseReductionMode==='rnnoise'||noiseReductionMode==='deepfilter'&&deepFilterBackendAvailable(),audio={sampleRate:{ideal:48000},sampleSize:{ideal:32},channelCount:{ideal:2},latency:{ideal:.01},echoCancellation,noiseSuppression:!knotNoiseFilter&&noiseReductionMode==='deepfilter',autoGainControl:false,voiceIsolation:false,googEchoCancellation:echoCancellation,googAutoGainControl:false,googNoiseSuppression:!knotNoiseFilter&&noiseReductionMode==='deepfilter',googHighpassFilter:false,googTypingNoiseDetection:false,googAudioMirroring:false};if(inputDeviceId&&inputDeviceId!=='default')audio.deviceId={exact:inputDeviceId};return {audio,video:false}}
+// Give the real-time filter a 30 ms scheduling budget. This keeps the full
+// 48 kHz DeepFilterNet3 model intact while preventing short UI/typing bursts
+// from starving the audio worklet. The browser may choose a lower value.
+function microphoneConstraints({echoCancellation=voiceProcessingEnabled}={}){const knotNoiseFilter=noiseReductionMode==='rnnoise'||noiseReductionMode==='deepfilter'&&deepFilterBackendAvailable(),audio={sampleRate:{ideal:48000},sampleSize:{ideal:32},channelCount:{ideal:1},latency:{ideal:.03},echoCancellation,noiseSuppression:!knotNoiseFilter&&noiseReductionMode==='deepfilter',autoGainControl:false,voiceIsolation:false,googEchoCancellation:echoCancellation,googAutoGainControl:false,googNoiseSuppression:!knotNoiseFilter&&noiseReductionMode==='deepfilter',googHighpassFilter:false,googTypingNoiseDetection:false,googAudioMirroring:false};if(inputDeviceId&&inputDeviceId!=='default')audio.deviceId={exact:inputDeviceId};return {audio,video:false}}
 function voiceInputTracks(){return localMicrophoneStream?.getAudioTracks?.().length?localMicrophoneStream.getAudioTracks():localStream?.getAudioTracks?.()||[]}
 function stopVoiceNoisePipeline(pipeline=voiceNoisePipeline){
   if(pipeline===voiceNoisePipeline)voiceNoisePipeline=null;
@@ -917,7 +920,7 @@ function deepFilterBytes(value,name){
 }
 async function createDeepFilterMicrophone(rawStream){
   if(!deepFilterBackendAvailable())throw new Error('DeepFilterNet3 is not available in this build');
-  const context=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000,latencyHint:'interactive'});let urls=[];
+    const context=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000,latencyHint:0.03});let urls=[];
   try{
     await context.resume();const [wasmAsset,modelAsset]=await Promise.all([window.pairDeepFilter.getAsset('wasm'),window.pairDeepFilter.getAsset('model')]);
     const wasmBytes=deepFilterBytes(wasmAsset,'WASM'),modelBytes=deepFilterBytes(modelAsset,'model');
@@ -931,7 +934,7 @@ async function createDeepFilterMicrophone(rawStream){
 }
 async function createRnnoiseMicrophone(rawStream){
   if(typeof AudioWorkletNode==='undefined'||!(window.AudioContext||window.webkitAudioContext))throw new Error('AudioWorklet is not available in this build');
-  const context=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000,latencyHint:'interactive'});
+  const context=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000,latencyHint:0.03});
   try{
     await context.resume();const {module,root}=await rnnoiseLibrary(),assets=module.rnnoise_loadAssets({scriptSrc:new URL('rnnoise.worklet.js',root).href,moduleSrc:new URL('rnnoise.wasm',root).href});
     await module.RNNoiseNode.register(context,assets);
