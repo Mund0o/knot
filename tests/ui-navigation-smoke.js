@@ -12,6 +12,7 @@ const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 
 const updaterSource = fs.readFileSync(path.join(__dirname, '..', 'updater.js'), 'utf8');
 const workletSource = fs.readFileSync(path.join(__dirname, '..', 'screen-audio-worklet.js'), 'utf8');
 const workerSource = fs.readFileSync(path.join(__dirname, '..', 'worker', 'index.js'), 'utf8');
+const packageSource = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
 if (mainSource.includes("appendSwitch('render-node-override'") || mainSource.includes("appendSwitch('use-angle'")) {
   throw new Error('Linux screen sharing still forces a portal-incompatible GPU target');
 }
@@ -129,6 +130,9 @@ if (!mainSource.includes('NATIVE_AUDIO_MAX_INFLIGHT = 3') || !mainSource.include
 if (!rendererSource.includes('screenShareOutputElements()') || !rendererSource.includes('state.screenAudio') || !rendererSource.includes('applyMediaElementOutput(nativeRemoteAudio)')) {
   throw new Error('Selected speaker routing does not cover every screen-share playback route');
 }
+if (!htmlSource.includes('id="noiseReduction"') || !htmlSource.includes('id="noiseHardware"') || !htmlSource.includes("'wasm-unsafe-eval'") || htmlSource.includes("'unsafe-eval'") || !rendererSource.includes('function createRnnoiseMicrophone(') || !rendererSource.includes('function releaseCallMicrophone(') || !rendererSource.includes('function voiceInputTracks(') || !packageSource.includes('simple-rnnoise-wasm')) {
+  throw new Error('Local RNNoise microphone processing or its hardware preferences are missing');
+}
 
 function fail(error) {
   console.error('Navigation UI smoke test failed:', error?.stack || error);
@@ -149,6 +153,7 @@ app.whenReady().then(async () => {
       const assert=(condition,message)=>{if(!condition)throw new Error(message)};
       const dialog=document.querySelector('#serverDialog'),plus=document.querySelector('#addServer'),toggle=document.querySelector('#sidebarToggle'),home=document.querySelector('#homeButton'),handle=document.querySelector('#sidebarResize'),shell=document.querySelector('.app-shell');
       const brandIcon=home.querySelector('img');assert(brandIcon&&brandIcon.complete&&brandIcon.naturalWidth>0,'Knot home logo did not load');
+      noiseReductionMode='rnnoise';noiseHardwareMode='gpu';renderNoiseProcessingUI();assert(noiseHardware.disabled&&noiseHardware.value==='cpu'&&noiseProcessingHint.textContent.includes('RNNoise'),'RNNoise did not force the truthful CPU-only mode');noiseReductionMode='deepfilter';renderNoiseProcessingUI();assert(noiseHardware.disabled&&noiseProcessingHint.textContent.includes('DeepFilterNet'),'unpackaged DeepFilterNet did not keep a safe local fallback');noiseReductionMode='rnnoise';renderNoiseProcessingUI();const rnInput=new AudioContext({sampleRate:48000}),rnDest=rnInput.createMediaStreamDestination(),rnOsc=rnInput.createOscillator();rnOsc.connect(rnDest);rnOsc.start();await rnInput.resume();const rnPipeline=await createRnnoiseMicrophone(rnDest.stream);assert(rnPipeline.stream.getAudioTracks().length===1&&rnPipeline.node&&rnPipeline.context.state!=='closed','RNNoise did not create a local outgoing microphone track');try{rnPipeline.node.update(false)}catch{}try{rnPipeline.source.disconnect()}catch{}try{rnPipeline.node.disconnect()}catch{}try{await rnPipeline.context.close()}catch{}rnOsc.stop();await rnInput.close();
       const accountVerifier=await accountPasswordVerifier('correct horse battery staple','MDEyMzQ1Njc4OWFiY2RlZg');assert(/^[A-Za-z0-9_.-]{43}$/.test(accountVerifier),'desktop WebCrypto did not complete the 600,000-round account derivation');
       plus.click();assert(dialog.open,'server plus did not open Create/Join dialog');assert(dialog.textContent.includes('Create a server')&&dialog.textContent.includes('Join a server'),'server actions are not visible');dialog.close();const accountDialog=document.querySelector('#accountDialog');accountDialog.showModal();document.querySelector('#authSigninTab').click();assert(document.querySelector('#authSubmit').textContent.includes('Sign in'),'first-run account page did not switch to sign in');document.querySelector('#authSignupTab').click();assert(document.querySelector('#authSubmit').textContent.includes('Create'),'first-run account page did not switch to sign up');document.querySelector('#authContinueLocal').click();await new Promise(resolve=>setTimeout(resolve,20));assert(!accountDialog.open,'device-only account choice did not close onboarding');
       toggle.click();assert(document.body.classList.contains('social-sidebar-collapsed'),'sidebar did not collapse');assert(toggle.getAttribute('aria-expanded')==='false','collapsed state is not announced');

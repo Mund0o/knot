@@ -40,6 +40,7 @@
   },
   "dependencies": {
     "node-addon-api": "^8.5.0",
+    "simple-rnnoise-wasm": "1.1.0",
     "ws": "^8.18.3"
   },
   "build": {
@@ -58,6 +59,7 @@
       "native-screen.js",
       "preload.js",
       "screen-audio-worklet.js",
+      "node_modules/simple-rnnoise-wasm/**/*",
       "scripts/before-pack.js",
       "scripts/windows-audio-addon-guard.js",
       "updater.js",

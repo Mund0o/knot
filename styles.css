@@ -669,3 +669,6 @@ body.screen-share-active .screen-view-bar button{transition:none!important}
 body.screen-share-active .avatar.speaking,
 body.screen-share-active .friend-avatar.speaking,
 body.screen-share-active .server-stage-avatar.speaking{position:relative;z-index:4;outline:3px solid #2fd36f!important;outline-offset:3px!important}
+
+/* Local microphone processing choices live with the device controls. */
+.noise-processing-card{display:grid;gap:11px;margin:2px 0 4px;padding:13px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--stroke-quiet));border-radius:12px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 9%,var(--surface)),var(--surface))}.noise-processing-card>div{display:flex;flex-direction:column;gap:3px}.noise-processing-card>div strong{font-size:12px}.noise-processing-card>div small{color:var(--subtle);font-size:10px;line-height:1.4}.noise-processing-card .settings-field{gap:5px}.noise-processing-card .settings-field span{font-size:10px}.noise-processing-card select:disabled{cursor:not-allowed;opacity:.65}
