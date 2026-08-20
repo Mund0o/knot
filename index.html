@@ -99,7 +99,7 @@
           <label for="authUsername"><span>Username</span><input id="authUsername" type="text" minlength="3" maxlength="24" autocomplete="username" spellcheck="false" placeholder="your_username" /></label>
           <label for="authPassword"><span>Password</span><input id="authPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="At least 8 characters" /></label>
           <button id="authSubmit" class="primary" type="button">Create secure account</button>
-          <p id="authStatus" class="settings-hint" aria-live="polite">Usernames are unique. Passwords travel only over WSS/TLS and are stored as a salted 600,000-round PBKDF2 hash.</p>
+          <p id="authStatus" class="settings-hint" aria-live="polite">Usernames are unique. The 600,000-round password protection runs on this device; only a derived verifier crosses WSS/TLS.</p>
           <button id="authContinueLocal" class="text-button" type="button">Continue with a device-only identity</button>
         </section>
       </dialog>

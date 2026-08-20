@@ -80,15 +80,14 @@ function normalizeUsername(value) {
   return /^[a-z0-9][a-z0-9_.-]{2,23}$/.test(username) ? username : '';
 }
 
-function cleanPassword(value) {
-  const password = typeof value === 'string' ? value : '';
-  return password.length >= 8 && password.length <= 128 ? password : '';
+function cleanVerifier(value) {
+  const verifier = typeof value === 'string' ? value : '';
+  return /^[A-Za-z0-9_.-]{43}$/.test(verifier) ? verifier : '';
 }
 
-async function passwordHash(password, salt) {
-  const encoder = new TextEncoder(), key = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: 600000 }, key, 256);
-  return [...new Uint8Array(bits)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+function cleanPasswordSalt(value) {
+  const salt = typeof value === 'string' ? value : '';
+  return /^[A-Za-z0-9_.-]{22,64}$/.test(salt) ? salt : '';
 }
 
 function secureEqual(left, right) {
@@ -265,6 +264,7 @@ export class PairDirectory {
   }
 
   async authenticate(socket, attachment, value) {
+    if (value?.type === 'account-challenge') return this.accountChallenge(socket, value);
     if (value?.type === 'account-login') return this.loginAccount(socket, attachment, value);
     if (value?.type !== 'hello') return socket.close(1008, 'authenticate first');
     const id = normalizeId(value.userId), token = normalizeToken(value.token);
@@ -287,28 +287,39 @@ export class PairDirectory {
 
   async createAccount(socket, user, value) {
     await this.consumeSecurityBudget('signup', 60 * 60 * 1000, SIGNUP_GLOBAL_LIMIT_PER_HOUR);
-    const username = normalizeUsername(value.username), password = cleanPassword(value.password);
+    const username = normalizeUsername(value.username), passwordSalt = cleanPasswordSalt(value.passwordSalt), verifier = cleanVerifier(value.verifier);
     if (!username) throw new Error('username must be 3–24 letters, numbers, dots, dashes, or underscores');
-    if (!password) throw new Error('password must be 8–128 characters');
+    if (!passwordSalt || !verifier) throw new Error('password verifier is invalid; update Knot and try again');
     if (user.username && user.username !== username) throw new Error('this identity already has an account');
-    const salt = randomHex(16), hash = await passwordHash(password, salt);
+    const verifierHash = await tokenHash(verifier);
     await this.state.storage.transaction(async transaction => {
       const existing = await transaction.get(`account:${username}`);
       if (existing && existing.userId !== user.id) throw new Error('that username is already taken');
-      await transaction.put(`account:${username}`, { userId: user.id, salt, hash });
+      await transaction.put(`account:${username}`, { userId: user.id, passwordSalt, verifierHash });
     });
     const now = Date.now();if (user.tokenHash) { user.sessions = [...(user.sessions || []), { hash: user.tokenHash, expiresAt: now + ACCOUNT_SESSION_TTL_MS }].slice(-8);delete user.tokenHash; }
     user.username = username; await this.putUser(user);
     this.safeSend(socket, JSON.stringify({ type: 'account-session', mode: 'created', userId: user.id, username }));
   }
 
+  async accountChallenge(socket, value) {
+    const requested = String(value?.username || '').trim().toLowerCase().slice(0, 24), username = normalizeUsername(requested);
+    const account = username ? await this.state.storage.get(`account:${username}`) : null;
+    // Existing and unknown names both receive a stable, same-shape salt so this
+    // pre-login step does not become a reliable username-enumeration endpoint.
+    const dummySalt = (await tokenHash(`knot-account-challenge-v1|${requested}`)).slice(0, 32);
+    const passwordSalt = cleanPasswordSalt(account?.passwordSalt) || dummySalt;
+    this.safeSend(socket, JSON.stringify({ type: 'account-challenge', username: username || requested, passwordSalt }));
+  }
+
   async loginAccount(socket, attachment, value) {
     try { await this.consumeSecurityBudget('login', 60 * 1000, LOGIN_GLOBAL_LIMIT_PER_MINUTE); } catch { this.safeSend(socket, JSON.stringify({ type: 'error', action: 'account-login', message: 'username or password is incorrect, or sign-in is temporarily limited' }));return; }
-    const username = normalizeUsername(value.username), password = cleanPassword(value.password), account = username ? await this.state.storage.get(`account:${username}`) : null, now = Date.now();
-    // Run the same expensive hash for unknown and malformed accounts to avoid
-    // turning response timing into a username-enumeration oracle.
-    const supplied = await passwordHash(password || 'invalid-password', account?.salt || randomHex(16)), locked = Number(account?.login?.blockedUntil) > now;
-    if (!account || !password || locked || !secureEqual(supplied, account.hash)) {
+    const username = normalizeUsername(value.username), verifier = cleanVerifier(value.verifier), account = username ? await this.state.storage.get(`account:${username}`) : null, now = Date.now();
+    // Password stretching happens on the desktop. The Worker receives only the
+    // derived verifier and stores only its SHA-256 hash, keeping raw passwords
+    // out of Cloudflare while avoiding Workers' per-operation PBKDF2 ceiling.
+    const supplied = await tokenHash(verifier || randomHex(32)), expected = account?.verifierHash || randomHex(32), locked = Number(account?.login?.blockedUntil) > now;
+    if (!account || !verifier || locked || !secureEqual(supplied, expected)) {
       if (account) { const current = account.login && now - Number(account.login.windowStarted) < LOGIN_WINDOW_MS ? account.login : { windowStarted: now, failures: 0, blockedUntil: 0 };current.failures++;if (current.failures >= LOGIN_MAX_FAILURES) current.blockedUntil = now + LOGIN_WINDOW_MS;account.login = current;await this.state.storage.put(`account:${username}`, account); }
       this.safeSend(socket, JSON.stringify({ type: 'error', action: 'account-login', message: 'username or password is incorrect, or sign-in is temporarily limited' })); return;
     }

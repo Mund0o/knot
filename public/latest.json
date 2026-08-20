@@ -1,10 +1,10 @@
 {
-  "version": "1.1.67",
-  "notes": "Fixed silent incoming Linux and Windows screen-share audio\nCall presence now stays synchronized and call volume starts at 100%\nResizable call stage, closable DMs, and a complete Friends list with old-identity removal\nNew secure Sign up and Sign in page keeps one identity across operating systems\nCase-insensitive unique usernames with salted password hashing, throttling, and expiring sessions\nEncrypted local identity keys and chat history plus a pinned production updater\nSecurity and dependency audit completed with zero known npm vulnerabilities",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.67/pair-p2p-1.1.67.tar.gz",
-  "linuxSha256": "719dcf67497f80d98d63fb1c02236b385e479531479bd2bdee2c85635632510c",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.67/Knot-1.1.67.AppImage",
-  "linuxAppImageSha256": "a25b25c8287a9cf10bf1c173aa1edac09077f3e28c737f3e949de1acd77c747b",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.67/Knot.Setup.1.1.67.exe",
-  "winSha256": "53321d4cfb9b9473c98c678b31ffbba8474abe11c4e0ffb40099c70e3595be16"
+  "version": "1.1.68",
+  "notes": "Fixed Cloudflare signup failures caused by the Worker PBKDF2 limit\n600,000-round password protection now runs safely on your device\nPasswords never leave Knot; Cloudflare receives only a derived verifier\nCloudflare stores only a second SHA-256 hash of that verifier\nUnique usernames, login throttling, and expiring sessions remain enforced",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.68/pair-p2p-1.1.68.tar.gz",
+  "linuxSha256": "4f9d4a300ee5be7b3c8435e58758776dbec98b66cd4154c8560c13e364c2eadd",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.68/Knot-1.1.68.AppImage",
+  "linuxAppImageSha256": "3be9b642c5c941ab535a62ef42d8138875d76a0a42c5bf71b4ec04b10fcc4529",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.68/Knot.Setup.1.1.68.exe",
+  "winSha256": "f4a193551781f0bd40f406fcc43fe2c8a3750c92572119e5f343f1b035fef8de"
 }
