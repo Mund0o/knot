@@ -21,7 +21,7 @@ let localStream=null,micMuted=false,callActive=false,callStart=0,callTimerId=nul
 let screenNative=false,screenOutCtx=null,screenOutDest=null,screenCaptureCleanup=null,screenCaptureOwner=null,screenCaptureAttempt=0;
 // Direct handle to the audio transceiver created in setupPeer, so startCall can
 // always reuse it (never add a second m-line). Nulled on disconnect/teardown.
-let audioTransceiver=null;
+let audioTransceiver=null,screenAudioTransceiver=null;
 // Keep the interface fully usable while this build is being tested without a
 // second device. Network-only actions stay local and are clearly labelled.
 // Local-only controls are opt-in for development. Packaged builds must never
@@ -587,13 +587,15 @@ function setupPeer(){
   // (whose receiver-based kind matching fails for createAnswer in Chrome).
   try{
     const silentCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000});
-    const silentDst=silentCtx.createMediaStreamDestination();
-    silentDst.channelCount=2;
+    const silentDst=silentCtx.createMediaStreamDestination(),silentScreenDst=silentCtx.createMediaStreamDestination();
+    silentDst.channelCount=2;silentScreenDst.channelCount=2;
     audioTransceiver=pc.addTrack(silentDst.stream.getAudioTracks()[0],silentDst.stream);
+    screenAudioTransceiver=pc.addTrack(silentScreenDst.stream.getAudioTracks()[0],silentScreenDst.stream);
+    pc._silentScreenAudioTrack=silentScreenDst.stream.getAudioTracks()[0];
     // Keep a reference so we can close the AudioContext on disconnect
     pc._silentAudioCtx=silentCtx;
-  }catch(e){console.warn('Silent audio track failed, using addTransceiver:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null}}
-  logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid:'null'));
+  }catch(e){console.warn('Silent audio tracks failed, using transceivers:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});screenAudioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null;screenAudioTransceiver=null}}
+  logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' voice='+(audioTransceiver?'ready':'null')+' screenAudio='+(screenAudioTransceiver?'ready':'null'));
   let gestureGuard=false,screenGestureGuard=false;
   pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{const stream=e.streams[0]||new MediaStream([e.track]);
     // Keep remoteScreenExpected true until screen-end so audio that arrives after
@@ -604,12 +606,13 @@ function setupPeer(){
     // renegotiation cannot mistake the friend's voice for screen audio and
     // silently detach the speaking-ring analyser.
     const isVoiceAudio=e.track.kind==='audio'&&(e.transceiver===audioTransceiver||e.transceiver?.sender===audioTransceiver);
+    const isReservedScreenAudio=e.track.kind==='audio'&&(e.transceiver===screenAudioTransceiver||e.transceiver?.sender===screenAudioTransceiver);
     // Windows attaches computer sound in a later renegotiation. Data-channel
     // screen-start metadata and that new audio m-line can arrive in either
     // order, so a second audio transceiver after the established call track is
     // unambiguously screen sound even before the metadata reaches Linux.
     const isAdditionalScreenAudio=e.track.kind==='audio'&&!!remoteVoiceTransceiver&&!!e.transceiver&&e.transceiver!==remoteVoiceTransceiver;
-    const bindsToScreen=!isVoiceAudio&&(stream===remoteScreen.srcObject
+    const bindsToScreen=!isVoiceAudio&&(isReservedScreenAudio||stream===remoteScreen.srcObject
       ||!!(screenStreamId&&e.streams?.some(s=>s?.id===screenStreamId))
       ||stream.getVideoTracks().length>0
       ||remoteScreenExpected
@@ -960,7 +963,7 @@ function acceptTurnCredentials(value){if(!validTurnIceServers(value?.iceServers)
 async function derivePersistentDmKey(local,remote){const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);return crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt'])}
 async function sealWithKey(key,value){const iv=crypto.getRandomValues(new Uint8Array(12)),data=typeof value==='string'?enc.encode(value):value,ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,data);return{iv:[...iv],data:[...new Uint8Array(ct)]}}
 async function openWithKey(key,value){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(value.iv)},key,new Uint8Array(value.data)))}
-function persistentDmReady(id){return !!(directorySocket?.readyState===WebSocket.OPEN&&directoryUser(id)?.online&&validDevicePublicKey(directoryUser(id)?.deviceKey))}
+function persistentDmReady(id){return !!(directorySocket?.readyState===WebSocket.OPEN&&validDevicePublicKey(directoryUser(id)?.deviceKey))}
 function syncActiveDmTransport(){
   if(activeServerId||!activePeerId)return;
   const friend=directoryUser(activePeerId),ready=persistentDmReady(activePeerId),mediaReady=!!(pc&&dmPeerId===activePeerId&&pc.connectionState==='connected'),inBackgroundCall=dmCallOngoing()&&dmCallPeerId!==activePeerId;
@@ -970,7 +973,7 @@ function syncActiveDmTransport(){
   fileInput.disabled=relayVoiceMode||!friend?.online||directorySocket?.readyState!==WebSocket.OPEN;
   if(callActive||friendInCall)callBtn.disabled=false;else callBtn.disabled=!friend?.online;
   $('.connection').classList.toggle('connected',ready);
-  statusText.textContent=ready?(relayVoiceMode?'Encrypted text · low-bandwidth voice relay':inBackgroundCall?'Encrypted text · call continues in background':'Encrypted live text'):dmConnectingPeerId===activePeerId?'Connecting media…':friend?.online?'Preparing encrypted text…':'Offline';
+  statusText.textContent=ready?(friend?.online?(relayVoiceMode?'Encrypted text · low-bandwidth voice relay':inBackgroundCall?'Encrypted text · call continues in background':'Encrypted live text'):'Encrypted text · offline delivery ready'):dmConnectingPeerId===activePeerId?'Connecting media…':friend?.online?'Preparing encrypted text…':'Offline · waiting for secure device key';
 }
 function closePersistentDmPeer(peerId,{retry=false}={}){
   const state=persistentDmPeers.get(peerId);if(!state)return;state.closing=true;persistentDmPeers.delete(peerId);
@@ -1015,14 +1018,14 @@ function syncPersistentDmPeers(){
   syncActiveDmTransport();renderFriends();
 }
 async function sendPersistentDm(peerId,text,gif){
-  if(!persistentDmReady(peerId))throw new Error('Your friend is offline or secure text is not ready');
+  if(!persistentDmReady(peerId))throw new Error('Secure text is not ready');
   const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE)throw new Error('Messages are limited to 64 KB');
   const id=clientHex(16),key=await relayPairKey(peerId),cipher=await sealRelay(key,payload,relayAad('dm',id,directoryUserId,peerId));
   if(!directorySend({type:'relay-text',scope:'dm',id,peerId,cipher}))throw new Error('Encrypted text relay is offline');
   addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics);
 }
 function rememberRelayMessage(id){if(!/^[a-f0-9]{32}$/.test(id||'')||seenRelayMessages.has(id))return false;seenRelayMessages.add(id);if(seenRelayMessages.size>2000)seenRelayMessages.delete(seenRelayMessages.values().next().value);return true}
-async function receiveRelayText(value){const from=String(value?.from||'').toLowerCase(),id=String(value?.id||'').toLowerCase();if(!rememberRelayMessage(id))return;if(value.scope==='dm'){if(!directoryUser(from))return;const key=await relayPairKey(from),payload=await openRelay(key,value.cipher,relayAad('dm',id,from,directoryUserId));if(!payload)return;receivePersistentDmMessage(from,readChatPayload(payload));return}if(value.scope!=='server')return;const server=directorySnapshot.servers?.find(item=>item.id===value.serverId),channel=server?.channels?.find(item=>item.id===value.channelId&&item.type==='text');if(!server||!channel||!server.members.includes(from))return;const group=await serverTextKey(server);if(!group){await requestServerTextKey(server);if(activeServerId===server.id)pairHint.textContent='Waiting for an online member to share this server’s secure text key.';return}const payload=await openRelay(group.key,value.cipher,relayAad('server',id,from,'',server.id,channel.id));if(!payload)return;let message;try{message=JSON.parse(payload)}catch{return}const chat=readChatPayload(message.payload);const entry=normalizeServerHistoryEntry({id,text:chat.text,gif:chat.gif,time:message.time,author:{id:from}},server,from);if(entry)storeServerHistory(server.id,channel.id,[entry])}
+async function receiveRelayText(value){const from=String(value?.from||'').toLowerCase(),id=String(value?.id||'').toLowerCase();if(!/^[a-f0-9]{32}$/.test(id))return;if(seenRelayMessages.has(id)){if(value.scope==='dm')directorySend({type:'relay-ack',id});return}if(!rememberRelayMessage(id))return;if(value.scope==='dm'){if(!directoryUser(from))return;const key=await relayPairKey(from),payload=await openRelay(key,value.cipher,relayAad('dm',id,from,directoryUserId));if(!payload)return;receivePersistentDmMessage(from,readChatPayload(payload));directorySend({type:'relay-ack',id});return}if(value.scope!=='server')return;const server=directorySnapshot.servers?.find(item=>item.id===value.serverId),channel=server?.channels?.find(item=>item.id===value.channelId&&item.type==='text');if(!server||!channel||!server.members.includes(from))return;const group=await serverTextKey(server);if(!group){await requestServerTextKey(server);if(activeServerId===server.id)pairHint.textContent='Waiting for an online member to share this server’s secure text key.';return}const payload=await openRelay(group.key,value.cipher,relayAad('server',id,from,'',server.id,channel.id));if(!payload)return;let message;try{message=JSON.parse(payload)}catch{return}const chat=readChatPayload(message.payload);const entry=normalizeServerHistoryEntry({id,text:chat.text,gif:chat.gif,time:message.time,author:{id:from}},server,from);if(entry)storeServerHistory(server.id,channel.id,[entry])}
 async function receiveRelayKey(value){const from=String(value?.from||'').toLowerCase(),server=directorySnapshot.servers?.find(item=>item.id===value.serverId);if(!server||!server.members.includes(from))return;if(value.mode==='request'){const group=await serverTextKey(server);if(group)await sendServerTextKey(server,from,group.raw);return}if(value.mode!=='deliver'||!rememberRelayMessage(String(value?.id||'').toLowerCase()))return;const key=await relayPairKey(from),plain=await openRelay(key,value.cipher,relayAad('key',value.id,from,directoryUserId,server.id));if(!plain)return;let delivered;try{delivered=JSON.parse(plain)}catch{return}if(delivered?.serverId!==server.id||typeof delivered.key!=='string'||!/^[A-Za-z0-9_.-]{40,64}$/.test(delivered.key))return;try{await importServerTextKey(delivered.key)}catch{return}await loadServerTextKeys();serverTextKeys[server.id]=delivered.key;await saveServerTextKeys();pendingServerKeyRequests.delete(server.id);if(activeServerId===server.id){pairHint.textContent='Encrypted live text is ready.';syncActiveDmTransport()}}
 messageForm.addEventListener('submit',async event=>{
   if(!activeServerId&&!activePeerId)return;event.preventDefault();event.stopImmediatePropagation();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;
@@ -1224,21 +1227,22 @@ function wireServerNativeScreenChannel(peerId,state,channel,{remote=false}={}){
 }
 async function ensureServerPeer(peerId,context={type:'server',serverId:activeServerId,channelId:activeChannelId}){
   if(serverPeers.has(peerId))return serverPeers.get(peerId);
-  const connection=new RTCPeerConnection({iceServers:ICE_SERVERS}),state={pc:connection,channel:null,candidates:[],audios:[],voiceSender:null,screen:null,screenAudio:null,screenStreamId:'',screenSenders:[],nativeScreenPlayer:null,nativeSendChannel:null,nativeReceiveChannel:null,nativeScreenAudioExpected:false,context};serverPeers.set(peerId,state);
+  const connection=new RTCPeerConnection({iceServers:ICE_SERVERS}),state={pc:connection,channel:null,candidates:[],audios:[],voiceSender:null,screenAudioSender:null,silentScreenAudioTrack:null,silentAudioCtx:null,screen:null,screenAudio:null,screenStreamId:'',screenSenders:[],nativeScreenPlayer:null,nativeSendChannel:null,nativeReceiveChannel:null,nativeScreenAudioExpected:false,context};serverPeers.set(peerId,state);
   connection.onicecandidate=event=>{if(event.candidate)directorySend({type:'signal',peerId,context:state.context,payload:{kind:'candidate',candidate:event.candidate.toJSON()}})};
-  connection.onconnectionstatechange=()=>{if(connection.connectionState==='connected'&&serverNativeScreenSession)ensureServerNativeChannel(peerId,state).catch(()=>{});if(['failed','closed'].includes(connection.connectionState)){stopSpeakingMonitor('server:'+peerId);state.audios.forEach(audio=>audio.remove());clearServerNativeScreen(state);try{state.nativeSendChannel?.close()}catch{}try{state.screen?.remove()}catch{}serverPeers.delete(peerId)}};
+  connection.onconnectionstatechange=()=>{if(connection.connectionState==='connected'&&serverNativeScreenSession)ensureServerNativeChannel(peerId,state).catch(()=>{});if(['failed','closed'].includes(connection.connectionState)){stopSpeakingMonitor('server:'+peerId);state.audios.forEach(audio=>audio.remove());clearServerNativeScreen(state);try{state.nativeSendChannel?.close()}catch{}try{state.silentAudioCtx?.close()}catch{}try{state.screen?.remove()}catch{}serverPeers.delete(peerId)}};
   connection.ondatachannel=event=>{if(event.channel.label==='knot-server-screen-native'){wireServerNativeScreenChannel(peerId,state,event.channel,{remote:true});return}state.channel=event.channel;wireServerChannel(peerId,state.channel,state.context.serverId)};
-  connection.ontrack=event=>{if(!voicePeerAllowed(peerId))return;const stream=event.streams[0]||new MediaStream([event.track]),isVoiceAudio=event.track.kind==='audio'&&event.transceiver?.sender===state.voiceSender;if(event.track.kind==='video'){addServerScreenVideo(peerId,state,event.track,stream);return}if(isVoiceAudio){addServerVoiceAudio(peerId,state,event.track,stream);return}if(state.nativeScreenAudioExpected&&state.nativeScreenPlayer){stream._knotPeerId=peerId;addServerNativeScreenAudio(state,event.track,stream);return}const screenAudio=stream.getVideoTracks().length>0||!!(state.screenStreamId&&stream.id===state.screenStreamId);if(screenAudio){if(state.screen&&state.screen.srcObject!==stream)try{state.screen.srcObject.addTrack(event.track)}catch{}renderServerShareExperience();return}addServerVoiceAudio(peerId,state,event.track,stream)};
+  connection.ontrack=event=>{if(!voicePeerAllowed(peerId))return;const stream=event.streams[0]||new MediaStream([event.track]),isVoiceAudio=event.track.kind==='audio'&&event.transceiver?.sender===state.voiceSender,isReservedScreenAudio=event.track.kind==='audio'&&event.transceiver?.sender===state.screenAudioSender;if(event.track.kind==='video'){addServerScreenVideo(peerId,state,event.track,stream);return}if(isVoiceAudio){addServerVoiceAudio(peerId,state,event.track,stream);return}if(isReservedScreenAudio||state.nativeScreenAudioExpected&&state.nativeScreenPlayer){stream._knotPeerId=peerId;addServerNativeScreenAudio(state,event.track,stream);return}const screenAudio=stream.getVideoTracks().length>0||!!(state.screenStreamId&&stream.id===state.screenStreamId);if(screenAudio){if(state.screen&&state.screen.srcObject!==stream)try{state.screen.srcObject.addTrack(event.track)}catch{}renderServerShareExperience();return}addServerVoiceAudio(peerId,state,event.track,stream)};
   if(voicePeerAllowed(peerId)){
     for(const track of serverVoiceStream.getTracks()){state.voiceSender=connection.addTrack(track,serverVoiceStream);try{const parameters=state.voiceSender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=256000;parameters.encodings[0].priority='high';parameters.encodings[0].networkPriority='high';await state.voiceSender.setParameters(parameters)}catch{}}
+    try{state.silentAudioCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000});const destination=state.silentAudioCtx.createMediaStreamDestination();state.silentScreenAudioTrack=destination.stream.getAudioTracks()[0];state.screenAudioSender=connection.addTrack(state.silentScreenAudioTrack,destination.stream)}catch{state.screenAudioSender=connection.addTransceiver('audio',{direction:'sendrecv'}).sender}
     if(serverScreenStream)for(const track of serverScreenStream.getTracks()){
-      const sender=connection.addTrack(track,serverScreenStream);state.screenSenders.push(sender);if(track.kind==='video'){applyScreenCodecPreference(connection,sender);await configureScreenVideoSender(sender,track,shareFrameRate,Math.max(1,serverOnlineMembers().length))}
+      if(track.kind==='audio'){await setServerScreenAudioTrack(state,track);continue}const sender=connection.addTrack(track,serverScreenStream);state.screenSenders.push(sender);applyScreenCodecPreference(connection,sender);await configureScreenVideoSender(sender,track,shareFrameRate,Math.max(1,serverOnlineMembers().length))
     }
   }
   if(directoryUserId<peerId){state.channel=connection.createDataChannel('pair-server-chat');wireServerChannel(peerId,state.channel,state.context.serverId);const offer=await connection.createOffer();await connection.setLocalDescription(offer);directorySend({type:'signal',peerId,context:state.context,payload:{kind:'offer',sdp:connection.localDescription.sdp}})}return state;
 }
 async function handleServerSignal(message){const context=message.context||{},payload=message.payload||{};if(context.serverId!==activeServerId&&context.serverId!==joinedVoiceServerId)return;const state=await ensureServerPeer(message.from,context),connection=state.pc;if(payload.kind==='offer'){await connection.setRemoteDescription({type:'offer',sdp:payload.sdp});const answer=await connection.createAnswer();await connection.setLocalDescription(answer);directorySend({type:'signal',peerId:message.from,context:state.context,payload:{kind:'answer',sdp:connection.localDescription.sdp}});for(const candidate of state.candidates.splice(0))await connection.addIceCandidate(candidate)}else if(payload.kind==='answer'){await connection.setRemoteDescription({type:'answer',sdp:payload.sdp});for(const candidate of state.candidates.splice(0))await connection.addIceCandidate(candidate)}else if(payload.kind==='candidate'){if(connection.remoteDescription)await connection.addIceCandidate(payload.candidate);else state.candidates.push(payload.candidate)}}
-function closeServerPeer(peerId,state=serverPeers.get(peerId)){if(!state)return;stopSpeakingMonitor('server:'+peerId);try{state.channel?.close()}catch{}clearServerNativeScreen(state);try{state.nativeSendChannel?.close()}catch{}try{state.pc.close()}catch{}for(const audio of state.audios||[])try{audio.remove()}catch{}try{state.screen?.remove()}catch{}serverPeers.delete(peerId)}
+function closeServerPeer(peerId,state=serverPeers.get(peerId)){if(!state)return;stopSpeakingMonitor('server:'+peerId);try{state.channel?.close()}catch{}clearServerNativeScreen(state);try{state.nativeSendChannel?.close()}catch{}try{state.pc.close()}catch{}try{state.silentAudioCtx?.close()}catch{}for(const audio of state.audios||[])try{audio.remove()}catch{}try{state.screen?.remove()}catch{}serverPeers.delete(peerId)}
 function closeServerMesh(){for(const [peerId,state] of [...serverPeers])closeServerPeer(peerId,state)}
 function syncServerMesh(){
   // Text now uses the encrypted live relay. Never create a server WebRTC mesh
@@ -1271,9 +1275,10 @@ function queueServerNativeItem(channel,item){if(channel.readyState!=='open'||!se
 async function ensureServerNativeChannel(peerId,state){
   if(!serverNativeScreenSession||!state||state.pc.connectionState!=='connected')return null;let channel=state.nativeSendChannel;if(!channel||channel.readyState==='closed'){channel=state.pc.createDataChannel('knot-server-screen-native',nativeScreenChannelOptions());wireServerNativeScreenChannel(peerId,state,channel)}if(!await waitNativeScreenChannel(channel))return null;announceServerNativeChannel(channel);if(serverNativeScreenInit)await sendServerNativeItem(channel,{kind:'init',data:serverNativeScreenInit});if(serverNativeScreenAudioStream&&!state.screenSenders.some(sender=>sender.track===serverNativeScreenAudioStream.getAudioTracks()[0]))try{await attachServerNativeAudioToPeer(peerId,state)}catch{try{channel.send(JSON.stringify({t:'native-screen-audio',serverId:state.context.serverId,active:false}))}catch{}}return channel
 }
-async function attachServerNativeAudioToPeer(peerId,state){const track=serverNativeScreenAudioStream?.getAudioTracks?.()[0];if(!track)throw new Error('screen audio ended');if(state.nativeSendChannel?.readyState==='open')state.nativeSendChannel.send(JSON.stringify({t:'native-screen-audio',serverId:state.context.serverId,active:true}));const sender=state.pc.addTrack(track,serverNativeScreenAudioStream);state.screenSenders.push(sender);try{const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=192000;parameters.encodings[0].priority='medium';parameters.encodings[0].networkPriority='medium';await sender.setParameters(parameters);if(!await renegotiateServerPeer(peerId,state))throw new Error('screen audio negotiation did not start');return sender}catch(error){try{state.pc.removeTrack(sender)}catch{}state.screenSenders=state.screenSenders.filter(value=>value!==sender);throw error}}
+async function setServerScreenAudioTrack(state,track){const sender=state?.screenAudioSender;if(!sender)throw new Error('reserved server screen-audio sender is unavailable');await sender.replaceTrack(track||state.silentScreenAudioTrack||null);if(track)try{const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=256000;parameters.encodings[0].priority='high';parameters.encodings[0].networkPriority='high';await sender.setParameters(parameters)}catch{}return sender}
+async function attachServerNativeAudioToPeer(peerId,state){const track=serverNativeScreenAudioStream?.getAudioTracks?.()[0];if(!track)throw new Error('screen audio ended');if(state.nativeSendChannel?.readyState==='open')state.nativeSendChannel.send(JSON.stringify({t:'native-screen-audio',serverId:state.context.serverId,active:true}));return setServerScreenAudioTrack(state,track)}
 async function attachServerNativeScreenAudio(gen){
-  if(!screenAudioOn||!serverNativeScreenSession||gen!==serverScreenGen)return;const track=await linuxShareAudioTrack();if(!track||!serverNativeScreenSession||gen!==serverScreenGen){try{track?.stop()}catch{}if(track)cleanupNativeScreenCapture(track._knotCaptureOwner);return}const audioStream=new MediaStream([track]);serverNativeScreenAudioStream=audioStream;try{track.contentHint='music'}catch{};const peers=[...serverPeers].filter(([peerId])=>voicePeerAllowed(peerId)),results=await Promise.allSettled(peers.map(([peerId,state])=>attachServerNativeAudioToPeer(peerId,state))),failed=results.some(result=>result.status==='rejected')||serverNativeScreenAudioStream!==audioStream||!serverNativeScreenSession||gen!==serverScreenGen,label=serverNativeScreenSession?.encoder||'GPU';if(failed){for(const [peerId,state] of peers){const sender=state.screenSenders.find(value=>value.track===track);if(sender){try{state.pc.removeTrack(sender)}catch{}state.screenSenders=state.screenSenders.filter(value=>value!==sender)}if(state.nativeSendChannel?.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-audio',serverId:state.context.serverId,active:false}))}catch{}renegotiateServerPeer(peerId,state).catch(()=>{})}try{track.stop()}catch{}if(serverNativeScreenAudioStream===audioStream)serverNativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);if(gen===serverScreenGen)setServerStatus('Sharing · '+label+' AV1 · computer sound unavailable',true)}else setServerStatus('Sharing · '+label+' AV1 · computer sound live',true)
+  if(!screenAudioOn||!serverNativeScreenSession||gen!==serverScreenGen)return;const track=await linuxShareAudioTrack();if(!track||!serverNativeScreenSession||gen!==serverScreenGen){try{track?.stop()}catch{}if(track)cleanupNativeScreenCapture(track._knotCaptureOwner);return}const audioStream=new MediaStream([track]);serverNativeScreenAudioStream=audioStream;try{track.contentHint='music'}catch{};const peers=[...serverPeers].filter(([peerId])=>voicePeerAllowed(peerId)),results=await Promise.allSettled(peers.map(([peerId,state])=>attachServerNativeAudioToPeer(peerId,state))),failed=results.some(result=>result.status==='rejected')||serverNativeScreenAudioStream!==audioStream||!serverNativeScreenSession||gen!==serverScreenGen,label=serverNativeScreenSession?.encoder||'GPU';if(failed){for(const [,state] of peers){setServerScreenAudioTrack(state,null).catch(()=>{});if(state.nativeSendChannel?.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-audio',serverId:state.context.serverId,active:false}))}catch{}}try{track.stop()}catch{}if(serverNativeScreenAudioStream===audioStream)serverNativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);if(gen===serverScreenGen)setServerStatus('Sharing · '+label+' AV1 · computer sound unavailable',true)}else setServerStatus('Sharing · '+label+' AV1 · computer sound live',true)
 }
 async function pumpServerNativeScreen(gen,session){
   let audioStarted=false;while(serverNativeScreenSession?.id===session.id&&gen===serverScreenGen){const item=await window.pairNativeScreen.read(session.id);if(serverNativeScreenSession?.id!==session.id||gen!==serverScreenGen)break;if(item?.data){if(item.kind==='init')serverNativeScreenInit=item.data instanceof Uint8Array?item.data.slice():new Uint8Array(item.data);serverNativeLocalPlayer?.append(item.data);const channels=[...serverPeers.values()].map(state=>state.nativeSendChannel).filter(channel=>channel?.readyState==='open');for(const channel of channels)if(!queueServerNativeItem(channel,item))try{channel.close()}catch{};if(!audioStarted){audioStarted=true;void attachServerNativeScreenAudio(gen)}continue}if(!item?.active){if(item?.error)setServerStatus('Native share stopped: '+item.error);break}}
@@ -1316,11 +1321,11 @@ async function startServerScreenShare({skipPicker=false,expectedVoiceStream:owne
   finally{if(gen===serverScreenGen)serverScreenStarting=false;renderServerVoiceUI()}
 }
 async function attachServerScreenAudio(gen,stream){
-  let audioTrack=null;const created=[];try{audioTrack=window.pairEnv?.platform==='linux'?await linuxShareAudioTrack():await setupNativeScreenCapture()}catch(error){console.warn('[AUDIO] server screen capture failed:',error?.message||error)}
-  const discard=()=>{for(const [peerId,state,sender] of created){try{state.pc.removeTrack(sender)}catch{}state.screenSenders=state.screenSenders.filter(value=>value!==sender);renegotiateServerPeer(peerId,state).catch(()=>{})}try{audioTrack?.stop()}catch{};try{stream.removeTrack(audioTrack)}catch{};cleanupNativeScreenCapture(audioTrack?._knotCaptureOwner)};if(!audioTrack)return;if(gen!==serverScreenGen||serverScreenStream!==stream){discard();return}
-  try{audioTrack.enabled=true;try{audioTrack.contentHint='music'}catch{}stream.addTrack(audioTrack);const starts=[];for(const [peerId,state] of serverPeers){if(!voicePeerAllowed(peerId))continue;const sender=state.pc.addTrack(audioTrack,stream);state.screenSenders.push(sender);created.push([peerId,state,sender]);starts.push((async()=>{const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=192000;parameters.encodings[0].priority='medium';parameters.encodings[0].networkPriority='medium';await sender.setParameters(parameters);await renegotiateServerPeer(peerId,state)})())}const results=await Promise.allSettled(starts);if(results.some(result=>result.status==='rejected'))throw results.find(result=>result.status==='rejected').reason;if(gen!==serverScreenGen||serverScreenStream!==stream)discard();else setServerStatus('Sharing · computer sound live',true)}catch(error){console.warn('[AUDIO] server screen attach failed:',error?.message||error);discard()}
+  let audioTrack=null;const attached=[];try{audioTrack=window.pairEnv?.platform==='linux'?await linuxShareAudioTrack():await setupNativeScreenCapture()}catch(error){console.warn('[AUDIO] server screen capture failed:',error?.message||error)}
+  const discard=()=>{for(const state of attached)setServerScreenAudioTrack(state,null).catch(()=>{});try{audioTrack?.stop()}catch{};try{stream.removeTrack(audioTrack)}catch{};cleanupNativeScreenCapture(audioTrack?._knotCaptureOwner)};if(!audioTrack)return;if(gen!==serverScreenGen||serverScreenStream!==stream){discard();return}
+  try{audioTrack.enabled=true;try{audioTrack.contentHint='music'}catch{}stream.addTrack(audioTrack);const starts=[];for(const [peerId,state] of serverPeers){if(!voicePeerAllowed(peerId))continue;attached.push(state);starts.push(setServerScreenAudioTrack(state,audioTrack))}const results=await Promise.allSettled(starts);if(results.some(result=>result.status==='rejected'))throw results.find(result=>result.status==='rejected').reason;if(gen!==serverScreenGen||serverScreenStream!==stream)discard();else setServerStatus('Sharing · computer sound live',true)}catch(error){console.warn('[AUDIO] server screen attach failed:',error?.message||error);discard()}
 }
-async function stopServerScreenShare(){const stream=serverScreenStream,nativeSession=serverNativeScreenSession;serverScreenGen++;serverScreenStarting=false;if(!stream&&!nativeSession)return;serverScreenStream=null;serverNativeScreenSession=null;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);serverNativeLocalPlayer?.destroy();serverNativeLocalPlayer=null;serverNativeScreenInit=null;if(serverNativeScreenAudioStream){serverNativeScreenAudioStream.getTracks().forEach(track=>track.stop());serverNativeScreenAudioStream=null}stream?.getTracks().forEach(track=>track.stop());cleanupNativeScreenCapture();const preview=$('#serverVoiceScreenPreview');preview.pause();preview.srcObject=null;try{preview.removeAttribute('src');preview.load()}catch{}preview.hidden=true;serverFocusedShareId=serverFocusedShareId===directoryUserId?'':serverFocusedShareId;const stops=[];for(const [peerId,state] of serverPeers){if(state.nativeSendChannel){if(state.nativeSendChannel.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-end',serverId:state.context.serverId}))}catch{}try{state.nativeSendChannel.close()}catch{}state.nativeSendChannel=null}for(const sender of state.screenSenders||[])try{state.pc.removeTrack(sender)}catch{}state.screenSenders=[];stops.push(renegotiateServerPeer(peerId,state))}await Promise.allSettled(stops);renderServerVoiceUI()}
+async function stopServerScreenShare(){const stream=serverScreenStream,nativeSession=serverNativeScreenSession;serverScreenGen++;serverScreenStarting=false;if(!stream&&!nativeSession)return;serverScreenStream=null;serverNativeScreenSession=null;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);serverNativeLocalPlayer?.destroy();serverNativeLocalPlayer=null;serverNativeScreenInit=null;if(serverNativeScreenAudioStream){serverNativeScreenAudioStream.getTracks().forEach(track=>track.stop());serverNativeScreenAudioStream=null}stream?.getTracks().forEach(track=>track.stop());cleanupNativeScreenCapture();const preview=$('#serverVoiceScreenPreview');preview.pause();preview.srcObject=null;try{preview.removeAttribute('src');preview.load()}catch{}preview.hidden=true;serverFocusedShareId=serverFocusedShareId===directoryUserId?'':serverFocusedShareId;const stops=[];for(const [peerId,state] of serverPeers){if(state.nativeSendChannel){if(state.nativeSendChannel.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-end',serverId:state.context.serverId}))}catch{}try{state.nativeSendChannel.close()}catch{}state.nativeSendChannel=null}await setServerScreenAudioTrack(state,null).catch(()=>{});for(const sender of state.screenSenders||[])try{state.pc.removeTrack(sender)}catch{}state.screenSenders=[];stops.push(renegotiateServerPeer(peerId,state))}await Promise.allSettled(stops);renderServerVoiceUI()}
 async function joinServerVoice(){const channel=activeChannel();if(!channel||channel.type!=='voice')return callStatus.textContent='Select a voice channel first.';if(dmCallOngoing()){callStatus.textContent='Leave your direct call before joining server voice.';return}if(serverVoiceStream&&joinedVoiceChannelId===channel.id)return;stopServerVoice();try{serverVoiceStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints());serverVoiceMuted=false;serverVoiceStream.getAudioTracks().forEach(track=>track.enabled=true);joinedVoiceServerId=activeServerId;joinedVoiceChannelId=channel.id;joinedVoiceAt=Date.now();monitorSpeaking('server:'+directoryUserId,serverVoiceStream);directorySend({type:'voice-state',serverId:joinedVoiceServerId,channelId:channel.id,joined:true});callStatus.textContent='Joined '+channel.name;callStatus.className='call-status live';renderCallButtonState('end','Leave voice','Leave voice channel');renderChannels();syncServerMesh()}catch(error){callStatus.textContent='Could not join voice: '+(error?.message||error);callStatus.className='call-status';syncServerMesh();renderServerVoiceUI()}}
 function stopServerVoice(){abortScreenSharePicker();serverScreenGen++;serverScreenStarting=false;stopSpeakingMonitor('server:'+directoryUserId);const serverId=joinedVoiceServerId||activeServerId,channelId=joinedVoiceChannelId;if(channelId&&serverId)directorySend({type:'voice-state',serverId,channelId,joined:false});if(serverScreenSharing())stopServerScreenShare();if(serverVoiceStream){serverVoiceStream.getTracks().forEach(track=>track.stop());serverVoiceStream=null}joinedVoiceServerId='';joinedVoiceChannelId='';joinedVoiceAt=0;serverVoiceMuted=false;serverFocusedShareId='';serverSuppressedShares.clear();clearInterval(voiceElapsedTimer);closeServerMesh();renderServerVoiceUI();if(activeServerId){const voice=activeChannel()?.type==='voice';renderCallButtonState('start',voice?'Join voice':'Start call',voice?'Join voice channel':'Start voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderChannels()}}
 async function sendServerMessage(text,gif){const server=activeServer(),channel=activeChannel();if(!server||!channel||channel.type!=='text')return false;let group=await serverTextKey(server,{create:true});if(!group){await requestServerTextKey(server);pairHint.textContent='Waiting for an online member to share this server’s secure text key.';return false}const id=clientHex(16),time=Date.now(),payload=chatPayload(text,gif),cipher=await sealRelay(group.key,JSON.stringify({payload,time}),relayAad('server',id,directoryUserId,'',server.id,channel.id));if(!directorySend({type:'relay-text',scope:'server',id,serverId:server.id,channelId:channel.id,cipher})){pairHint.textContent='Encrypted text relay is offline.';return false}const entry=normalizeServerHistoryEntry({id,text,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url}:null,author:{id:directoryUserId,name:profileName,image:'',frame:normalizeFrame(profileFrame)},time},server,directoryUserId);if(entry)storeServerHistory(server.id,channel.id,[entry]);return true}
@@ -1409,7 +1414,7 @@ async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
         // non-null mid) so startCall uses it — the one from addTransceiver in
         // setupPeer has mid=null and would send on an un-negotiated path.
         pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv'){t.setDirection('sendrecv');logCallEvent('Diag: set audioTr direction to sendrecv (was '+t.direction+')')}}catch(e){logCallEvent('Diag: setDirection error: '+e.message)}});
-        const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
+        bindReservedAudioTransceivers();const matched=audioTransceiver;
         logCallEvent('Diag: before createAnswer transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
         const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
         logCallEvent('Diag: answer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
@@ -1419,7 +1424,7 @@ async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
         logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
         await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;if(!await derive(pc._kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}
         logCallEvent('Diag: after setRD(answer)');
-        const matched=pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio'&&t.mid);if(matched)audioTransceiver=matched;
+        bindReservedAudioTransceivers();const matched=audioTransceiver;
         const cd=matched?matched.currentDirection:'none';
         logCallEvent('Diag: audio currentDir='+cd);
         // If the friend's answer didn't include an audio sender, startCall will
@@ -1462,7 +1467,7 @@ function disconnectRoom(){abortScreenSharePicker();if(pc&&pc._connectTimer){clea
   // and the send loop will abort cleanly.
   busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();dmConnectingPeerId='';pendingVoiceStartPeerId='';
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
-  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;dmPeerId='';dmCallPeerId='';localCallSessionId='';remoteCallSessionId='';deriveGen++;setParticipant(participantYou,false);setFriendPresence(false,{animate:false,sound:false});voiceLog.innerHTML='';setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
+  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;screenAudioTransceiver=null;dmPeerId='';dmCallPeerId='';localCallSessionId='';remoteCallSessionId='';deriveGen++;setParticipant(participantYou,false);setFriendPresence(false,{animate:false,sound:false});voiceLog.innerHTML='';setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 const disconnectRoomWithoutPendingReset=disconnectRoom;
 disconnectRoom=function(){clearPendingFrames();return disconnectRoomWithoutPendingReset()};
 $('#leaveRoom').onclick=()=>{disconnectRoom();relayVoiceMode=false;dmIceServers=directIceServers();syncActiveDmTransport()};
@@ -1559,7 +1564,7 @@ async function endCall(silent){
   if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}
   // Drop our sender's track so a stopped track doesn't linger on the transceiver
   // (which would otherwise keep matching in startCall and complicate reconnects).
-  if(pc){try{pc.getSenders().forEach(s=>{if(s.track&&s.track.kind==='audio'){try{s.replaceTrack(null)}catch{}}})}catch{}}
+  if(pc){try{const voice=audioTransceiver?.sender||audioTransceiver;if(voice?.replaceTrack)await voice.replaceTrack(null)}catch{}}
   // Only clear the remote audio element's source when the room is left
   // (disconnectRoom), NOT on endCall. A temporary ICE drop would otherwise
   // null the srcObject and ontrack never fires again for the same transceiver,
@@ -1729,6 +1734,22 @@ async function setupNativeScreenCapture(){
     return null;
   }
 }
+function bindReservedAudioTransceivers(){
+  if(!pc)return;const audios=pc.getTransceivers().filter(value=>value.receiver.track?.kind==='audio');
+  const voiceSender=audioTransceiver?.sender||audioTransceiver,screenSender=screenAudioTransceiver?.sender||screenAudioTransceiver;
+  const voice=audios.find(value=>value.sender===voiceSender)||audios[0],screen=audios.find(value=>value.sender===screenSender)||audios.find(value=>value!==voice);
+  if(voice)audioTransceiver=voice;if(screen)screenAudioTransceiver=screen;
+}
+function reservedScreenAudioSender(target=pc){
+  if(!target)return null;const value=screenAudioTransceiver;if(value?.sender)return value.sender;if(value?.replaceTrack)return value;
+  return target.getTransceivers().filter(item=>item.receiver.track?.kind==='audio').find(item=>item!==audioTransceiver&&item.sender)?.sender||null;
+}
+async function setReservedScreenAudioTrack(track,target=pc){
+  const sender=reservedScreenAudioSender(target);if(!sender)throw new Error('reserved screen-audio sender is unavailable');
+  await sender.replaceTrack(track||target?._silentScreenAudioTrack||null);
+  if(track)try{const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=256000;parameters.encodings[0].priority='high';parameters.encodings[0].networkPriority='high';await sender.setParameters(parameters)}catch{}
+  return sender;
+}
 function cleanupNativeScreenCapture(owner=null){
   if(owner&&owner!==screenCaptureOwner)return false;
   screenCaptureAttempt++;
@@ -1885,12 +1906,12 @@ function startScreenStats(sender){
   }catch{}};
   sample();screenStatsTimer=setInterval(sample,2000);
 }
-const NATIVE_SCREEN_PACKET=0x4b4e5331,NATIVE_SCREEN_PART=60*1024,NATIVE_SCREEN_BUFFER_HIGH=512*1024,NATIVE_SCREEN_BUFFER_LOW=96*1024,NATIVE_SCREEN_MAX_SEGMENT=4*1024*1024,NATIVE_SCREEN_BUFFER_HARD=NATIVE_SCREEN_MAX_SEGMENT+128*1024,NATIVE_SCREEN_GAP_WAIT=80,NATIVE_SCREEN_PROTOCOL=2,NATIVE_SCREEN_STALE_MS=300;
+const NATIVE_SCREEN_PACKET=0x4b4e5331,NATIVE_SCREEN_PART=60*1024,NATIVE_SCREEN_BUFFER_HIGH=1024*1024,NATIVE_SCREEN_BUFFER_LOW=192*1024,NATIVE_SCREEN_MAX_SEGMENT=4*1024*1024,NATIVE_SCREEN_BUFFER_HARD=NATIVE_SCREEN_MAX_SEGMENT+1024*1024,NATIVE_SCREEN_GAP_WAIT=80,NATIVE_SCREEN_PROTOCOL=2,NATIVE_SCREEN_STALE_MS=450;
 // A 4K60 AV1 key cluster is routinely larger than the old fixed 320 KiB
 // watermark. Admission now includes the entire segment and grants legitimate
 // keyframe bursts more room, while small delta frames still meet the tighter
 // steady-state watermark so a truly slow peer cannot build seconds of latency.
-function nativeScreenBufferBudget(segmentBytes=0){return Math.min(NATIVE_SCREEN_BUFFER_HARD,Math.max(NATIVE_SCREEN_BUFFER_HIGH,Math.max(0,Number(segmentBytes)||0)*2+NATIVE_SCREEN_BUFFER_LOW))}
+function nativeScreenBufferBudget(segmentBytes=0){return Math.min(NATIVE_SCREEN_BUFFER_HARD,Math.max(NATIVE_SCREEN_BUFFER_HIGH,Math.max(0,Number(segmentBytes)||0)*3+NATIVE_SCREEN_BUFFER_LOW))}
 // 4K60 AV1 requires level 6.1 high tier. Advertising main tier made Chromium
 // accept the WebM container but hand an incompatible profile to VA-API, which
 // produced a black frame and then fell back to CPU decoding on NVIDIA/AMD.
@@ -2152,9 +2173,9 @@ async function sendNativeScreenLiveItem(channel,item){
 }
 function nativeScreenChannelOptions(){return{ordered:false,maxRetransmits:1,priority:'low'}}
 function selectedNativeDimensions(){const dimensions={720:[1280,720],1080:[1920,1080],1440:[2560,1440],2160:[3840,2160]};return dimensions[Number(shareResolution)]||[0,0]}
-function targetNativeAv1BitrateKbps(width,height,fps,viewers=1){const selectedPixels=Number(width)>0&&Number(height)>0?Number(width)*Number(height):3840*2160,pixels=Math.max(1,selectedPixels),cadence=Number(fps)===30?.62:1,ratio=pixels/(1920*1080),targetMbps=Math.max(2.5,3.5*Math.pow(ratio,.62)*cadence),uploadBudget=Math.max(2,screenBitrateMbps/Math.max(1,Number(viewers)||1));return Math.round(Math.min(uploadBudget,targetMbps)*1000)}
+function targetNativeAv1BitrateKbps(width,height,fps,viewers=1){const selectedPixels=Number(width)>0&&Number(height)>0?Number(width)*Number(height):3840*2160,pixels=Math.max(1,selectedPixels),cadence=Number(fps)===30?.62:1,ratio=pixels/(1920*1080),targetMbps=Math.max(2.75,4.15*Math.pow(ratio,.62)*cadence),uploadBudget=Math.max(2,screenBitrateMbps/Math.max(1,Number(viewers)||1));return Math.round(Math.min(uploadBudget,targetMbps)*1000)}
 async function attachNativeShareAudio(gen){
-  if(!screenAudioOn||!screenActive||gen!==screenGen)return;const track=await linuxShareAudioTrack();if(!track||!screenActive||gen!==screenGen){try{track?.stop()}catch{}if(track)cleanupNativeScreenCapture(track._knotCaptureOwner);return}const audioStream=new MediaStream([track]);nativeScreenAudioStream=audioStream;try{track.contentHint='music'}catch{};let sender=null;try{try{if(nativeScreenChannel?.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-audio',active:true}))}catch{}sender=pc.addTrack(track,audioStream);screenSenders.push(sender);const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=192000;parameters.encodings[0].priority='medium';parameters.encodings[0].networkPriority='medium';await sender.setParameters(parameters);if(!await renegotiate())throw new Error('screen audio negotiation did not start');if(nativeScreenAudioStream!==audioStream||!screenActive||gen!==screenGen)throw new Error('screen share ended during audio negotiation');screenAudioDebug=' · sound live';screenStatus.textContent='Sharing · '+(nativeScreenSession?.encoder||'GPU')+' AV1'+screenAudioDebug}catch(error){console.warn('[AUDIO] native share audio failed:',error?.message||error);try{if(nativeScreenChannel?.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-audio',active:false}))}catch{}if(sender){try{pc?.removeTrack(sender)}catch{}screenSenders=screenSenders.filter(value=>value!==sender);renegotiate().catch(()=>{})}try{track.stop()}catch{}if(nativeScreenAudioStream===audioStream)nativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);if(screenActive&&gen===screenGen){screenAudioDebug=' · sound unavailable';screenStatus.textContent='Sharing · '+(nativeScreenSession?.encoder||'GPU')+' AV1'+screenAudioDebug}}
+  if(!screenAudioOn||!screenActive||gen!==screenGen)return;const track=await linuxShareAudioTrack();if(!track||!screenActive||gen!==screenGen){try{track?.stop()}catch{}if(track)cleanupNativeScreenCapture(track._knotCaptureOwner);return}const audioStream=new MediaStream([track]);nativeScreenAudioStream=audioStream;try{track.contentHint='music'}catch{};try{try{if(nativeScreenChannel?.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-audio',active:true}))}catch{}await setReservedScreenAudioTrack(track);if(nativeScreenAudioStream!==audioStream||!screenActive||gen!==screenGen)throw new Error('screen share ended while attaching audio');screenAudioDebug=' · sound live';screenStatus.textContent='Sharing · '+(nativeScreenSession?.encoder||'GPU')+' AV1'+screenAudioDebug}catch(error){console.warn('[AUDIO] native share audio failed:',error?.message||error);try{if(nativeScreenChannel?.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-audio',active:false}))}catch{}try{await setReservedScreenAudioTrack(null)}catch{}try{track.stop()}catch{}if(nativeScreenAudioStream===audioStream)nativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);if(screenActive&&gen===screenGen){screenAudioDebug=' · sound unavailable';screenStatus.textContent='Sharing · '+(nativeScreenSession?.encoder||'GPU')+' AV1'+screenAudioDebug}}
 }
 async function pumpNativeScreen(gen,session,channel){
   let audioStarted=false;while(screenActive&&gen===screenGen&&nativeScreenSession?.id===session.id){const item=await window.pairNativeScreen.read(session.id);if(!screenActive||gen!==screenGen||nativeScreenSession?.id!==session.id)break;if(item?.data){if(!nativeScreenAnnounced){nativeScreenAnnounced=true;try{send({t:'screen-start',native:true,codec:'AV1',encoder:session.encoder})}catch{};logCallEvent('You started '+(session.encoder||'GPU')+' AV1 screen sharing')}nativeLocalPlayer?.append(item.data);if(!await sendNativeScreenLiveItem(channel,item))break;if(!audioStarted){audioStarted=true;void attachNativeShareAudio(gen)}continue}if(!item?.active){if(item?.error)screenStatus.textContent='Native share stopped: '+item.error;break}}
@@ -2235,27 +2256,12 @@ async function startScreenShare({skipPicker=false,expectedPc:ownedPc=null,expect
         audioTrack.enabled=true;
         try{audioTrack.contentHint='music'}catch{}
         try{stream.addTrack(audioTrack)}catch{}
-        const audioSender=pc.addTrack(audioTrack,stream);
-        screenSenders.push(audioSender);
-        try{
-          const p=audioSender.getParameters();
-          if(p){
-            if(!p.encodings||!p.encodings.length)p.encodings=[{}];
-            // Prefer higher bitrate stereo for game/music desktop sound; voice
-            // remains on the separate call track at its own Opus settings.
-            p.encodings[0].maxBitrate=192000;
-            p.encodings[0].priority='medium';
-            p.encodings[0].networkPriority='medium';
-            await audioSender.setParameters(p);
-          }
-        }catch{}
-        if(!await renegotiate())throw new Error('audio negotiation did not start');
-        if(gen!==screenGen||!screenActive||!pc)throw new Error('screen share ended during audio negotiation');
+        await setReservedScreenAudioTrack(audioTrack);
+        if(gen!==screenGen||!screenActive||!pc)throw new Error('screen share ended while attaching audio');
         logCallEvent('Computer sound sharing started');screenAudioDebug=' · sound live';screenStatus.textContent='Sharing'+screenAudioDebug;
       }catch(e){
         console.warn('[AUDIO] addTrack failed:',e);if(gen===screenGen&&screenActive){screenAudioDebug=' · sound failed';screenStatus.textContent='Sharing'+screenAudioDebug}
-        const sender=screenSenders.find(s=>s.track===audioTrack);
-        if(sender){try{pc?.removeTrack(sender)}catch{};screenSenders=screenSenders.filter(s=>s!==sender)}
+        try{await setReservedScreenAudioTrack(null)}catch{}
         discardShareAudio();
       }
     };
@@ -2286,9 +2292,9 @@ async function stopScreenShare(fromEnd){
   cleanupNativeScreenCapture();
   if(screenStream){screenStream.getTracks().forEach(t=>t.stop());screenStream=null}
   if(pc){
-    // Remove every sender created for this share, including audio. Leaving the
-    // audio sender behind made each new share keep an old system-audio m-line
-    // alive, which amplified echo and eventually made sharing unstable.
+    // Video is renegotiated per share, while the computer-audio m-line is
+    // permanent and returns to its reserved silent track between shares.
+    try{await setReservedScreenAudioTrack(null)}catch{}
     screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];
     // Await so a rapid Share→preset-change→Share can't start a second reneg
     // before the removal reneg has been signaled (which would otherwise race

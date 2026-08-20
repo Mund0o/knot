@@ -1,10 +1,10 @@
 {
-  "version": "1.1.65",
-  "notes": "Fixed Linux screen-share computer audio and removed the PipeWire route that could beep or drop capture\nAdded cross-platform screen-audio routing coverage\nWhat’s changed is shown before you approve an update, not after restart",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.65/pair-p2p-1.1.65.tar.gz",
-  "linuxSha256": "693fc42ecc1321d876614ce475ff2d4f8f8e13c194c6abfc3505f9aa7c305ee4",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.65/Knot-1.1.65.AppImage",
-  "linuxAppImageSha256": "bf6e592a40a7222928499d3f62e7ffc77f987ef6282b9bb4c0bc88babacf1b6e",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.65/Knot.Setup.1.1.65.exe",
-  "winSha256": "9a6200924191a6fa9cccc27b178f8aed981a25d19dcf7705b55b6cbc907f653b"
+  "version": "1.1.66",
+  "notes": "Fixed Windows and Linux screen-share audio with a dedicated pre-negotiated sound lane\nRaised native AV1 4K60 quality to about 9.8 Mbps and stabilized 60-fps transport bursts\nSend end-to-end encrypted DMs while friends are offline; delivery resumes when they reconnect",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.66/pair-p2p-1.1.66.tar.gz",
+  "linuxSha256": "4d850c10ee99da4e560239afa9dbdc676cd4f856d83b484094bf80040bf801a6",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.66/Knot-1.1.66.AppImage",
+  "linuxAppImageSha256": "e21d990c3c60b11a3a23b1118222949f597e79f01aae56d48453f576db6a502e",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.66/Knot.Setup.1.1.66.exe",
+  "winSha256": "24df6e8204f2687d201c84eea9154bb97fd018f79a414556b77dc575b1e9a5c0"
 }

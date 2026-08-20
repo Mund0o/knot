@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.65",
+  "version": "1.1.66",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -21,8 +21,9 @@
     "test:screen:full": "electron tests/full-app-screen-endurance.js",
     "test:screen": "node tests/run-screen-suite.js",
     "test:windows-audio": "node tests/windows-audio-addon-guard.js && electron tests/windows-audio-renderer-smoke.js",
+    "test:worker": "node tests/worker-offline-mailbox.js && wrangler deploy --dry-run",
     "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-service.js && electron tests/linux-gpu-runtime.js",
-    "test": "npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
+    "test": "npm run test:worker && npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
     "deploy": "wrangler deploy",
     "dist": "electron-builder --linux tar.gz AppImage",
     "dist:win": "npm run verify:addon && electron-builder --win nsis",

@@ -5,10 +5,11 @@ direct messages, and servers containing text and voice channels. It uses WebRTC
 data channels and media tracks for content transport. Direct messages also use
 Web Crypto ECDH + AES-GCM on top of WebRTC's DTLS encryption.
 
-Cloudflare supplies a live encrypted text relay, presence, and WebRTC setup.
+Cloudflare supplies an encrypted text mailbox, presence, and WebRTC setup.
 Opening a DM or text channel does not create a peer connection: text is
-encrypted on-device, forwarded only to online recipients, and retained only in
-each app's local history. Calls, screen shares, and files create direct WebRTC
+encrypted on-device; offline DM ciphertext is held for up to 30 days in a
+bounded mailbox and deleted after the recipient decrypts and acknowledges it.
+Cloudflare never receives the message keys or readable text. Calls, screen shares, and files create direct WebRTC
 connections only when used. Screen shares appear beside their owners and open
 into a single focused viewer; use a stream's context menu to stop watching
 without making the stream undiscoverable. Fullscreen expands the selected share
@@ -70,17 +71,18 @@ reported and stale frames may be discarded, but the selected dimensions are
 not changed. Chromium shares prefer broadly hardware-accelerated codecs and
 retain retransmission/FEC support under a user-controlled bitrate ceiling.
 
-Native AV1 keeps 3840×2160 capture at 60 fps while targeting about 8.3 Mbps so
-voice and control traffic retain upload headroom. Its low-priority, unordered,
-one-retransmit transport uses a 512 KiB segment-aware admission budget, drops
-stale deltas, and recovers at half-second keyframes. Mic audio remains high
+Native AV1 keeps 3840×2160 capture at 60 fps while targeting about 9.8 Mbps so
+fine motion has more detail. Its low-priority, unordered, one-retransmit
+transport uses a 1 MiB segment-aware admission budget, drops stale deltas, and
+recovers at quarter-second keyframes. Mic audio remains high
 priority. Congestion stays on efficient AV1; only a decoder failure or
 incompatible client switches that viewer to a bandwidth-capped compatibility
 codec without changing the chosen resolution.
 
-On Windows, shared computer sound comes from process-loopback capture: an
-application share includes the selected process tree, while a full-display
-share excludes Knot so returned call audio cannot echo into the stream. PCM is
+On Windows, shared computer sound comes from process-loopback capture. Both
+application and display shares capture desktop playback while excluding Knot's
+process tree, because browsers and games often play sound from a process that
+does not own the selected window. PCM is
 batched into bounded 20 ms packets and rendered through an AudioWorklet, and
 all DM/server screen-audio elements follow the selected output device.
 
@@ -158,8 +160,10 @@ The repository includes two SQLite-backed Durable Objects. `PairDirectory`
 stores authenticated device identity, friend relationships, presence, server
 membership, server pictures, and text/voice channel metadata. `PairRoom`
 coordinates ephemeral two-person WebRTC setup. The Worker rejects binary frames
-and relays only authenticated, opaque client-encrypted live-text and group-key
-envelopes; it does not persist them. It never relays files, video, or screen
+and handles only authenticated, opaque client-encrypted text and group-key
+envelopes. Direct-message ciphertext uses a bounded 256-message/8 MiB mailbox
+with a 30-day TTL and is removed after recipient acknowledgement; server text
+and group-key envelopes remain live-only. It never relays files, video, or screen
 shares. After three failed direct attempts, it can optionally issue short-lived
 Cloudflare TURN credentials for a deliberately low-bitrate audio-only call.
 
@@ -173,11 +177,13 @@ No build output directory or static-assets directory is needed. The checked-in
 `wrangler.jsonc` points directly to `worker/index.js`, preventing Wrangler from
 trying to upload the Electron repository or `node_modules` as website assets.
 The app keeps the Worker address internal. Five-digit friend and server invites
-expire after 15 minutes. Selecting an online friend opens encrypted live text
-immediately; a private rendezvous room is created only for direct media/files.
+expire after 15 minutes. Selecting a friend with a registered device key opens
+encrypted text immediately, even while that friend is offline; a private
+rendezvous room is created only for direct media/files.
 Server text uses the encrypted live relay, while voice channels form direct
 peer meshes among currently online members. Conversation history stays in each
-desktop app's local settings file; offline content is not stored by Cloudflare.
+desktop app's local settings file; Cloudflare temporarily stores only unreadable
+offline DM ciphertext.
 Direct DMs also use this rule: text opens immediately without a WebRTC peer;
 the app tries direct P2P three times only after a call or file is requested.
 
@@ -202,7 +208,7 @@ symmetric NATs and restrictive firewalls can block direct ICE candidates. Knot
 tries a direct P2P connection three times. Only then does it offer a TURN
 fallback. In relay mode it forces low-bitrate Opus voice (24 kbps), disables
 file transfer and screen/video sharing, and uses relay-only ICE. Text remains
-on the separately encrypted, non-persistent Cloudflare relay.
+on the separately encrypted Cloudflare mailbox/relay.
 
 ### Cloudflare Realtime TURN (recommended optional fallback)
 

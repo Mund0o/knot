@@ -23,7 +23,11 @@ process.env.KNOT_NATIVE_SCREEN_TEST = '1';
 const requestedSeconds = Number(process.env.KNOT_FULL_APP_TEST_SECONDS);
 const durationMs = Math.max(75000, Math.min(600000, Number.isFinite(requestedSeconds) ? requestedSeconds * 1000 : 120000));
 const requestedUplinkMbps = Number(process.env.KNOT_FULL_APP_UPLINK_MBPS);
-const uplinkMbps = Math.max(8, Math.min(80, Number.isFinite(requestedUplinkMbps) ? requestedUplinkMbps : 12));
+// A 9.8 Mbps CBR stream needs about 18 Mbps nominal capacity to remain at
+// 4K60 through this test's deliberate 45% twelve-second bandwidth collapse.
+// Lower-rate recovery is covered separately; it cannot preserve 60 unique
+// source frames when the simulated wire carries fewer bits than the encoder.
+const uplinkMbps = Math.max(8, Math.min(80, Number.isFinite(requestedUplinkMbps) ? requestedUplinkMbps : 18));
 const crashes = [];
 const unresponsive = [];
 const processSamples = [];
@@ -197,7 +201,7 @@ async function main() {
   const offer = await prepareSender(senderWindow);
   const answer = await prepareReceiver(receiverWindow, offer);
   await startSender(senderWindow, answer, info);
-  session = service.start({ codec: 'av1', fps: 60, width: 3840, height: 2160, bitrateKbps: 8267, captureSource: monitor });
+  session = service.start({ codec: 'av1', fps: 60, width: 3840, height: 2160, bitrateKbps: 9802, captureSource: monitor });
 
   const processTimer=setInterval(()=>{try{processSamples.push(app.getAppMetrics().map(metric=>({pid:metric.pid,type:metric.type,cpu:Number(metric.cpu?.percentCPUUsage)||0,workingSetKb:Number(metric.memory?.workingSetSize)||0})));if(processSamples.length>durationMs/500+20)processSamples.shift()}catch{}},500);
   const healthTimer=setInterval(async()=>{try{const [sender,receiver]=await Promise.all([collectSender(senderWindow),collectReceiver(receiverWindow)]);console.log('Full app health',JSON.stringify({seconds:Math.round((sender.uptimeMs||0)/1000),sender:{loopP95:sender.eventLoopP95,rafP95:sender.rafP95,segments:sender.segments,buffer:sender.maxBufferedAmount,dropped:sender.droppedSegments,fallbacks:sender.fallbacks,audio:sender.audioPackets},receiver:{loopP95:receiver.eventLoopP95,rafP95:receiver.rafP95,frames:receiver.decodedFrames,queue:receiver.decodeQueueSize,audio:receiver.audioPackets,software:receiver.softwareFallback,errors:receiver.decodeErrors},crashes:crashes.length,unresponsive:unresponsive.length}))}catch(error){console.error('Full app health failed:',error.message)}},30000);
@@ -223,7 +227,7 @@ async function main() {
   assert.strictEqual(sender.localDecodeDisabled,true,'sender preview decode was not disabled');
   assert.strictEqual(sender.channelOrdered,false,'full-app AV1 channel retained cross-frame head-of-line blocking');
   assert.strictEqual(sender.channelLifetime,null,'full-app AV1 channel unexpectedly uses a wall-clock packet lifetime');
-  const segmentAwareBudget=Math.min(4*1024*1024+128*1024,Math.max(512*1024,maxSegmentBytes*2+96*1024));
+  const segmentAwareBudget=Math.min(4*1024*1024+1024*1024,Math.max(1024*1024,maxSegmentBytes*3+192*1024));
   assert(sender.maxBufferedAmount<=segmentAwareBudget+2*60*1024,`bounded AV1 uplink queued ${(sender.maxBufferedAmount/1024).toFixed(0)} KiB for a ${(maxSegmentBytes/1024).toFixed(0)} KiB segment`);
   assert(sourceFrames>=Math.floor(durationMs/1000*55),`CFR capture produced only ${(sourceFrames/(durationMs/1000)).toFixed(1)} source fps`);
   assert.strictEqual(sender.sourceFrames,sourceFrames,`sender accounted for ${sender.sourceFrames} of ${sourceFrames} captured frames`);

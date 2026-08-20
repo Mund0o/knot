@@ -4,6 +4,9 @@ const MAX_DIRECTORY_BYTES = 768 * 1024;
 const MAX_SOCKET_BYTES_PER_SECOND = 4 * 1024 * 1024;
 const INVITE_TTL_MS = 15 * 60 * 1000;
 const MAX_RELAY_CIPHERTEXT_BYTES = 96 * 1024;
+const DM_MAILBOX_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const DM_MAILBOX_MAX_MESSAGES = 256;
+const DM_MAILBOX_MAX_BYTES = 8 * 1024 * 1024;
 
 function normalizeRoom(value) {
   const room = String(value || '').trim().toUpperCase();
@@ -76,7 +79,7 @@ export default {
     const upgrade = request.headers.get('Upgrade');
     if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
       if (request.method !== 'GET') return jsonResponse({ error: 'method not allowed' }, 405);
-      return jsonResponse({ service: 'Knot control plane', status: 'ready', transport: 'websocket', contentRelay: false });
+      return jsonResponse({ service: 'Knot control plane', status: 'ready', transport: 'websocket', encryptedDmMailbox: true });
     }
     if (url.pathname === '/directory') {
       const id = env.PAIR_DIRECTORY.idFromName('pair-directory-v1');
@@ -205,6 +208,8 @@ export class PairDirectory {
         socket.serializeAttachment(attachment); await this.broadcastSnapshots();
       } else if (value.type === 'relay-text') {
         await this.relayText(user, value);
+      } else if (value.type === 'relay-ack') {
+        await this.ackRelayText(user, value);
       } else if (value.type === 'relay-key') {
         await this.relayGroupKey(user, value);
       } else if (value.type === 'turn-credentials') {
@@ -229,7 +234,7 @@ export class PairDirectory {
     if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Knot user'), image: cleanImage(value.image), frame: cleanFrame(value.frame), deviceKey: cleanDeviceKey(value.deviceKey), friends: [], servers: [] };
     else { user.name = cleanText(value.name, 32, user.name); user.image = cleanImage(value.image); user.frame = cleanFrame(value.frame); user.deviceKey = cleanDeviceKey(value.deviceKey) || user.deviceKey || null; }
     await this.putUser(user); attachment.authed = true; attachment.userId = id; socket.serializeAttachment(attachment);
-    this.safeSend(socket, JSON.stringify({ type: 'authenticated', userId: id })); await this.broadcastSnapshots();
+    this.safeSend(socket, JSON.stringify({ type: 'authenticated', userId: id })); await this.broadcastSnapshots();await this.deliverMailbox(user.id);
   }
 
   async createInvite(kind, targetId) {
@@ -259,10 +264,10 @@ export class PairDirectory {
     }
   }
 
-  // Live relay deliberately does not touch Durable Object storage. The Worker
-  // only authorizes an envelope and forwards opaque client-encrypted bytes to
-  // sockets that are connected at this instant. Offline delivery is therefore
-  // impossible by design, and no message or ciphertext history exists here.
+  // Direct messages are encrypted on the sender before this Durable Object sees
+  // them. Store only that opaque envelope until the recipient acknowledges a
+  // successful local decrypt, then delete it. A bounded TTL/byte cap keeps the
+  // free-tier mailbox predictable even if a device stays offline for weeks.
   async relayText(user, value) {
     const scope = value.scope === 'server' ? 'server' : value.scope === 'dm' ? 'dm' : '';
     const id = normalizeId(value.id), cipher = cleanCiphertext(value.cipher);
@@ -270,7 +275,9 @@ export class PairDirectory {
     if (scope === 'dm') {
       const peerId = normalizeId(value.peerId);
       if (!peerId || !user.friends.includes(peerId)) throw new Error('direct-message recipient is not a friend');
-      if (!this.sendUser(peerId, { type: 'relay-text', scope: 'dm', from: user.id, id, cipher })) throw new Error('friend is offline');
+      const envelope = { type: 'relay-text', scope: 'dm', from: user.id, id, cipher, queuedAt: Date.now() };
+      await this.storeMailbox(peerId, envelope);const delivered = this.sendUser(peerId, envelope);
+      this.sendUser(user.id, { type: 'relay-status', id, queued: !delivered });
       return;
     }
     const server = await this.server(value.serverId); this.requireMember(server, user.id);
@@ -278,6 +285,33 @@ export class PairDirectory {
     if (!channel) throw new Error('text channel missing');
     const envelope = { type: 'relay-text', scope: 'server', from: user.id, id, serverId: server.id, channelId, cipher };
     for (const memberId of server.members) if (memberId !== user.id) this.sendUser(memberId, envelope);
+  }
+
+  async storeMailbox(userId, envelope) {
+    const indexKey = `mail-id:${userId}:${envelope.id}`, existing = await this.state.storage.get(indexKey);
+    if (existing) return existing;
+    const now = Date.now(), key = `mail:${userId}:${String(now).padStart(13, '0')}:${envelope.id}`;
+    const stored = { ...envelope, expiresAt: now + DM_MAILBOX_TTL_MS };
+    await this.state.storage.put(key, stored);await this.state.storage.put(indexKey, key);await this.pruneMailbox(userId);return key;
+  }
+
+  async pruneMailbox(userId) {
+    const entries = [...(await this.state.storage.list({ prefix: `mail:${userId}:` })).entries()];let bytes = 0;
+    for (const [, value] of entries) bytes += JSON.stringify(value).length;
+    while (entries.length && (entries.length > DM_MAILBOX_MAX_MESSAGES || bytes > DM_MAILBOX_MAX_BYTES || Number(entries[0][1]?.expiresAt) <= Date.now())) {
+      const [key, value] = entries.shift();bytes -= JSON.stringify(value).length;await this.state.storage.delete(key);await this.state.storage.delete(`mail-id:${userId}:${value.id}`);
+    }
+  }
+
+  async deliverMailbox(userId) {
+    await this.pruneMailbox(userId);const entries = await this.state.storage.list({ prefix: `mail:${userId}:` });
+    for (const [, envelope] of entries) this.sendUser(userId, { ...envelope, offline: true });
+  }
+
+  async ackRelayText(user, value) {
+    const id = normalizeId(value.id);if (!id) throw new Error('invalid relay acknowledgement');
+    const indexKey = `mail-id:${user.id}:${id}`, key = await this.state.storage.get(indexKey);if (!key) return;
+    const envelope = await this.state.storage.get(key);if (envelope?.id === id) await this.state.storage.delete(key);await this.state.storage.delete(indexKey);
   }
 
   // Group-key wrapping is also opaque. A requesting member broadcasts no key;

@@ -700,15 +700,13 @@ function startNativeCapture(win) {
   resetNativeAudioIpc(win);
   let cbCount=0;
   try {
-    // Discord-style application shares capture the selected process and its
-    // children. Full-display shares capture the desktop but exclude Knot's
-    // process tree, which prevents the watcher hearing their returned voice.
-    let targetPid = process.pid, includeTarget = false;
-    if (activeShareSourceId?.startsWith('window:') && typeof addon.windowProcessId === 'function') {
-      const selectedPid = Number(addon.windowProcessId(activeShareSourceId));
-      if (Number.isInteger(selectedPid) && selectedPid > 0 && selectedPid !== process.pid) { targetPid = selectedPid; includeTarget = true; }
-    }
-    console.log('native capture target:', includeTarget ? `include process tree ${targetPid}` : `exclude Knot process tree ${targetPid}`);
+    // Capture the Windows playback mix for both display and window shares while
+    // excluding Knot's own process tree. Window ownership is not a dependable
+    // audio boundary: browsers, games and launchers commonly render sound from
+    // a sibling process that is not a child of the selected HWND. Process-only
+    // loopback therefore produced a healthy video share with digital silence.
+    const targetPid = process.pid, includeTarget = false;
+    console.log('native capture target: exclude Knot process tree', targetPid);
     addon.start(
       (buf, frames, capturedAtValue) => {
         if (!addon._running || generation !== nativeCaptureGeneration) return;
