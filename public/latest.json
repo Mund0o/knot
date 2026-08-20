@@ -1,10 +1,10 @@
 {
-  "version": "1.1.62",
-  "notes": "Linux screen-share audio stays available when playback begins after sharing starts.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.62/pair-p2p-1.1.62.tar.gz",
-  "linuxSha256": "e2280b0e1912b5f0af2631bcd0005610e10bb503160751c77cbd6bc8c3aaa7c0",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.62/Knot-1.1.62.AppImage",
-  "linuxAppImageSha256": "8b63e5fe6f54eebd3caa936641ef2362d2bddceef3a022fdef11d51731dbf21e",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.62/Knot.Setup.1.1.62.exe",
-  "winSha256": "df8bae956cc21d06ec5e928d1158e88007d2357198850ca712d16d88029632fe"
+  "version": "1.1.63",
+  "notes": "Encrypted live text without a background peer connection\nUpdates now show What’s changed and install only after approval\nFixed Windows-to-Linux screen-share sound routing\nConversations reopen at the newest message with call controls always reachable",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.63/pair-p2p-1.1.63.tar.gz",
+  "linuxSha256": "dc3d28b7c7749df332879aabdf04136eae92a7469b088a7036621c135c08de46",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.63/Knot-1.1.63.AppImage",
+  "linuxAppImageSha256": "51f955a2205593de65fa955b1868fe84af8bfa645cec396c5f010d85a3696897",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.63/Knot.Setup.1.1.63.exe",
+  "winSha256": "41771e0df795ce36d7de2b3b4072448a19ec45c5e73f381fac1bb744d143b54a"
 }

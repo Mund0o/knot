@@ -78,6 +78,7 @@ input:focus, textarea:focus, select:focus { border-color: #7c89fa; background: #
 .update-text { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .update-text strong { font-size: 13px; }
 .update-notes { overflow: hidden; color: #bec5de; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.update-changes{margin-top:5px;color:#d7dcef;font-size:12px}.update-changes>span{color:#fff;font-size:11px;font-weight:800;letter-spacing:.03em;text-transform:uppercase}.update-changes ul{display:grid;gap:2px;margin:4px 0 0;padding-left:17px}.update-changes li{line-height:1.35}
 .update-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .update-banner.update-downloading,.update-banner.update-installing,.update-banner.update-restarting{border-color:#6677df;background:#202849}.update-banner.update-failed{border-color:#a84d55;background:#351e24}.update-banner.update-failed strong{color:#ffc0c6}
 
@@ -542,6 +543,16 @@ body.server-members-collapsed .server-member-panel{display:none!important}body.s
 
 /* Keep an active DM call within reach while the conversation timeline grows. */
 body.dm-call-connected:not(.server-view) #voicePanel{position:sticky;z-index:35;top:0;background:var(--canvas);box-shadow:0 10px 24px rgba(0,0,0,.18)}
+
+/* The message timeline is the only scrolling part of the workspace. This keeps
+   call/share controls and the composer reachable while a long conversation is
+   open, and gives the renderer a real scroll container to pin to newest text. */
+html,body{overflow:hidden}
+.app-shell{height:100vh;min-height:0;overflow:hidden}
+.app-content{height:100vh;min-height:0;overflow:hidden}
+.workspace-view,.workspace,.workspace .chat{min-height:0;overflow:hidden}
+.messages{overflow-y:auto;overscroll-behavior:contain}
+@supports(height:100dvh){.app-shell,.app-content{height:100dvh}}
 
 /* Voice activity never changes layout; it only paints a clear live ring. */
 .avatar.speaking,.friend-avatar.speaking,.server-stage-avatar.speaking,.sidebar-profile-avatar.speaking{outline:3px solid #37d67a;outline-offset:3px;box-shadow:0 0 0 5px rgba(55,214,122,.16),0 0 18px rgba(55,214,122,.3);transition:outline-color .08s ease,box-shadow .08s ease}

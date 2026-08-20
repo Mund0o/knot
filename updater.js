@@ -2,8 +2,8 @@
 //
 // Release metadata is fetched over HTTPS, then the installer/AppImage is
 // downloaded to a private staging directory and SHA-256 verified before it is
-// ever executed. Updates run without renderer involvement and restart Knot
-// immediately once the replacement has been handed off to the OS.
+// ever executed. A release is only downloaded after the person using Knot
+// explicitly accepts it in the app.
 const { app, BrowserWindow } = require('electron');
 const PRODUCT_NAME = 'Knot';
 const crypto = require('crypto');
@@ -24,7 +24,13 @@ const MAX_UPDATE_BYTES = 4 * 1024 * 1024 * 1024;
 let timer = null;
 let checking = false;
 let installing = false;
+let availableManifest = null;
 let updateStatus = { state: 'idle', message: '' };
+
+function releaseNotes(value) {
+  if (typeof value !== 'string') return [];
+  return value.split(/\r?\n/).map(note => note.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean).slice(0, 8).map(note => note.slice(0, 280));
+}
 
 function report(state, message = '', extra = {}) {
   updateStatus = { state, message, ...extra };
@@ -257,14 +263,32 @@ async function checkOnce(feedUrl) {
   report('checking', 'Checking for updates…');
   try {
     const manifest = await fetchManifest(feedUrl);
-    if (!isNewer(app.getVersion(), manifest.version)) { report('current', `${PRODUCT_NAME} ${app.getVersion()} is up to date.`); return; }
-    console.log(`[updater] installing ${PRODUCT_NAME} ${manifest.version}`);
-    report('available', `Update found: ${PRODUCT_NAME} ${manifest.version}. Preparing download…`, { version: manifest.version });
-    await install(manifest);
+    if (!isNewer(app.getVersion(), manifest.version)) {
+      availableManifest = null;
+      report('current', `${PRODUCT_NAME} ${app.getVersion()} is up to date.`);
+      return;
+    }
+    availableManifest = manifest;
+    console.log(`[updater] ${PRODUCT_NAME} ${manifest.version} is available; waiting for approval`);
+    report('available', `Update found: ${PRODUCT_NAME} ${manifest.version}. Download when you are ready.`, { version: manifest.version, canInstall: true, notes: releaseNotes(manifest.notes) });
   } catch (error) {
     console.log('[updater] check failed:', error.message);
     report('failed', `Update check failed: ${error.message}`);
   } finally { checking = false; }
+}
+
+async function installAvailableUpdate() {
+  if (installing) return false;
+  const manifest = availableManifest;
+  if (!manifest) return false;
+  try {
+    await install(manifest);
+    return true;
+  } catch (error) {
+    console.log('[updater] install failed:', error.message);
+    report('failed', `Update failed: ${error.message}`, { version: manifest.version });
+    return false;
+  }
 }
 
 function startAutoUpdater() {
@@ -277,4 +301,4 @@ function startAutoUpdater() {
   timer.unref?.();
 }
 
-module.exports = { startAutoUpdater, isNewer, getUpdateStatus: () => updateStatus };
+module.exports = { startAutoUpdater, isNewer, releaseNotes, getUpdateStatus: () => updateStatus, installAvailableUpdate };

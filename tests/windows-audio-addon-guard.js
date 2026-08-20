@@ -72,6 +72,7 @@ try {
   assert(preloadSource.includes("ipcRenderer.send('pair:cleanAudioAck'"), 'renderer bridge does not release native audio IPC backpressure');
   assert(!rendererSource.includes('createScriptProcessor') && rendererSource.includes("new AudioWorkletNode(ctx,'knot-screen-audio'"), 'Windows capture regressed to renderer-thread audio processing');
   assert(rendererSource.includes('screenShareOutputElements()') && rendererSource.includes('applyMediaElementOutput(nativeRemoteAudio)') && rendererSource.includes('state.screenAudio'), 'selected output does not cover native/server screen audio');
+  assert(rendererSource.includes('isAdditionalScreenAudio') && rendererSource.includes('e.transceiver!==remoteVoiceTransceiver'), 'a late Windows computer-audio track can still be mistaken for muted call audio on Linux');
   console.log('PASS Windows audio addon guard and bounded screen-audio worklet');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

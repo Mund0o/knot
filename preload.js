@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('pairSettings', {
 
 contextBridge.exposeInMainWorld('pairUpdates', {
   getStatus: () => ipcRenderer.invoke('pair:getUpdateStatus'),
+  accept: () => ipcRenderer.invoke('pair:acceptUpdate'),
   onStatus: cb => {
     if (typeof cb !== 'function') return () => {};
     const listener = (_event, status) => cb(status);

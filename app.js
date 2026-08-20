@@ -1,8 +1,9 @@
 /* Knot: manual-signaling, two-person P2P chat with application-level E2EE. */
 const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$('#signalIn'),copySignal=$('#copySignal'),processSignal=$('#processSignal'),pairCodeMeta=$('#pairCodeMeta'),statusText=$('#statusText'),messages=$('#messages'),messageForm=$('#messageForm'),messageInput=$('#messageInput'),fileInput=$('#fileInput'),chooseFiles=$('#chooseFiles'),transfers=$('#transfers'),pairHint=$('#pairHint'),participantYou=$('#participantYou'),participantFriend=$('#participantFriend'),voiceLog=$('#voiceLog'),screenBtn=$('#screenBtn'),screenStatus=$('#screenStatus'),screenPreview=$('#screenPreview'),remoteScreen=$('#remoteScreen');
-const updateBanner=$('#updateBanner'),updateTitle=$('#updateTitle'),updateDetails=$('#updateDetails');let updateHideTimer=null;
-function renderUpdateStatus(status){if(!updateBanner||!status)return;clearTimeout(updateHideTimer);const state=String(status.state||'idle');updateBanner.className='update-banner update-'+state;updateTitle.textContent=status.message||'Checking for updates…';updateDetails.textContent=status.version?'Knot '+status.version:'';updateBanner.hidden=state==='idle'||state==='current';if(state==='current')updateHideTimer=setTimeout(()=>{updateBanner.hidden=true},1200)}
+const updateBanner=$('#updateBanner'),updateTitle=$('#updateTitle'),updateDetails=$('#updateDetails'),updateChanges=$('#updateChanges'),updateChangesList=$('#updateChangesList'),updateActions=$('#updateActions'),acceptUpdate=$('#acceptUpdate');let updateHideTimer=null;
+function renderUpdateStatus(status){if(!updateBanner||!status)return;clearTimeout(updateHideTimer);const state=String(status.state||'idle'),canAccept=state==='available'&&status.canInstall!==false,notes=Array.isArray(status.notes)?status.notes.filter(note=>typeof note==='string'&&note.trim()).slice(0,8):[];updateBanner.className='update-banner update-'+state;updateTitle.textContent=status.message||'Checking for updates…';updateDetails.textContent=status.version?'Knot '+status.version:'';updateBanner.hidden=state==='idle'||state==='current';if(updateChanges&&updateChangesList){updateChangesList.replaceChildren(...notes.map(note=>{const item=document.createElement('li');item.textContent=note;return item}));updateChanges.hidden=!canAccept||!notes.length}if(updateActions)updateActions.hidden=!canAccept;if(acceptUpdate)acceptUpdate.disabled=!canAccept;if(state==='current')updateHideTimer=setTimeout(()=>{updateBanner.hidden=true},1200)}
 if(window.pairUpdates){window.pairUpdates.getStatus().then(renderUpdateStatus).catch(()=>{});window.pairUpdates.onStatus(renderUpdateStatus)}
+if(acceptUpdate)acceptUpdate.onclick=async()=>{if(!window.pairUpdates?.accept)return;acceptUpdate.disabled=true;await window.pairUpdates.accept().catch(()=>{acceptUpdate.disabled=false})};
 let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promise.resolve(),pairSignalBusy=false,pairReplyAccepted=false;let CHUNK=1024*1024;const MAX=200*1024**3;
 let directoryTrustedConnection=false,recordConversationMessage=()=>{},directoryProfilePush=()=>{};
 // Directory/call state must exist before any asynchronous settings/profile
@@ -46,7 +47,7 @@ const MAX_PROFILE_DATA=7*1024*1024;
 // and stays quiet until then.
 let audioCtx=null;
 function sfxCtx(){if(!audioCtx){try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();if(outputDeviceId&&typeof audioCtx.setSinkId==='function')audioCtx.setSinkId(outputDeviceId).catch(()=>{})}catch{return null}}if(audioCtx.state==='suspended'){try{audioCtx.resume()}catch{}}return audioCtx}
-let speakingAudioCtx=null,remoteVoiceTrack=null;const speakingMonitors=new Map();
+let speakingAudioCtx=null,remoteVoiceTrack=null,remoteVoiceTransceiver=null;const speakingMonitors=new Map();
 function speakingTargets(key){if(key==='dm-self')return[participantYou.querySelector('.avatar'),$('#sidebarProfileAvatar')].filter(Boolean);if(key==='dm-friend')return[participantFriend.querySelector('.avatar'),dmCallPeerId?document.querySelector(`.friend-entry[data-id="${dmCallPeerId}"] .friend-avatar`):null].filter(Boolean);const id=key.startsWith('server:')?key.slice(7):'';return id?[...document.querySelectorAll(`[data-speaking-id="${id}"]`)]:[]}
 function paintSpeaking(key,on){speakingTargets(key).forEach(node=>node.classList.toggle('speaking',on))}
 function refreshSpeakingPaint(){for(const [key,monitor] of speakingMonitors)paintSpeaking(key,!!monitor.speaking)}
@@ -179,7 +180,7 @@ let sendAbort=new Map(),fileSeq=0;
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
 const enc=new TextEncoder(),dec=new TextDecoder();
-function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(connectCard)connectCard.hidden=on;if(addFriendBtn)addFriendBtn.disabled=on;  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{messageInput.disabled=true;messageForm.querySelector('.send').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
+function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(connectCard)connectCard.hidden=on;if(addFriendBtn)addFriendBtn.disabled=on;  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=relayVoiceMode;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{messageInput.disabled=true;messageForm.querySelector('.send').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
 const MAX_SIGNAL_SIZE=1024*1024,MAX_MESSAGE_SIZE=64*1024,SIGNAL_COMPRESSED_PREFIX='pair1.',SIGNAL_RAW_PREFIX='pair0.';
 // Dot is used instead of base64url's underscore. Discord treats underscores
 // as Markdown emphasis, but dots and hyphens copy cleanly in ordinary chat.
@@ -489,10 +490,10 @@ function receiveDirectMessage(message,peerIdOverride=''){
   const friend=directoryUser(peerId),entry={text:message.text,mine:false,gif:message.gif?.url?{url:message.gif.url,thumb:message.gif.thumb||message.gif.url}:null,author:{id:peerId,name:friend?.name||'Friend',image:'',frame:normalizeFrame(friend?.frame)},time:Date.now()};
   storeConversationEntry(key,entry);
 }
-function setupChannels(){chat=pc.createDataChannel('chat');files=pc.createDataChannel('files');wire()}
+function setupChannels(){chat=pc.createDataChannel('chat');if(!relayVoiceMode)files=pc.createDataChannel('files');wire()}
 function wire(){
   if(chat){
-    chat.onopen=()=>{setStatus('Connected directly',true);announceProfile();publishCallState(callActive)};
+    chat.onopen=()=>{setStatus(relayVoiceMode?'Voice relay active · files and screen share stay P2P':'Connected directly',true);announceProfile();publishCallState(callActive)};
     chat.onmessage=async event=>{
       try{
         if(typeof event.data!=='string'||event.data.length>MAX_MESSAGE_SIZE*3)return;
@@ -547,7 +548,12 @@ function fileBus(){return files&&files.readyState==='open'?files:null}
 // TURN settings are supplied by the preload bridge; browser builds retain the
 // safe default rather than depending on a Node `process` global.
 const DEFAULT_ICE_SERVERS=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
-const ICE_SERVERS=Array.isArray(window.pairEnv?.iceServers)&&window.pairEnv.iceServers.length?window.pairEnv.iceServers:DEFAULT_ICE_SERVERS;
+const CONFIGURED_ICE_SERVERS=Array.isArray(window.pairEnv?.iceServers)?window.pairEnv.iceServers:[];
+const ICE_SERVERS=CONFIGURED_ICE_SERVERS.length?CONFIGURED_ICE_SERVERS:DEFAULT_ICE_SERVERS;
+function iceUrls(item){return Array.isArray(item?.urls)?item.urls:[item?.urls]}
+function hasTurnUrl(item){return iceUrls(item).some(url=>typeof url==='string'&&/^(?:turn|turns):/i.test(url))}
+function directIceServers(){const stun=ICE_SERVERS.map(item=>{const urls=iceUrls(item).filter(url=>typeof url==='string'&&/^stun:/i.test(url));return urls.length?{urls}:null}).filter(Boolean);return stun.length?stun:DEFAULT_ICE_SERVERS}
+let dmIceServers=directIceServers(),turnIceServers=CONFIGURED_ICE_SERVERS.filter(hasTurnUrl),turnCredentialWaiter=null,turnCredentialPending=null,relayVoiceMode=false,dmMediaPlan=null;
 function viableScreenPeer(target=pc){return !!target&&target===pc&&!['failed','disconnected','closed'].includes(String(target.connectionState||''))&&target.signalingState!=='closed'}
 function setupPeer(){
   // Close previous pc and associated resources if reconnecting (e.g. peer-left → peer-ready).
@@ -562,8 +568,8 @@ function setupPeer(){
     if(oldFiles){oldFiles.onmessage=null;try{oldFiles.close()}catch{}}
     try{oldPc.close()}catch{}
   }
-  pc=new RTCPeerConnection({iceServers:ICE_SERVERS});const peer=pc;peer.onicecandidate=()=>{};let wasEverConnected=false;
-  peer.onconnectionstatechange=()=>{if(pc!==peer)return;const state=peer.connectionState;if(state==='connected'){if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=false;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}callActive=false;startCall()}}else{setStatus('Connected directly',true);friendLeftNotified=false}}if(['failed','disconnected','closed'].includes(state)){if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=true;abortScreenSharePicker();if(screenActive||screenStarting||screenStream||nativeScreenSession)void stopScreenShare(true);else screenGen++;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}applyRemoteCallState(false);setStatus(state)}if(state==='connecting'){pairHint.textContent='Negotiating peer connection (ICE '+(peer.iceConnectionState||'')+')…';armConnectTimeout()}};peer.oniceconnectionstatechange=()=>{if(pc!==peer)return;if(peer.iceConnectionState==='failed'){pairHint.textContent='Peer connection failed (ICE '+(peer.iceConnectionState||'')+'). NAT/network blocks a direct link and the TURN relay could not be reached. Both must be on v1.0.0+, and your network must allow the TURN relay.'}else if(peer.iceConnectionState==='checking'||peer.iceConnectionState==='connected'){pairHint.textContent='Negotiating peer connection (ICE '+(peer.iceConnectionState||'')+' )…'}};peer.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else files=e.channel;wire()};
+  pc=new RTCPeerConnection({iceServers:dmIceServers,iceTransportPolicy:relayVoiceMode?'relay':'all'});const peer=pc;peer.onicecandidate=()=>{};let wasEverConnected=false;
+  peer.onconnectionstatechange=()=>{if(pc!==peer)return;const state=peer.connectionState;if(state==='connected'){if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=relayVoiceMode;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null}callActive=false;startCall()}}else{setStatus(relayVoiceMode?'Voice relay active · files and screen share stay P2P':'Connected directly',true);friendLeftNotified=false}}if(['failed','disconnected','closed'].includes(state)){if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=true;abortScreenSharePicker();if(screenActive||screenStarting||screenStream||nativeScreenSession)void stopScreenShare(true);else screenGen++;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}applyRemoteCallState(false);setStatus(state)}if(state==='connecting'){pairHint.textContent=(relayVoiceMode?'Connecting low-bandwidth voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…';armConnectTimeout()}};peer.oniceconnectionstatechange=()=>{if(pc!==peer)return;if(peer.iceConnectionState==='failed'){pairHint.textContent=relayVoiceMode?'Voice relay failed. Text will keep working, but this network cannot reach the relay.':'Direct peer connection failed; retrying before the low-bandwidth voice relay.'}else if(peer.iceConnectionState==='checking'||peer.iceConnectionState==='connected'){pairHint.textContent=(relayVoiceMode?'Connecting voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…'}};peer.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else if(!relayVoiceMode)files=e.channel;wire()};
   peer.addEventListener('connectionstatechange',()=>{if(pc!==peer||peer.connectionState!=='connected'||callActive||callStarting||pendingVoiceStartPeerId!==dmPeerId)return;pendingVoiceStartPeerId='';startCall()});
   const baseDirectDataChannel=pc.ondatachannel;pc.ondatachannel=event=>{if(event.channel.label==='knot-screen-native'){wireNativeScreenChannel(event.channel,{remote:true});return}baseDirectDataChannel(event)};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
@@ -597,10 +603,16 @@ function setupPeer(){
     // renegotiation cannot mistake the friend's voice for screen audio and
     // silently detach the speaking-ring analyser.
     const isVoiceAudio=e.track.kind==='audio'&&(e.transceiver===audioTransceiver||e.transceiver?.sender===audioTransceiver);
+    // Windows attaches computer sound in a later renegotiation. Data-channel
+    // screen-start metadata and that new audio m-line can arrive in either
+    // order, so a second audio transceiver after the established call track is
+    // unambiguously screen sound even before the metadata reaches Linux.
+    const isAdditionalScreenAudio=e.track.kind==='audio'&&!!remoteVoiceTransceiver&&!!e.transceiver&&e.transceiver!==remoteVoiceTransceiver;
     const bindsToScreen=!isVoiceAudio&&(stream===remoteScreen.srcObject
       ||!!(screenStreamId&&e.streams?.some(s=>s?.id===screenStreamId))
       ||stream.getVideoTracks().length>0
       ||remoteScreenExpected
+      ||isAdditionalScreenAudio
       ||(e.track.kind==='audio'&&!remoteScreen.hidden&&!!remoteScreen.srcObject));
     if(e.track.kind==='audio'&&bindsToScreen){
       // Keep screen sound out of the video element for every share backend.
@@ -614,7 +626,7 @@ function setupPeer(){
       if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
-    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track)remoteVoiceTrack=null;stopSpeakingMonitor('dm-friend');applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){const receiver=pc.getReceivers().find(value=>value.track===e.track);if(receiver)monitorRemoteScreenDecode(receiver,e.track);remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};updateScreenLayout();e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
+    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){remoteVoiceTrack=null;remoteVoiceTransceiver=null}stopSpeakingMonitor('dm-friend');applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){const receiver=pc.getReceivers().find(value=>value.track===e.track);if(receiver)monitorRemoteScreenDecode(receiver,e.track);remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};updateScreenLayout();e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
 }
 function monitorRemoteScreenDecode(receiver,track,requestFallback){
   try{receiver.playoutDelayHint=.08;if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=60}catch{}
@@ -640,13 +652,14 @@ function monitorRemoteScreenDecode(receiver,track,requestFallback){
   const timer=setInterval(sample,2500);track.addEventListener?.('ended',stop,{once:true});setTimeout(sample,2500);
 }
 async function waitIce(){if(pc.iceGatheringState==='complete')return;await new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;pc?.removeEventListener('icegatheringstatechange',f);clearTimeout(timeout);resolve()};const f=()=>{if(pc?.iceGatheringState==='complete')finish()};const timeout=setTimeout(finish,5000);pc.addEventListener('icegatheringstatechange',f)})}
-function patchOpusSdp(sdp){return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate=256000';else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate=256000');if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate=48000';if(!m.includes('maxptime'))m+='; maxptime=20';else m=m.replace(/maxptime=\d+/,'maxptime=20');if(!m.includes('minptime'))m+='; minptime=10';else m=m.replace(/minptime=\d+/,'minptime=10');if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx=0';if(!m.includes('stereo'))m+='; stereo=1';else m=m.replace(/stereo=[01]/,'stereo=1');if(!m.includes('sprop-stereo'))m+='; sprop-stereo=1';else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo=1');return m})}
+function patchOpusSdp(sdp){const bitrate=relayVoiceMode?24000:256000,playback=relayVoiceMode?16000:48000,stereo=relayVoiceMode?0:1;return sdp.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate='+bitrate;else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate='+bitrate);if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate='+playback;else m=m.replace(/maxplaybackrate=\d+/,'maxplaybackrate='+playback);if(!m.includes('maxptime'))m+='; maxptime=20';else m=m.replace(/maxptime=\d+/,'maxptime=20');if(!m.includes('minptime'))m+='; minptime=10';else m=m.replace(/minptime=\d+/,'minptime=10');if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx='+(relayVoiceMode?1:0);else m=m.replace(/usedtx=[01]/,'usedtx='+(relayVoiceMode?1:0));if(!m.includes('stereo'))m+='; stereo='+stereo;else m=m.replace(/stereo=[01]/,'stereo='+stereo);if(!m.includes('sprop-stereo'))m+='; sprop-stereo='+stereo;else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo='+stereo);return m})}
 function patchSdp(sdp){return patchOpusSdp(sdp)}
 $('#createOffer').onclick=async()=>{try{if(pc||signaling)disconnectRoom();pairSignalBusy=false;pairReplyAccepted=false;processSignal.disabled=false;role='offer';signalIn.value='';ssSet('savedInviteCode',null);setOutgoingCode('');processSignal.textContent='Finish connection';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Invite ready. Copy it, send it to your friend, then paste their reply in step 2.'}catch(e){pairHint.textContent='Could not create invite: '+(e?.message||e)}};
 processSignal.onclick=async()=>{if(pairSignalBusy){pairHint.textContent='Still processing that code…';return}if(role==='offer'&&(pairReplyAccepted||!pc||pc.signalingState!=='have-local-offer')){const failed=pc&&['failed','disconnected','closed'].includes(pc.connectionState);pairHint.textContent=failed?'That connection attempt already ended. Click Create invite, then send the new code to your friend for a fresh try.':'That reply was already accepted. Connecting directly…';processSignal.disabled=true;return}pairSignalBusy=true;processSignal.disabled=true;try{const remote=await cleanSignal(signalIn.value);if(role==='offer'){if(remote.type!=='answer')throw new Error('Paste the reply your friend created, not another invite');await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!await derive(pc._kp,remote.pub))throw new Error('Security code was not confirmed');pairReplyAccepted=true;pairHint.textContent='Connecting directly…'}else if(!role){if(remote.type!=='offer')throw new Error('Paste an invite first, then create its reply');role='answer';setOutgoingCode('');setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!await derive(kp,remote.pub))throw new Error('Security code was not confirmed');const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Reply ready. Copy it and send it back to the person who invited you.';processSignal.textContent='Reply ready'}else pairHint.textContent='Your reply is already ready. Copy it and send it back to your friend.'}catch(e){processSignal.disabled=false;pairHint.textContent='Could not continue pairing: '+(e?.message||e)}finally{pairSignalBusy=false}};
 copySignal.onclick=()=>copyOutgoingCode().catch(e=>{pairHint.textContent='Could not copy code: '+(e?.message||e)});
 messageForm.onsubmit=async e=>{e.preventDefault();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE){pairHint.textContent='Messages are limited to 64 KB.';return}if(!sharedKey){if(LOCAL_TEST_MODE){addMessage(text,true,gif);messageInput.value='';setPendingGif(null);return}return}send({t:'msg',v:await seal(payload)});addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics)};
-fileInput.onchange=()=>{const files=[...fileInput.files];fileInput.value='';files.forEach(sendFile);};
+async function waitForDirectFileChannel(peerId,timeoutMs=30000){const until=Date.now()+timeoutMs;while(Date.now()<until){if(fileBus()&&pc?.connectionState==='connected'&&dmPeerId===peerId)return true;await new Promise(resolve=>setTimeout(resolve,100))}return false}
+fileInput.onchange=async()=>{const selected=[...fileInput.files];fileInput.value='';if(!selected.length)return;if(activePeerId&&!fileBus()&&!LOCAL_TEST_MODE){try{pairHint.textContent='Connecting directly for file transfer…';await ensureDmMediaConnection(activePeerId);if(!await waitForDirectFileChannel(activePeerId))throw new Error('Direct file connection timed out. Files are never relayed through Cloudflare.');pairHint.textContent='Direct file connection ready.'}catch(error){pairHint.textContent=error?.message||'Could not connect for file transfer';return}}selected.forEach(file=>sendFile(file));};
 function transfer(name,size,dir){
   const el=document.createElement('div');el.className='transfer';el.innerHTML='<div class="transfer-top"><span class="transfer-name"></span><span class="transfer-status"></span></div><div class="bar"><i></i></div><div class="transfer-stats"><span class="transfer-speed"></span><span class="transfer-eta"></span></div><div class="transfer-peer"></div><div class="transfer-btns"><button class="cancel-btn text-button" hidden>Cancel</button><button class="retry-btn primary" hidden>Retry</button></div>';
   el.querySelector('.transfer-name').textContent=name+' · '+format(size);
@@ -905,23 +918,58 @@ function roomSignalAddress(address,room){const safe=secureSignalAddress(address)
 function makeInviteCode(){const range=90000,limit=Math.floor(0x100000000/range)*range,words=new Uint32Array(1);do{crypto.getRandomValues(words)}while(words[0]>=limit);return String(10000+(words[0]%range))}
 
 // --- Friends, presence and servers ------------------------------------------
-// Cloudflare is a control plane only. This socket carries identity metadata,
-// presence and WebRTC setup envelopes; messages/media/files never use it.
+// Cloudflare carries the live encrypted text plane plus presence and WebRTC
+// setup. It never receives plaintext, group keys, files, voice, video, or
+// screen-share bytes. Media/file connections are created only on demand.
 function clientHex(bytes){const value=crypto.getRandomValues(new Uint8Array(bytes));return [...value].map(byte=>byte.toString(16).padStart(2,'0')).join('')}
 function directoryAddress(){const u=new URL(PAIR_SIGNAL_SERVER);u.pathname='/directory';u.search='';return u.href}
 function directorySend(value){if(directorySocket?.readyState!==WebSocket.OPEN)return false;try{directorySocket.send(JSON.stringify(value));return true}catch{return false}}
 function directoryUser(id){return directorySnapshot.friends.find(friend=>friend.id===id)||directorySnapshot.members?.[id]||null}
+let deviceIdentityPromise=null,serverTextKeysLoaded=false,serverTextKeys={},serverTextMembershipLoaded=false,serverTextMembership={},serverTextSyncing=false;
+const seenRelayMessages=new Set(),pendingServerKeyRequests=new Set();
+function validDevicePublicKey(value){return !!value&&value.kty==='EC'&&value.crv==='P-256'&&typeof value.x==='string'&&/^[A-Za-z0-9_-]{40,80}$/.test(value.x)&&typeof value.y==='string'&&/^[A-Za-z0-9_-]{40,80}$/.test(value.y)}
+async function deviceIdentity(){if(deviceIdentityPromise)return deviceIdentityPromise;deviceIdentityPromise=(async()=>{let saved;try{saved=JSON.parse(await ss('deviceIdentityPrivate')||'null')}catch{};try{if(validDevicePublicKey(saved)&&typeof saved.d==='string'){const privateKey=await crypto.subtle.importKey('jwk',saved,{name:'ECDH',namedCurve:'P-256'},true,['deriveBits']);const publicKey=await crypto.subtle.importKey('jwk',{kty:'EC',crv:'P-256',x:saved.x,y:saved.y,ext:true},{name:'ECDH',namedCurve:'P-256'},true,[]);return{privateKey,publicKey}}}catch{}const generated=await crypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveBits']);const privateJwk=await crypto.subtle.exportKey('jwk',generated.privateKey);await ssSet('deviceIdentityPrivate',JSON.stringify(privateJwk));return generated})();return deviceIdentityPromise}
+async function devicePublicKey(){return crypto.subtle.exportKey('jwk',(await deviceIdentity()).publicKey)}
+function relayBytes(value){return enc.encode(String(value))}
+function relayAad(scope,id,from,to='',serverId='',channelId=''){const peers=[String(from||''),String(to||'')].filter(Boolean).sort().join(':');return relayBytes(['knot-live-v1',scope,id,peers,serverId,channelId].join('|'))}
+async function relayPairKey(peerId){const peer=directoryUser(peerId);if(!validDevicePublicKey(peer?.deviceKey))throw new Error('Your friend is updating secure chat keys. Try again in a moment.');const identity=await deviceIdentity(),remote=await importPub(peer.deviceKey),bits=await crypto.subtle.deriveBits({name:'ECDH',public:remote},identity.privateKey,256),label=relayBytes('knot-live-pair-v1|'+[directoryUserId,peerId].sort().join('|')),material=new Uint8Array(bits.byteLength+label.byteLength);material.set(new Uint8Array(bits));material.set(label,new Uint8Array(bits).byteLength);const digest=await crypto.subtle.digest('SHA-256',material);return crypto.subtle.importKey('raw',digest,{name:'AES-GCM'},false,['encrypt','decrypt'])}
+async function sealRelay(key,value,aad){const iv=crypto.getRandomValues(new Uint8Array(12)),data=enc.encode(typeof value==='string'?value:JSON.stringify(value)),cipher=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:aad},key,data);return{iv:base64UrlEncode(iv),data:base64UrlEncode(new Uint8Array(cipher))}}
+async function openRelay(key,value,aad){if(!value||typeof value.iv!=='string'||typeof value.data!=='string'||value.data.length>MAX_MESSAGE_SIZE*2)return null;try{return dec.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:base64UrlDecode(value.iv),additionalData:aad},key,base64UrlDecode(value.data)))}catch{return null}}
+async function loadServerTextKeys(){if(serverTextKeysLoaded)return;serverTextKeysLoaded=true;try{const parsed=JSON.parse(await ss('serverTextKeys')||'{}');if(parsed&&typeof parsed==='object')serverTextKeys=parsed}catch{serverTextKeys={}}}
+async function saveServerTextKeys(){await ssSet('serverTextKeys',JSON.stringify(serverTextKeys))}
+async function importServerTextKey(raw){return crypto.subtle.importKey('raw',base64UrlDecode(raw),{name:'AES-GCM'},false,['encrypt','decrypt'])}
+async function serverTextKey(server,{create=false}={}){await loadServerTextKeys();let raw=serverTextKeys[server?.id];if(typeof raw==='string'&&/^[A-Za-z0-9_.-]{40,64}$/.test(raw))try{return{raw,key:await importServerTextKey(raw)}}catch{}if(!create||server?.owner!==directoryUserId)return null;raw=base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)));serverTextKeys[server.id]=raw;await saveServerTextKeys();void distributeServerTextKey(server,raw);return{raw,key:await importServerTextKey(raw)}}
+async function sendServerTextKey(server,peerId,raw){if(!server?.members?.includes(peerId)||peerId===directoryUserId)return false;try{const pair=await relayPairKey(peerId),id=clientHex(16),body=JSON.stringify({serverId:server.id,key:raw}),cipher=await sealRelay(pair,body,relayAad('key',id,directoryUserId,peerId,server.id));return directorySend({type:'relay-key',mode:'deliver',id,serverId:server.id,peerId,cipher})}catch{return false}}
+async function distributeServerTextKey(server,raw){for(const peerId of server?.members||[])if(peerId!==directoryUserId&&directoryUser(peerId)?.online)await sendServerTextKey(server,peerId,raw)}
+async function requestServerTextKey(server){if(!server||pendingServerKeyRequests.has(server.id))return;pendingServerKeyRequests.add(server.id);const id=clientHex(16);directorySend({type:'relay-key',mode:'request',id,serverId:server.id});setTimeout(()=>pendingServerKeyRequests.delete(server.id),5000)}
+async function serverTextMembershipSync(){if(serverTextSyncing)return;serverTextSyncing=true;try{if(!serverTextMembershipLoaded){serverTextMembershipLoaded=true;try{const parsed=JSON.parse(await ss('serverTextMembership')||'{}');if(parsed&&typeof parsed==='object')serverTextMembership=parsed}catch{serverTextMembership={}}}for(const server of directorySnapshot.servers||[]){const signature=(server.members||[]).slice().sort().join(',');const previous=serverTextMembership[server.id];serverTextMembership[server.id]=signature;if(previous&&previous!==signature&&server.owner===directoryUserId){await loadServerTextKeys();const raw=base64UrlEncode(crypto.getRandomValues(new Uint8Array(32)));serverTextKeys[server.id]=raw;await saveServerTextKeys();void distributeServerTextKey(server,raw)}}await ssSet('serverTextMembership',JSON.stringify(serverTextMembership))}finally{serverTextSyncing=false}}
+function validTurnIceServers(value){return Array.isArray(value)&&value.length>0&&value.length<=8&&value.every(item=>item&&typeof item==='object'&&iceUrls(item).length>0&&iceUrls(item).every(url=>typeof url==='string'&&/^(?:stun|turn|turns):/i.test(url)))&&value.some(hasTurnUrl)}
+async function requestTurnCredentials(){
+  if(turnIceServers.length)return turnIceServers;
+  if(turnCredentialWaiter)return turnCredentialWaiter;
+  if(!directorySocket||directorySocket.readyState!==WebSocket.OPEN)throw new Error('Knot signaling is offline');
+  let resolveWait,rejectWait;
+  const wait=turnCredentialWaiter=new Promise((resolve,reject)=>{resolveWait=resolve;rejectWait=reject});
+  const finish=(error,value)=>{const pending=turnCredentialPending;turnCredentialPending=null;turnCredentialWaiter=null;clearTimeout(pending?.timeout);error?rejectWait(error):resolveWait(value)};
+  turnCredentialPending={timeout:setTimeout(()=>finish(new Error('Voice relay credential timed out')),10000),resolve:value=>finish(null,value),reject:error=>finish(error)};
+  if(!directorySend({type:'turn-credentials'}))finish(new Error('Could not request a voice relay'));
+  return wait;
+}
+function acceptTurnCredentials(value){if(!validTurnIceServers(value?.iceServers)){turnCredentialPending?.reject(new Error('Voice relay returned invalid credentials'));return}turnIceServers=value.iceServers;turnCredentialPending?.resolve(turnIceServers)}
 async function derivePersistentDmKey(local,remote){const bits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(remote)},local.privateKey,256);return crypto.subtle.importKey('raw',bits,{name:'AES-GCM'},false,['encrypt','decrypt'])}
 async function sealWithKey(key,value){const iv=crypto.getRandomValues(new Uint8Array(12)),data=typeof value==='string'?enc.encode(value):value,ct=await crypto.subtle.encrypt({name:'AES-GCM',iv},key,data);return{iv:[...iv],data:[...new Uint8Array(ct)]}}
 async function openWithKey(key,value){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(value.iv)},key,new Uint8Array(value.data)))}
-function persistentDmReady(id){const state=persistentDmPeers.get(id);return !!(state?.key&&state.channel?.readyState==='open'&&state.pc.connectionState==='connected')}
+function persistentDmReady(id){return !!(directorySocket?.readyState===WebSocket.OPEN&&directoryUser(id)?.online&&validDevicePublicKey(directoryUser(id)?.deviceKey))}
 function syncActiveDmTransport(){
   if(activeServerId||!activePeerId)return;
   const friend=directoryUser(activePeerId),ready=persistentDmReady(activePeerId),mediaReady=!!(pc&&dmPeerId===activePeerId&&pc.connectionState==='connected'),inBackgroundCall=dmCallOngoing()&&dmCallPeerId!==activePeerId;
-  messageInput.disabled=!ready;messageForm.querySelector('.send').disabled=!ready;fileInput.disabled=!(mediaReady&&files?.readyState==='open');
+  messageInput.disabled=!ready;messageForm.querySelector('.send').disabled=!ready;
+  // Choosing a file is allowed before the media peer exists. The selected file
+  // waits for the on-demand direct connection; it is never sent via Cloudflare.
+  fileInput.disabled=relayVoiceMode||!friend?.online||directorySocket?.readyState!==WebSocket.OPEN;
   if(callActive||friendInCall)callBtn.disabled=false;else callBtn.disabled=!friend?.online;
   $('.connection').classList.toggle('connected',ready);
-  statusText.textContent=ready?(inBackgroundCall?'Connected · call continues in background':'Connected directly'):dmConnectingPeerId===activePeerId?'Connecting directly…':friend?.online?'Connecting directly…':'Offline';
+  statusText.textContent=ready?(relayVoiceMode?'Encrypted text · low-bandwidth voice relay':inBackgroundCall?'Encrypted text · call continues in background':'Encrypted live text'):dmConnectingPeerId===activePeerId?'Connecting media…':friend?.online?'Preparing encrypted text…':'Offline';
 }
 function closePersistentDmPeer(peerId,{retry=false}={}){
   const state=persistentDmPeers.get(peerId);if(!state)return;state.closing=true;persistentDmPeers.delete(peerId);
@@ -960,18 +1008,24 @@ async function handlePersistentDmSignal(message){
   }else if(payload.kind==='candidate'&&payload.candidate){if(connection.remoteDescription)await connection.addIceCandidate(payload.candidate);else state.candidates.push(payload.candidate)}
 }
 function syncPersistentDmPeers(){
-  const online=new Set((directorySnapshot.friends||[]).filter(friend=>friend.online).map(friend=>friend.id));
-  for(const peerId of persistentDmPeers.keys())if(!online.has(peerId))closePersistentDmPeer(peerId);
-  for(const peerId of online)ensurePersistentDmPeer(peerId).catch(error=>console.warn('persistent DM connect',peerId,error));
+  // Text no longer creates a background WebRTC mesh. Close connections made
+  // by an older build, but retain the explicit media connection in `pc`.
+  for(const peerId of [...persistentDmPeers.keys()])closePersistentDmPeer(peerId);
   syncActiveDmTransport();renderFriends();
 }
 async function sendPersistentDm(peerId,text,gif){
-  const state=persistentDmPeers.get(peerId);if(!state?.key||state.channel?.readyState!=='open')throw new Error('Direct message connection is not ready');
-  const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE)throw new Error('Messages are limited to 64 KB');state.channel.send(JSON.stringify({t:'dm-msg',v:await sealWithKey(state.key,payload)}));addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics);
+  if(!persistentDmReady(peerId))throw new Error('Your friend is offline or secure text is not ready');
+  const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE)throw new Error('Messages are limited to 64 KB');
+  const id=clientHex(16),key=await relayPairKey(peerId),cipher=await sealRelay(key,payload,relayAad('dm',id,directoryUserId,peerId));
+  if(!directorySend({type:'relay-text',scope:'dm',id,peerId,cipher}))throw new Error('Encrypted text relay is offline');
+  addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics);
 }
+function rememberRelayMessage(id){if(!/^[a-f0-9]{32}$/.test(id||'')||seenRelayMessages.has(id))return false;seenRelayMessages.add(id);if(seenRelayMessages.size>2000)seenRelayMessages.delete(seenRelayMessages.values().next().value);return true}
+async function receiveRelayText(value){const from=String(value?.from||'').toLowerCase(),id=String(value?.id||'').toLowerCase();if(!rememberRelayMessage(id))return;if(value.scope==='dm'){if(!directoryUser(from))return;const key=await relayPairKey(from),payload=await openRelay(key,value.cipher,relayAad('dm',id,from,directoryUserId));if(!payload)return;receivePersistentDmMessage(from,readChatPayload(payload));return}if(value.scope!=='server')return;const server=directorySnapshot.servers?.find(item=>item.id===value.serverId),channel=server?.channels?.find(item=>item.id===value.channelId&&item.type==='text');if(!server||!channel||!server.members.includes(from))return;const group=await serverTextKey(server);if(!group){await requestServerTextKey(server);if(activeServerId===server.id)pairHint.textContent='Waiting for an online member to share this server’s secure text key.';return}const payload=await openRelay(group.key,value.cipher,relayAad('server',id,from,'',server.id,channel.id));if(!payload)return;let message;try{message=JSON.parse(payload)}catch{return}const chat=readChatPayload(message.payload);const entry=normalizeServerHistoryEntry({id,text:chat.text,gif:chat.gif,time:message.time,author:{id:from}},server,from);if(entry)storeServerHistory(server.id,channel.id,[entry])}
+async function receiveRelayKey(value){const from=String(value?.from||'').toLowerCase(),server=directorySnapshot.servers?.find(item=>item.id===value.serverId);if(!server||!server.members.includes(from))return;if(value.mode==='request'){const group=await serverTextKey(server);if(group)await sendServerTextKey(server,from,group.raw);return}if(value.mode!=='deliver'||!rememberRelayMessage(String(value?.id||'').toLowerCase()))return;const key=await relayPairKey(from),plain=await openRelay(key,value.cipher,relayAad('key',value.id,from,directoryUserId,server.id));if(!plain)return;let delivered;try{delivered=JSON.parse(plain)}catch{return}if(delivered?.serverId!==server.id||typeof delivered.key!=='string'||!/^[A-Za-z0-9_.-]{40,64}$/.test(delivered.key))return;try{await importServerTextKey(delivered.key)}catch{return}await loadServerTextKeys();serverTextKeys[server.id]=delivered.key;await saveServerTextKeys();pendingServerKeyRequests.delete(server.id);if(activeServerId===server.id){pairHint.textContent='Encrypted live text is ready.';syncActiveDmTransport()}}
 messageForm.addEventListener('submit',async event=>{
-  if(activeServerId||!activePeerId)return;event.preventDefault();event.stopImmediatePropagation();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;
-  try{await sendPersistentDm(activePeerId,text,gif)}catch(error){pairHint.textContent=error?.message||'Direct message connection is not ready'}
+  if(!activeServerId&&!activePeerId)return;event.preventDefault();event.stopImmediatePropagation();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;
+  try{const sent=activeServerId?await sendServerMessage(text,gif):(await sendPersistentDm(activePeerId,text,gif),true);if(sent&&activeServerId){messageInput.value='';setPendingGif(null)}}catch(error){pairHint.textContent=error?.message||'Encrypted text is not ready'}
 },true);
 let directoryAvatarSource='',directoryAvatarCache='',directoryProfileTimer=null,directoryProfileGeneration=0;
 async function directoryAvatar(){
@@ -985,7 +1039,7 @@ async function directoryAvatar(){
   const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.76)),data=blob?await readProfileData(blob):'';
   directoryAvatarSource=source;directoryAvatarCache=validProfileData(data)&&data.length<=480*1024?data:'';return directoryAvatarCache;
 }
-async function directoryProfile(){return {name:profileName,image:await directoryAvatar(),frame:normalizeFrame(profileFrame)}}
+async function directoryProfile(){return {name:profileName,image:await directoryAvatar(),frame:normalizeFrame(profileFrame),deviceKey:await devicePublicKey()}}
 directoryProfilePush=()=>{const generation=++directoryProfileGeneration;clearTimeout(directoryProfileTimer);directoryProfileTimer=setTimeout(async()=>{try{const profile=await directoryProfile();if(generation===directoryProfileGeneration)directorySend({type:'update-profile',...profile})}catch(error){console.warn('directory profile',error)}},100)};
 function setDirectoryState(online,text){$('#directoryPresence')?.classList.toggle('online',online);if($('#directoryStatus'))$('#directoryStatus').textContent=text;}
 function scheduleHistorySave(){clearTimeout(historySaveTimer);historySaveTimer=setTimeout(()=>ssSet('messageHistory',JSON.stringify(conversationHistories)),180)}
@@ -1025,10 +1079,62 @@ async function selectFriend(id,{connect=true}={}){
   activateDmView(friend);
   if(backgroundCall){pairHint.textContent='Your call with '+(directoryUser(dmCallPeerId)?.name||'your friend')+' stays connected while you use this DM.';renderCallPeerProfile();return}
   if(pc&&dmPeerId===id){renderCallPeerProfile();return}
-  if(pc&&!dmCallOngoing())disconnectRoom();
-  if(connect&&friend.online){if(dmConnectingPeerId===id){pairHint.textContent='Connecting directly to '+friend.name+'…';return}dmConnectingPeerId=id;syncActiveDmTransport();const session=clientHex(16);if(!directorySend({type:'connect',peerId:id,session,context:{type:'dm'}})){dmConnectingPeerId='';syncActiveDmTransport();pairHint.textContent='Knot presence is offline. Reconnect before calling '+friend.name+'.';return}await automaticPair('host',session,id);if(activePeerId===id)applyFriendProfile(friend);renderCallPeerProfile()}
-  else if(!friend.online)pairHint.textContent=friendName+' is offline. Knot will reconnect this DM as soon as they open the app.';
+  // Opening a DM must be side-effect free: live text is available from the
+  // directory socket and only Call/file actions make a WebRTC peer.
+  if(!friend.online)pairHint.textContent=friendName+' is offline. Live encrypted messages are delivered only while they are online.';
   syncActiveDmTransport();
+}
+function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+async function waitForDmMediaConnection(peerId,plan,timeoutMs){
+  const until=Date.now()+timeoutMs;
+  while(Date.now()<until){
+    if(plan?.cancelled)return false;
+    if(pc&&dmPeerId===peerId){
+      if(pc.connectionState==='connected')return true;
+      if(['failed','closed'].includes(pc.connectionState))return false;
+    }
+    await delay(100);
+  }
+  return !!(pc&&dmPeerId===peerId&&pc.connectionState==='connected');
+}
+function abandonDmMediaAttempt(peerId){
+  if(pc||signaling)disconnectRoom();
+  dmPeerId=peerId;dmConnectingPeerId=peerId;
+}
+async function ensureDmMediaConnection(peerId=activePeerId){
+  const friend=directoryUser(peerId);if(!peerId||!friend?.online)throw new Error('Your friend is offline');
+  if(dmMediaPlan?.peerId===peerId)return dmMediaPlan.promise;
+  if(pc&&dmPeerId===peerId&&['connected','connecting','new'].includes(pc.connectionState))return pc;
+  if(dmCallOngoing()&&dmCallPeerId!==peerId)throw new Error('End the current voice call before starting another direct connection');
+  if(dmMediaPlan)dmMediaPlan.cancelled=true;
+  const plan={peerId,cancelled:false,promise:null};dmMediaPlan=plan;dmConnectingPeerId=peerId;syncActiveDmTransport();
+  plan.promise=(async()=>{
+    for(let attempt=1;attempt<=3;attempt++){
+      if(plan.cancelled)throw new Error('A peer connection was started from the other side');
+      dmIceServers=directIceServers();relayVoiceMode=false;
+      const session=clientHex(16);pairHint.textContent='Trying direct peer connection '+attempt+' of 3…';
+      if(!directorySend({type:'connect',peerId,session,context:{type:'dm',relay:false}}))throw new Error('Knot signaling is offline');
+      const resumeVoice=pendingVoiceStartPeerId===peerId;
+      await automaticPair('host',session,peerId);
+      if(resumeVoice)pendingVoiceStartPeerId=peerId;
+      if(await waitForDmMediaConnection(peerId,plan,12000))return pc;
+      if(plan.cancelled)throw new Error('A peer connection was started from the other side');
+      abandonDmMediaAttempt(peerId);
+      if(attempt<3)await delay(350*attempt);
+    }
+    if(plan.cancelled)throw new Error('A peer connection was started from the other side');
+    pairHint.textContent='Direct connection failed. Preparing low-bandwidth voice relay…';
+    dmIceServers=await requestTurnCredentials();relayVoiceMode=true;
+    const session=clientHex(16);
+    if(!directorySend({type:'connect',peerId,session,context:{type:'dm',relay:true}}))throw new Error('Knot signaling is offline');
+    const resumeVoice=pendingVoiceStartPeerId===peerId;
+    await automaticPair('host',session,peerId);
+    if(resumeVoice)pendingVoiceStartPeerId=peerId;
+    if(await waitForDmMediaConnection(peerId,plan,15000))return pc;
+    throw new Error('Could not connect the voice relay. Text still works.');
+  })();
+  try{const connected=await plan.promise;if(activePeerId===peerId)applyFriendProfile(friend);renderCallPeerProfile();return connected}
+  finally{if(dmMediaPlan===plan)dmMediaPlan=null;if(!pc||pc.connectionState!=='connected')relayVoiceMode=false;syncActiveDmTransport()}
 }
 function paintDirectoryAvatar(avatar,user){setAvatar(avatar,user?.image||'');setAvatarFrame(avatar,user?.frame);setAvatarIdentity(avatar,user?.id||'');if(!validProfileData(user?.image))avatar.textContent=(user?.name||'?').slice(0,1).toUpperCase()}
 function renderFriends(){
@@ -1056,7 +1162,7 @@ function moveChannel(sourceId,targetId,after){const server=activeServer(),source
 function createChannelRow(server,channel){const owner=canEditServer(server),item=document.createElement('div');item.className='channel-item'+(channel.id===activeChannelId?' active':'');item.dataset.id=channel.id;item.dataset.type=channel.type;item.draggable=owner;const button=document.createElement('button');button.type='button';button.className='channel-entry '+channel.type;button.textContent=channel.name;button.title=channel.type==='voice'?'Click to select · double-click to join':'Open #'+channel.name;button.onclick=()=>selectServerChannel(server.id,channel.id);if(channel.type==='voice')button.ondblclick=async event=>{event.preventDefault();await selectServerChannel(server.id,channel.id);await joinServerVoice()};item.append(button);if(owner){const controls=document.createElement('span');controls.className='channel-row-controls';const drag=document.createElement('span');drag.className='channel-drag';drag.textContent='⠇';drag.title='Drag to reorder';const remove=document.createElement('button');remove.type='button';remove.className='channel-remove';remove.textContent='×';remove.title='Delete channel';remove.setAttribute('aria-label','Delete '+channel.name);remove.onclick=event=>{event.stopPropagation();remove.disabled=true;directorySend({type:'delete-channel',serverId:server.id,channelId:channel.id})};controls.append(drag,remove);item.append(controls);item.ondragstart=event=>{draggedChannelId=channel.id;item.classList.add('dragging');event.dataTransfer.effectAllowed='move';event.dataTransfer.setData('text/plain',channel.id)};item.ondragend=()=>{draggedChannelId='';document.querySelectorAll('.channel-item').forEach(row=>row.classList.remove('dragging','drop-before','drop-after'))};item.ondragover=event=>{const source=server.channels.find(value=>value.id===draggedChannelId);if(!source||source.type!==channel.type||source.id===channel.id)return;event.preventDefault();const after=event.clientY>item.getBoundingClientRect().top+item.offsetHeight/2;item.classList.toggle('drop-before',!after);item.classList.toggle('drop-after',after)};item.ondrop=event=>{event.preventDefault();const after=item.classList.contains('drop-after');moveChannel(draggedChannelId,channel.id,after)}}if(channel.type==='voice'){const participants=document.createElement('div');participants.className='voice-channel-members';renderVoiceParticipants(channel.id,participants);item.append(participants)}return item}
 function serverScreenSharing(){return !!(serverScreenStream||serverNativeScreenSession)}
 function renderServerVoiceUI(){const server=activeServer(),channel=server?.channels?.find(item=>item.id===joinedVoiceChannelId),connected=!!(serverVoiceStream&&channel);const dock=$('#serverVoiceDock'),stage=$('#serverVoiceStage');dock.hidden=!connected;stage.hidden=!connected;document.body.classList.toggle('server-voice-connected',connected);if(!connected)return;$('#serverVoiceDockChannel').textContent=channel.name;$('#serverVoiceStageChannel').textContent=channel.name;const members=$('#serverVoiceStageMembers');members.replaceChildren();for(const entry of voiceChannelEntries(channel.id)){const member=directorySnapshot.members?.[entry.id]||(entry.id===directoryUserId?directorySnapshot.self:null);if(!member)continue;const card=document.createElement('div');card.className='server-stage-member';const avatar=document.createElement('span');avatar.className='server-stage-avatar';avatar.dataset.speakingId=entry.id;paintDirectoryAvatar(avatar,member);const name=document.createElement('strong');name.textContent=(member.name||'Knot user')+(entry.id===directoryUserId?' (you)':'');card.append(avatar,name);members.append(card)}const muted=serverVoiceMuted;for(const id of ['serverVoiceMute','serverStageMute']){const button=$('#'+id);button.classList.toggle('active',muted);button.setAttribute('aria-label',muted?'Unmute microphone':'Mute microphone');button.title=muted?'Unmute microphone':'Mute microphone'}const sharing=serverScreenSharing();for(const id of ['serverVoiceShare','serverStageShare']){const button=$('#'+id);button.classList.toggle('active',sharing);button.setAttribute('aria-label',sharing?'Stop screen sharing':'Share screen');button.title=sharing?'Stop screen sharing':'Share screen';button.disabled=serverScreenStarting}refreshSpeakingPaint();refreshVoiceElapsed()}
-function renderDmVoiceUI(){const dock=$('#dmVoiceDock');if(!dock)return;const connected=callActive||friendInCall;dock.hidden=!connected;document.body.classList.toggle('dm-call-connected',connected);if(!connected)return;$('#dmVoiceDockName').textContent=friendInCall?(directoryUser(dmCallPeerId)?.name||friendName||'Direct call'):'Waiting for someone to join';$('#dmVoiceDockTime').textContent=voiceElapsed(callStart||Date.now());$('#dmVoiceMute').classList.toggle('active',micMuted);$('#dmVoiceMute').disabled=!callActive;$('#dmVoiceShare').classList.toggle('active',screenActive||screenStarting);$('#dmVoiceShare').disabled=!callActive||!pc||screenSharePickerPending}
+function renderDmVoiceUI(){const dock=$('#dmVoiceDock');if(!dock)return;const connected=callActive||friendInCall;dock.hidden=!connected;document.body.classList.toggle('dm-call-connected',connected);if(!connected)return;$('#dmVoiceDockName').textContent=friendInCall?(directoryUser(dmCallPeerId)?.name||friendName||'Direct call'):'Waiting for someone to join';$('#dmVoiceDockTime').textContent=voiceElapsed(callStart||Date.now());$('#dmVoiceMute').classList.toggle('active',micMuted);$('#dmVoiceMute').disabled=!callActive;$('#dmVoiceShare').classList.toggle('active',screenActive||screenStarting);$('#dmVoiceShare').disabled=relayVoiceMode||!callActive||!pc||screenSharePickerPending}
 let serverFocusedShareId='';const serverSuppressedShares=new Set();
 function serverShareVideo(peerId){if(peerId===directoryUserId)return serverScreenSharing()?$('#serverVoiceScreenPreview'):null;return serverPeers.get(peerId)?.screen||null}
 function watchServerShare(peerId){const video=serverShareVideo(peerId);if(!video)return;serverSuppressedShares.delete(peerId);serverFocusedShareId=peerId;renderServerShareExperience()}
@@ -1077,6 +1183,8 @@ function selectServer(id){const server=directorySnapshot.servers?.find(item=>ite
   // server call.  The call dock remains the owner of those live P2P sessions.
   activePeerId='';activeServerId=id;document.body.classList.add('server-view');$('#friendsNavigation').hidden=true;$('#serverNavigation').hidden=false;$('#serverMemberPanel').hidden=false;$('#homeButton').classList.remove('active');renderServers();renderChannels();renderDmVoiceUI();const first=server.channels?.find(channel=>channel.type==='text')||server.channels?.[0];if(first)selectServerChannel(id,first.id)}
 async function selectServerChannel(serverId,channelId){const server=directorySnapshot.servers?.find(item=>item.id===serverId),channel=server?.channels?.find(item=>item.id===channelId);if(!server||!channel)return;activeServerId=serverId;activeChannelId=channelId;activePeerId='';roomTitle.textContent=channel.name;$('#chatTitle').textContent=channel.name;$('#roomContextLabel').textContent=server.name.toUpperCase();$('#chatModePill').textContent=channel.type==='voice'?'VOICE':'P2P MESH';messageInput.placeholder='Message #'+channel.name;openConversation('server:'+serverId+':'+channelId);renderChannels();if(channel.type==='voice'&&!serverVoiceStream){setServerStatus('Double-click '+channel.name+' to join voice');renderCallButtonState('start','Join voice','Join voice channel')}else{setServerStatus('Connecting to online server members…');renderCallButtonState(serverVoiceStream?'end':'start',serverVoiceStream?'Leave voice':'Start call',serverVoiceStream?'Leave voice channel':'Start voice call')}syncServerMesh();messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=true}
+const baseSelectServerChannel=selectServerChannel;
+selectServerChannel=async function(serverId,channelId){await baseSelectServerChannel(serverId,channelId);const channel=activeChannel();if(channel?.type==='text'){$('#chatModePill').textContent='ENCRYPTED LIVE';setServerStatus('Encrypted live text · Cloudflare stores no messages',true);const server=activeServer();if(server&&!await serverTextKey(server)){await requestServerTextKey(server);pairHint.textContent='Waiting for an online member to share this server’s secure text key.'}}};
 function serverOnlineMembers(serverId=joinedVoiceServerId||activeServerId){const server=directorySnapshot.servers?.find(item=>item.id===serverId);return server?(server.members||[]).filter(id=>id!==directoryUserId&&directorySnapshot.members?.[id]?.online):[]}
 function serverHistoryKey(serverId,channelId){return 'server:'+serverId+':'+channelId}
 function normalizeServerHistoryEntry(raw,server,forcedAuthorId=''){if(!raw||typeof raw.text!=='string'||raw.text.length>16000)return null;const authorId=forcedAuthorId||raw.author?.id||(raw.mine?directoryUserId:'');if(!/^[a-f0-9]{32}$/.test(authorId)||!server?.members?.includes(authorId))return null;const gifUrl=typeof raw.gif?.url==='string'&&raw.gif.url.length<=4096?safePreviewUrl(raw.gif.url):null,time=Number(raw.time),id=/^[a-f0-9]{32}$/.test(raw.id||'')?raw.id:clientHex(16),member=directoryUser(authorId);return{id,text:raw.text,gif:gifUrl?{url:gifUrl,thumb:typeof raw.gif.thumb==='string'&&safePreviewUrl(raw.gif.thumb)?raw.gif.thumb:gifUrl}:null,author:{id:authorId,name:normalizeProfileName(member?.name||raw.author?.name||raw.name,'Server member'),image:'',frame:normalizeFrame(member?.frame||raw.author?.frame||raw.frame)},time:Number.isFinite(time)&&time>0&&time<Date.now()+86400000?time:Date.now(),mine:authorId===directoryUserId}}
@@ -1084,6 +1192,10 @@ function storeServerHistory(serverId,channelId,entries,{render=true}={}){const s
 function localServerHistory(server,channel){const key=serverHistoryKey(server.id,channel.id),list=conversationHistories[key]||(conversationHistories[key]=[]);let changed=false;const normalized=[];for(const raw of list){const entry=normalizeServerHistoryEntry(raw,server);if(!entry)continue;if(!raw.id||!raw.author?.id||raw.mine!==entry.mine)changed=true;normalized.push(entry)}if(changed||normalized.length!==list.length){conversationHistories[key]=normalized.slice(-500);scheduleHistorySave()}return conversationHistories[key]}
 function sendServerHistory(channel,serverId){const server=directorySnapshot.servers?.find(item=>item.id===serverId);if(!server||channel.readyState!=='open')return;for(const serverChannel of server.channels||[]){const entries=localServerHistory(server,serverChannel);let batch=[],size=0;const flush=()=>{if(!batch.length||channel.readyState!=='open')return;channel.send(JSON.stringify({t:'server-history',serverId,channelId:serverChannel.id,entries:batch}));batch=[];size=0};for(const entry of entries){const wire={id:entry.id,text:entry.text,gif:entry.gif,author:entry.author,time:entry.time},bytes=JSON.stringify(wire).length;if(batch.length&&size+bytes>32000)flush();batch.push(wire);size+=bytes}flush()}}
 function wireServerChannel(peerId,channel,serverId=activeServerId){channel.onopen=()=>{setServerStatus('Connected directly to '+serverPeers.size+' server peer'+(serverPeers.size===1?'':'s'),true);channel.send(JSON.stringify({t:'server-history-request',serverId}))};channel.onmessage=event=>{try{const value=JSON.parse(event.data),server=directorySnapshot.servers?.find(item=>item.id===serverId);if(!server||!server.members?.includes(peerId)||value.serverId!==serverId)return;if(value.t==='screen-codec-fallback'){switchServerScreenCodec(peerId,serverPeers.get(peerId),compatibilityScreenCodec()).catch(()=>{});return}if(value.t==='server-history-request')return sendServerHistory(channel,serverId);if(value.t==='server-history'&&Array.isArray(value.entries)){storeServerHistory(serverId,value.channelId,value.entries);return}if(value.t!=='server-msg'||typeof value.text!=='string')return;const entry=normalizeServerHistoryEntry(value,server,peerId);if(entry)storeServerHistory(serverId,value.channelId,[entry])}catch{}}}
+// Server peer data channels now carry only media-control messages. Keeping
+// history/text off this channel prevents a voice join from silently becoming a
+// second text transport or reintroducing a peer-mesh dependency for chat.
+wireServerChannel=function(peerId,channel,serverId=activeServerId){channel.onopen=()=>{if(serverVoiceStream)setServerStatus('Connected directly to '+serverPeers.size+' voice peer'+(serverPeers.size===1?'':'s'),true)};channel.onmessage=event=>{try{const value=JSON.parse(event.data);if(value?.t==='screen-codec-fallback')switchServerScreenCodec(peerId,serverPeers.get(peerId),compatibilityScreenCodec()).catch(()=>{})}catch{}}};
 function voicePeerAllowed(peerId){return !!serverVoiceStream&&voiceChannelEntries(joinedVoiceChannelId).some(entry=>entry.id===peerId)}
 function addServerVoiceAudio(peerId,state,track,stream){
   const audio=document.createElement('audio');audio.autoplay=true;audio.srcObject=stream;audio.hidden=true;document.body.append(audio);state.audios.push(audio);applyMediaElementOutput(audio).catch(()=>{});monitorSpeaking('server:'+peerId,stream);audio.play().catch(()=>{});track.onended=()=>{stopSpeakingMonitor('server:'+peerId);audio.remove();state.audios=state.audios.filter(item=>item!==audio)};
@@ -1128,6 +1240,9 @@ async function handleServerSignal(message){const context=message.context||{},pay
 function closeServerPeer(peerId,state=serverPeers.get(peerId)){if(!state)return;stopSpeakingMonitor('server:'+peerId);try{state.channel?.close()}catch{}clearServerNativeScreen(state);try{state.nativeSendChannel?.close()}catch{}try{state.pc.close()}catch{}for(const audio of state.audios||[])try{audio.remove()}catch{}try{state.screen?.remove()}catch{}serverPeers.delete(peerId)}
 function closeServerMesh(){for(const [peerId,state] of [...serverPeers])closeServerPeer(peerId,state)}
 function syncServerMesh(){
+  // Text now uses the encrypted live relay. Never create a server WebRTC mesh
+  // merely because somebody opened a channel; this mesh is media-only.
+  if(!serverVoiceStream||!joinedVoiceServerId)return;
   // Reconcile instead of close-and-recreate.  The old implementation ran on
   // every channel click and directory snapshot, which needlessly interrupted
   // WebRTC text, voice and screen tracks.
@@ -1207,11 +1322,11 @@ async function attachServerScreenAudio(gen,stream){
 async function stopServerScreenShare(){const stream=serverScreenStream,nativeSession=serverNativeScreenSession;serverScreenGen++;serverScreenStarting=false;if(!stream&&!nativeSession)return;serverScreenStream=null;serverNativeScreenSession=null;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);serverNativeLocalPlayer?.destroy();serverNativeLocalPlayer=null;serverNativeScreenInit=null;if(serverNativeScreenAudioStream){serverNativeScreenAudioStream.getTracks().forEach(track=>track.stop());serverNativeScreenAudioStream=null}stream?.getTracks().forEach(track=>track.stop());cleanupNativeScreenCapture();const preview=$('#serverVoiceScreenPreview');preview.pause();preview.srcObject=null;try{preview.removeAttribute('src');preview.load()}catch{}preview.hidden=true;serverFocusedShareId=serverFocusedShareId===directoryUserId?'':serverFocusedShareId;const stops=[];for(const [peerId,state] of serverPeers){if(state.nativeSendChannel){if(state.nativeSendChannel.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-end',serverId:state.context.serverId}))}catch{}try{state.nativeSendChannel.close()}catch{}state.nativeSendChannel=null}for(const sender of state.screenSenders||[])try{state.pc.removeTrack(sender)}catch{}state.screenSenders=[];stops.push(renegotiateServerPeer(peerId,state))}await Promise.allSettled(stops);renderServerVoiceUI()}
 async function joinServerVoice(){const channel=activeChannel();if(!channel||channel.type!=='voice')return callStatus.textContent='Select a voice channel first.';if(dmCallOngoing()){callStatus.textContent='Leave your direct call before joining server voice.';return}if(serverVoiceStream&&joinedVoiceChannelId===channel.id)return;stopServerVoice();try{serverVoiceStream=await navigator.mediaDevices.getUserMedia(microphoneConstraints());serverVoiceMuted=false;serverVoiceStream.getAudioTracks().forEach(track=>track.enabled=true);joinedVoiceServerId=activeServerId;joinedVoiceChannelId=channel.id;joinedVoiceAt=Date.now();monitorSpeaking('server:'+directoryUserId,serverVoiceStream);directorySend({type:'voice-state',serverId:joinedVoiceServerId,channelId:channel.id,joined:true});callStatus.textContent='Joined '+channel.name;callStatus.className='call-status live';renderCallButtonState('end','Leave voice','Leave voice channel');renderChannels();syncServerMesh()}catch(error){callStatus.textContent='Could not join voice: '+(error?.message||error);callStatus.className='call-status';syncServerMesh();renderServerVoiceUI()}}
 function stopServerVoice(){abortScreenSharePicker();serverScreenGen++;serverScreenStarting=false;stopSpeakingMonitor('server:'+directoryUserId);const serverId=joinedVoiceServerId||activeServerId,channelId=joinedVoiceChannelId;if(channelId&&serverId)directorySend({type:'voice-state',serverId,channelId,joined:false});if(serverScreenSharing())stopServerScreenShare();if(serverVoiceStream){serverVoiceStream.getTracks().forEach(track=>track.stop());serverVoiceStream=null}joinedVoiceServerId='';joinedVoiceChannelId='';joinedVoiceAt=0;serverVoiceMuted=false;serverFocusedShareId='';serverSuppressedShares.clear();clearInterval(voiceElapsedTimer);closeServerMesh();renderServerVoiceUI();if(activeServerId){const voice=activeChannel()?.type==='voice';renderCallButtonState('start',voice?'Join voice':'Start call',voice?'Join voice channel':'Start voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderChannels()}}
-function sendServerMessage(text,gif){const server=activeServer(),channel=activeChannel();if(!server||!channel)return;const value={t:'server-msg',serverId:server.id,channelId:channel.id,id:clientHex(16),text,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url}:null,author:{id:directoryUserId,name:profileName,image:'',frame:normalizeFrame(profileFrame)},time:Date.now()};const entry=normalizeServerHistoryEntry(value,server,directoryUserId);if(!entry)return;storeServerHistory(server.id,channel.id,[entry]);let sent=0;for(const state of serverPeers.values())if(state.channel?.readyState==='open'){state.channel.send(JSON.stringify(value));sent++}if(!sent)pairHint.textContent='No server members are online. The message is saved locally and will sync when a member connects.'}
+async function sendServerMessage(text,gif){const server=activeServer(),channel=activeChannel();if(!server||!channel||channel.type!=='text')return false;let group=await serverTextKey(server,{create:true});if(!group){await requestServerTextKey(server);pairHint.textContent='Waiting for an online member to share this server’s secure text key.';return false}const id=clientHex(16),time=Date.now(),payload=chatPayload(text,gif),cipher=await sealRelay(group.key,JSON.stringify({payload,time}),relayAad('server',id,directoryUserId,'',server.id,channel.id));if(!directorySend({type:'relay-text',scope:'server',id,serverId:server.id,channelId:channel.id,cipher})){pairHint.textContent='Encrypted text relay is offline.';return false}const entry=normalizeServerHistoryEntry({id,text,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url}:null,author:{id:directoryUserId,name:profileName,image:'',frame:normalizeFrame(profileFrame)},time},server,directoryUserId);if(entry)storeServerHistory(server.id,channel.id,[entry]);return true}
 function profileSnapshotSignature(snapshot){const profiles=[...(snapshot?.friends||[]),...Object.values(snapshot?.members||{})];return JSON.stringify(profiles.map(user=>[user.id,user.name,user.image,user.frame]))}
 function updateDirectorySnapshot(snapshot){
   const previous=directorySnapshot,profilesChanged=profileSnapshotSignature(previous)!==profileSnapshotSignature(snapshot),oldServerIds=new Set((previous.servers||[]).map(server=>server.id)),newServer=pendingServerSelection?(snapshot.servers||[]).find(server=>!oldServerIds.has(server.id)):null,pendingServer=pendingChannelCreation?(snapshot.servers||[]).find(server=>server.id===pendingChannelCreation.serverId):null,newChannel=pendingServer?.channels?.find(channel=>channel.type===pendingChannelCreation?.type&&!pendingChannelCreation.beforeIds.has(channel.id));
-  snapshot.voiceStates=snapshot.voiceStates||{};directorySnapshot=snapshot;renderServers();syncPersistentDmPeers();
+  snapshot.voiceStates=snapshot.voiceStates||{};directorySnapshot=snapshot;void serverTextMembershipSync();renderServers();syncPersistentDmPeers();
   if(activePeerId){const friend=directoryUser(activePeerId);if(friend)applyFriendProfile(friend)}if(dmCallPeerId)renderCallPeerProfile();
   if(activeServerId){const server=activeServer();if(joinedVoiceChannelId&&!server?.channels?.some(channel=>channel.id===joinedVoiceChannelId))stopServerVoice();if(activeChannelId&&!server?.channels?.some(channel=>channel.id===activeChannelId)){const fallback=server?.channels?.find(channel=>channel.type==='text')||server?.channels?.[0];if(fallback)selectServerChannel(server.id,fallback.id)}else{renderChannels();syncServerMesh()}}
   if(newServer){pendingServerSelection=false;const dialog=$('#serverDialog');if(dialog?.open)dialog.close();selectServer(newServer.id)}if(newChannel){pendingChannelCreation=null;const dialog=$('#channelDialog');if(dialog?.open)dialog.close();selectServerChannel(pendingServer.id,newChannel.id)}if(profilesChanged&&activeConversationKey)openConversation(activeConversationKey)
@@ -1226,17 +1341,28 @@ async function connectDirectory(){
     else if(value.type==='snapshot')updateDirectorySnapshot(value);
     else if(value.type==='invite-created'){if(value.kind==='friend'){const input=$('#roomCode');input.value=value.code;pairHint.textContent='Friend code '+value.code+' is ready for 15 minutes.'}else alert('Server invite code: '+value.code+'\n\nThis code expires in 15 minutes.')}
     else if(value.type==='connect-request'){
-      const friend=directoryUser(value.from),samePeer=dmConnectingPeerId===value.from&&(!!pc||!!signaling);
+      const friend=directoryUser(value.from),samePeer=dmConnectingPeerId===value.from&&(!!pc||!!signaling),useRelay=value.context?.relay===true;
       if(!friend||dmCallOngoing())return;
       // When both people click the same DM, one stable side keeps hosting and
       // the other joins it. This prevents competing offers from cancelling.
       if(samePeer&&directoryUserId<value.from)return;
+      if(dmMediaPlan?.peerId===value.from)dmMediaPlan.cancelled=true;
+      const resumeVoice=pendingVoiceStartPeerId===value.from;
       dmConnectingPeerId=value.from;
       if(!activeServerId&&(!activePeerId||activePeerId===value.from))activateDmView(friend);
-      automaticPair('join',value.session,value.from).then(()=>{if(activePeerId===value.from)applyFriendProfile(friend)})
+      (async()=>{try{
+        if(useRelay){pairHint.textContent='Preparing low-bandwidth voice relay…';dmIceServers=await requestTurnCredentials();relayVoiceMode=true}
+        else{dmIceServers=directIceServers();relayVoiceMode=false}
+        await automaticPair('join',value.session,value.from);
+        if(resumeVoice)pendingVoiceStartPeerId=value.from;
+        if(activePeerId===value.from)applyFriendProfile(friend);
+      }catch(error){if(activePeerId===value.from)pairHint.textContent=error?.message||'Could not prepare peer connection'}})()
     }
+    else if(value.type==='relay-text')receiveRelayText(value).catch(error=>console.warn('encrypted relay text',error))
+    else if(value.type==='relay-key')receiveRelayKey(value).catch(error=>console.warn('encrypted relay key',error))
+    else if(value.type==='turn-credentials')acceptTurnCredentials(value)
     else if(value.type==='peer-signal'){const task=value.context?.type==='dm-persistent'?handlePersistentDmSignal(value):handleServerSignal(value);task.catch(error=>console.warn('peer signal',error))}
-    else if(value.type==='error'){const message=value.message||'Knot directory request failed';pairHint.textContent=message;const dialog=$('#serverDialog');if(dialog?.open&&['create-server','redeem-invite'].includes(value.action)){pendingServerSelection=false;$('#serverDialogStatus').textContent=message;dialog.querySelectorAll('form button').forEach(button=>button.disabled=false)}}
+    else if(value.type==='error'){const message=value.message||'Knot directory request failed';if(value.action==='turn-credentials')turnCredentialPending?.reject(new Error(message));pairHint.textContent=message;const dialog=$('#serverDialog');if(dialog?.open&&['create-server','redeem-invite'].includes(value.action)){pendingServerSelection=false;$('#serverDialogStatus').textContent=message;dialog.querySelectorAll('form button').forEach(button=>button.disabled=false)}}
   }catch(error){console.warn('directory message',error)}};
   socket.onclose=()=>{if(directorySocket!==socket)return;directorySocket=null;setDirectoryState(false,'Offline — retrying');for(const peerId of [...persistentDmPeers.keys()])closePersistentDmPeer(peerId);directoryReconnect=setTimeout(connectDirectory,directoryBackoff);directoryBackoff=Math.min(30000,directoryBackoff*2)};socket.onerror=()=>setDirectoryState(false,'Connection error');
 }
@@ -1329,7 +1455,7 @@ function disconnectRoom(){abortScreenSharePicker();if(pc&&pc._connectTimer){clea
   screenBtn.textContent='Share screen';screenBtn.title='Share screen';screenBtn.disabled=true;
   screenStatus.textContent='Not sharing';
   clearRemoteScreenShare();
-  try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}sharedKey=null;setAvatar(friendAvatar,'');setAvatarIdentity(friendAvatar,'');remoteVoiceTrack=null;stopSpeakingMonitor('dm-friend');try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{}
+  try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}try{if(pc)pc.close()}catch{}if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.close()}catch{}signaling=null}sharedKey=null;setAvatar(friendAvatar,'');setAvatarIdentity(friendAvatar,'');remoteVoiceTrack=null;remoteVoiceTransceiver=null;stopSpeakingMonitor('dm-friend');try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{}
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
@@ -1338,7 +1464,7 @@ function disconnectRoom(){abortScreenSharePicker();if(pc&&pc._connectTimer){clea
   acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;dmPeerId='';dmCallPeerId='';localCallSessionId='';remoteCallSessionId='';deriveGen++;setParticipant(participantYou,false);setFriendPresence(false,{animate:false,sound:false});voiceLog.innerHTML='';setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 const disconnectRoomWithoutPendingReset=disconnectRoom;
 disconnectRoom=function(){clearPendingFrames();return disconnectRoomWithoutPendingReset()};
-$('#leaveRoom').onclick=()=>disconnectRoom();
+$('#leaveRoom').onclick=()=>{disconnectRoom();relayVoiceMode=false;dmIceServers=directIceServers();syncActiveDmTransport()};
 function clearTransfers(){
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();
   acceptWait.forEach(w=>{try{w.reject(new Error('Cleared'))}catch{}});acceptWait.clear();
@@ -1374,9 +1500,9 @@ async function startCall(){
     if(LOCAL_TEST_MODE&&!pc)return startLocalTestCall();
     pendingVoiceStartPeerId=targetPeer;
     callBtn.disabled=true;callStatus.textContent='Connecting to start voice…';callStatus.className='call-status ringing';
-    // The DM view is usable before its separate voice peer finishes creating.
-    // Preserve the click as intent and, when needed, start that media path.
-    if(targetPeer&&directoryUser(targetPeer)?.online&&!pc)void selectFriend(targetPeer);
+    // Text does not create a peer. Preserve the click and start the explicit
+    // media path only now; this avoids DM-open races and idle WebRTC meshes.
+    if(targetPeer&&directoryUser(targetPeer)?.online&&!pc)void ensureDmMediaConnection(targetPeer).catch(error=>{pendingVoiceStartPeerId='';callBtn.disabled=false;callStatus.textContent=error?.message||'Could not connect voice';callStatus.className='call-status'});
     return;
   }
   if(micTestStream)stopMicrophoneTest();
@@ -1400,7 +1526,7 @@ async function startCall(){
     // Voice must be scheduled ahead of a busy screen encoder. Restrict Opus to
     // 10–20 ms packets; the old 120 ms maximum made microphone delay obvious
     // whenever the renderer was under CPU pressure from a high-resolution share.
-    try{const p=sender.getParameters();if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=256000;p.encodings[0].priority='high';p.encodings[0].networkPriority='high';if(p.codecs)p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=20;c.ptime=10;if(c.parameters){c.parameters.maxaveragebitrate=256000;c.parameters.maxplaybackrate=48000;c.parameters.maxptime=20;c.parameters.minptime=10;c.parameters.useinbandfec=1;c.parameters.usedtx=0;c.parameters.cbr=1;c.parameters.stereo=1;c.parameters['sprop-stereo']=1;c.parameters.spropmaxcapturerate=48000}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
+    try{const p=sender.getParameters(),bitrate=relayVoiceMode?24000:256000,playback=relayVoiceMode?16000:48000,stereo=relayVoiceMode?0:1;if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=bitrate;p.encodings[0].priority='high';p.encodings[0].networkPriority='high';if(p.codecs)p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=20;c.ptime=10;if(c.parameters){c.parameters.maxaveragebitrate=bitrate;c.parameters.maxplaybackrate=playback;c.parameters.maxptime=20;c.parameters.minptime=10;c.parameters.useinbandfec=1;c.parameters.usedtx=relayVoiceMode?1:0;c.parameters.cbr=1;c.parameters.stereo=stereo;c.parameters['sprop-stereo']=stereo;c.parameters.spropmaxcapturerate=playback}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
     // counter callGen is incremented by every endCall call. If it changed, bail.
@@ -2050,6 +2176,7 @@ function recoverFromGpuProcessLoss(details={}){
 }
 window.pairEnv?.onGpuProcessGone?.(recoverFromGpuProcessLoss);
 async function startScreenShare({skipPicker=false,expectedPc:ownedPc=null,expectedCallGen:ownedCallGen=null}={}){
+  if(relayVoiceMode){screenStatus.textContent='Screen sharing is disabled while low-bandwidth voice relay is active.';return}
   if(screenActive||screenStarting||screenSharePickerPending||!pc)return;
   const expectedPc=ownedPc||pc,expectedCallGen=Number.isInteger(ownedCallGen)?ownedCallGen:callGen,requestGen=screenGen,ownsCall=()=>pc===expectedPc&&callGen===expectedCallGen&&viableScreenPeer(expectedPc),ownsRequest=()=>ownsCall()&&screenGen===requestGen;
   if(!ownsCall())return;
@@ -2172,7 +2299,7 @@ async function stopScreenShare(fromEnd){
   screenBtn.textContent='Share screen';screenBtn.title='Share screen';screenBtn.disabled=!pc;
   if(!fromEnd){screenStatus.textContent='Not sharing';try{send({t:'screen-end'})}catch{};logCallEvent('You stopped screen sharing')}
 }
-screenBtn.onclick=()=>{if(screenActive||screenStarting)stopScreenShare();else if(!pc&&LOCAL_TEST_MODE){screenStatus.textContent='Connect with a friend to start screen sharing';screenStatus.className='screen-status';}else startScreenShare()};
+screenBtn.onclick=()=>{if(screenActive||screenStarting)stopScreenShare();else if(relayVoiceMode){screenStatus.textContent='Screen sharing is disabled while low-bandwidth voice relay is active.'}else if(!pc&&LOCAL_TEST_MODE){screenStatus.textContent='Connect with a friend to start screen sharing';screenStatus.className='screen-status';}else startScreenShare()};
 // Screen share computer-sound toggle. Voice always stays on the call track;
 // this only controls whether desktop/game sound rides with the share.
 const audioToggleBtn=document.createElement('button');audioToggleBtn.textContent='Sound on';audioToggleBtn.className='audio-toggle is-on';

@@ -5,11 +5,14 @@ direct messages, and servers containing text and voice channels. It uses WebRTC
 data channels and media tracks for content transport. Direct messages also use
 Web Crypto ECDH + AES-GCM on top of WebRTC's DTLS encryption.
 
-Direct-message transports connect in the background while friends are online,
-so opening another DM or server does not end the current voice call. Screen
-shares appear beside their owners and open into a single focused viewer; use a
-stream's context menu to stop watching without making the stream undiscoverable.
-Fullscreen expands the selected share stage, not the entire Knot interface.
+Cloudflare supplies a live encrypted text relay, presence, and WebRTC setup.
+Opening a DM or text channel does not create a peer connection: text is
+encrypted on-device, forwarded only to online recipients, and retained only in
+each app's local history. Calls, screen shares, and files create direct WebRTC
+connections only when used. Screen shares appear beside their owners and open
+into a single focused viewer; use a stream's context menu to stop watching
+without making the stream undiscoverable. Fullscreen expands the selected share
+stage, not the entire Knot interface.
 
 ## Run as a PC app
 
@@ -53,8 +56,9 @@ AppImage to the matching GitHub release before committing/pushing
 `public/latest.json`.
 
 Every packaged build checks `public/latest.json` as it opens. If the manifest
-has a newer version, Knot downloads the appropriate package, verifies its
-SHA-256 checksum, installs it, and restarts automatically.
+has a newer version, Knot shows its release notes under “What's changed.” It
+downloads, verifies, installs, and restarts only after the person using Knot
+chooses **Download & install**.
 
 ## Screen sharing architecture
 
@@ -154,7 +158,10 @@ The repository includes two SQLite-backed Durable Objects. `PairDirectory`
 stores authenticated device identity, friend relationships, presence, server
 membership, server pictures, and text/voice channel metadata. `PairRoom`
 coordinates ephemeral two-person WebRTC setup. The Worker rejects binary frames
-and never relays messages, files, calls, or screen shares.
+and relays only authenticated, opaque client-encrypted live-text and group-key
+envelopes; it does not persist them. It never relays files, video, or screen
+shares. After three failed direct attempts, it can optionally issue short-lived
+Cloudflare TURN credentials for a deliberately low-bitrate audio-only call.
 
 Cloudflare's Git build command is:
 
@@ -166,10 +173,13 @@ No build output directory or static-assets directory is needed. The checked-in
 `wrangler.jsonc` points directly to `worker/index.js`, preventing Wrangler from
 trying to upload the Electron repository or `node_modules` as website assets.
 The app keeps the Worker address internal. Five-digit friend and server invites
-expire after 15 minutes. Selecting an online friend automatically creates a
-private rendezvous room, while server text and voice channels form direct peer
-meshes among currently online members. Conversation history stays in each
+expire after 15 minutes. Selecting an online friend opens encrypted live text
+immediately; a private rendezvous room is created only for direct media/files.
+Server text uses the encrypted live relay, while voice channels form direct
+peer meshes among currently online members. Conversation history stays in each
 desktop app's local settings file; offline content is not stored by Cloudflare.
+Direct DMs also use this rule: text opens immediately without a WebRTC peer;
+the app tries direct P2P three times only after a call or file is requested.
 
 ### Host signaling from your own PC
 
@@ -185,9 +195,42 @@ For localhost testing use `ws://localhost:8787`. For a remote peer, put this ser
 
 If Windows Firewall asks whether Node.js can accept connections, allow it on the intended network. If your ISP uses CGNAT, port forwarding will not work; you would need a public VPS or a VPN overlay.
 
-## TURN relay (fixes "Offer sent. Connecting…" hang across networks)
+## TURN fallback for restrictive networks
 
-WebRTC cannot always connect two peers on different home networks directly — symmetric NAT blocks the direct ICE candidates, and without a relay the connection silently hangs even though signaling succeeded. The fix is a self-hosted TURN relay running on the host's PC via Docker.
+WebRTC cannot always connect two peers on different home networks directly —
+symmetric NATs and restrictive firewalls can block direct ICE candidates. Knot
+tries a direct P2P connection three times. Only then does it offer a TURN
+fallback. In relay mode it forces low-bitrate Opus voice (24 kbps), disables
+file transfer and screen/video sharing, and uses relay-only ICE. Text remains
+on the separately encrypted, non-persistent Cloudflare relay.
+
+### Cloudflare Realtime TURN (recommended optional fallback)
+
+Create a TURN key in Cloudflare Realtime, then give the deployed Worker only
+the key ID and a narrowly scoped API token. Never put either secret in the app:
+
+```bash
+npx wrangler secret put TURN_KEY_ID
+npx wrangler secret put TURN_API_TOKEN
+npx wrangler deploy
+```
+
+The Worker exchanges those secrets for a one-hour, per-client ICE credential
+only after direct P2P has failed. Without both secrets, Knot remains fully
+usable for encrypted text and direct P2P media/files; it simply reports that
+the voice relay is unavailable.
+
+Cloudflare currently includes the first 1,000 GB/month of Realtime TURN usage;
+standalone TURN is then $0.05 per GB of Cloudflare-to-client egress. Check the
+[Cloudflare TURN pricing FAQ](https://developers.cloudflare.com/realtime/turn/faq/)
+before enabling it and set a billing alert. TURN still sees only encrypted
+WebRTC transport bytes, not chat plaintext or file contents.
+
+### Self-hosted coturn alternative
+
+If you prefer not to use Cloudflare Realtime TURN, run a self-hosted TURN relay
+on the host's PC via Docker. Set `PAIR_TURN` in the desktop app on both devices;
+Knot uses it only after the same three direct attempts fail.
 
 **One-time setup:**
 
