@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.68",
+  "version": "1.1.69",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {

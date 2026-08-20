@@ -1,10 +1,10 @@
 {
-  "version": "1.1.68",
-  "notes": "Fixed Cloudflare signup failures caused by the Worker PBKDF2 limit\n600,000-round password protection now runs safely on your device\nPasswords never leave Knot; Cloudflare receives only a derived verifier\nCloudflare stores only a second SHA-256 hash of that verifier\nUnique usernames, login throttling, and expiring sessions remain enforced",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.68/pair-p2p-1.1.68.tar.gz",
-  "linuxSha256": "4f9d4a300ee5be7b3c8435e58758776dbec98b66cd4154c8560c13e364c2eadd",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.68/Knot-1.1.68.AppImage",
-  "linuxAppImageSha256": "3be9b642c5c941ab535a62ef42d8138875d76a0a42c5bf71b4ec04b10fcc4529",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.68/Knot.Setup.1.1.68.exe",
-  "winSha256": "f4a193551781f0bd40f406fcc43fe2c8a3750c92572119e5f343f1b035fef8de"
+  "version": "1.1.69",
+  "notes": "Fixed the account page remaining on Reconnecting after a successful sign-in\nAccount status now confirms the username and live connection\nCorrected Settings text to reflect device-side password derivation",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.69/pair-p2p-1.1.69.tar.gz",
+  "linuxSha256": "db1caf1b28787ebdef28bf77e854c27ed72c29384e2dc98c3f285b6212e4e24d",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.69/Knot-1.1.69.AppImage",
+  "linuxAppImageSha256": "afbd8e5f63e2746f7b8fb4912214d60778eb3f37c3fc22e55fd1af6dbf74674c",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.69/Knot.Setup.1.1.69.exe",
+  "winSha256": "39957cb99f923d6338f1404c4ad8289956699f5bf3acf7d8afb4dcbf881b7fdc"
 }
