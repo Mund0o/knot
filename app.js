@@ -5,7 +5,7 @@ function renderUpdateStatus(status){if(!updateBanner||!status)return;clearTimeou
 if(window.pairUpdates){window.pairUpdates.getStatus().then(renderUpdateStatus).catch(()=>{});window.pairUpdates.onStatus(renderUpdateStatus)}
 if(acceptUpdate)acceptUpdate.onclick=async()=>{if(!window.pairUpdates?.accept)return;acceptUpdate.disabled=true;await window.pairUpdates.accept().catch(()=>{acceptUpdate.disabled=false})};
 let pc,chat,files,role,sharedKey,sendQueue=Promise.resolve(),receiveQueue=Promise.resolve(),pairSignalBusy=false,pairReplyAccepted=false;let CHUNK=1024*1024;const MAX=200*1024**3;
-let directoryTrustedConnection=false,recordConversationMessage=()=>{},directoryProfilePush=()=>{};
+let directoryTrustedConnection=false,recordConversationMessage=()=>{},directoryProfilePush=()=>{},syncFileAttachmentUi=()=>{};
 // Directory/call state must exist before any asynchronous settings/profile
 // restoration can render the UI. Declaring it later created a startup TDZ race
 // that only showed up reliably when two complete app windows booted together.
@@ -202,7 +202,7 @@ const fileSeqSeed=crypto.getRandomValues(new Uint32Array(2));let sendAbort=new M
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
 const enc=new TextEncoder(),dec=new TextDecoder();
-function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(connectCard)connectCard.hidden=on;if(addFriendBtn)addFriendBtn.disabled=on;  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=relayVoiceMode;$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{messageInput.disabled=true;messageForm.querySelector('.send').disabled=true;fileInput.disabled=true;callBtn.disabled=true;endCall(true)}}
+function setStatus(text,on=false){statusText.textContent=text;$('.connection').classList.toggle('connected',on);if(connectCard)connectCard.hidden=on;if(addFriendBtn)addFriendBtn.disabled=on;  if(on){const negotiated=pc?.sctp?.maxMessageSize||16*1024*1024;CHUNK=Math.min(1024*1024,Math.max(16*1024,negotiated-4096));messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=relayVoiceMode;syncFileAttachmentUi();$('#leaveRoom').hidden=false;$('#hostRoom').hidden=true;$('#joinRoom').hidden=true;callBtn.disabled=false;if(!connectSoundDone){playSound('connect');connectSoundDone=true}}else{messageInput.disabled=true;messageForm.querySelector('.send').disabled=true;fileInput.disabled=true;syncFileAttachmentUi();callBtn.disabled=true;endCall(true);queueMicrotask(()=>{if(activePeerId&&!activeServerId)syncActiveDmTransport()})}}
 const MAX_SIGNAL_SIZE=1024*1024,MAX_MESSAGE_SIZE=64*1024,SIGNAL_COMPRESSED_PREFIX='pair1.',SIGNAL_RAW_PREFIX='pair0.';
 // Dot is used instead of base64url's underscore. Discord treats underscores
 // as Markdown emphasis, but dots and hyphens copy cleanly in ordinary chat.
@@ -470,7 +470,12 @@ function renderItem(item,resultsEl){
   const plusBtn=document.createElement('button');plusBtn.type='button';plusBtn.className='composer-btn plus-btn';plusBtn.textContent='+';plusBtn.title='Attach';
   const plusPopup=document.createElement('div');plusPopup.className='plus-popup';plusPopup.classList.add('hidden');
   const fileOpt=document.createElement('button');fileOpt.className='plus-opt';fileOpt.textContent='📎 Send file';
-  fileOpt.onclick=()=>{plusPopup.classList.add('hidden');fileInput.click()};
+  // Upload stays visually in the composer, but its availability belongs only
+  // to the file transport. A media retry must never disable text, emojis, or
+  // the attachment affordance as a side effect.
+  const syncFileAttachment=()=>{const available=!fileInput.disabled;fileOpt.disabled=!available;fileOpt.title=available?'':'File transfer is unavailable until your friend is online';plusBtn.classList.toggle('file-unavailable',!available)};
+  syncFileAttachmentUi=syncFileAttachment;
+  fileOpt.onclick=()=>{if(fileInput.disabled)return;plusPopup.classList.add('hidden');fileInput.click()};
   plusPopup.append(fileOpt);plusWrap.append(plusBtn,plusPopup);composer.insertBefore(plusWrap,sendBtn.nextSibling);
   plusBtn.onclick=e=>{e.preventDefault();plusPopup.classList.toggle('hidden');emojiPicker&&emojiPicker.classList.add('hidden');gifPicker&&gifPicker.classList.add('hidden')};
   document.addEventListener('click',e=>{if(!plusWrap.contains(e.target))plusPopup.classList.add('hidden')});
@@ -487,8 +492,8 @@ function renderItem(item,resultsEl){
   composer.insertBefore(gifBtn,sendBtn.nextSibling);
   // Enable input/button on connect
   const orig=messageInput.disabled;
-  Object.defineProperty(messageInput,'disabled',{set(v){this._disabled=v;if(v){this.setAttribute('disabled','')}else{this.removeAttribute('disabled')}sendBtn.disabled=v;emojiBtn.disabled=v;gifBtn.disabled=v;plusBtn.disabled=v},get(){return this._disabled!==false}});
-  messageInput.disabled=orig;
+  Object.defineProperty(messageInput,'disabled',{set(v){this._disabled=v;if(v){this.setAttribute('disabled','')}else{this.removeAttribute('disabled')}sendBtn.disabled=v;emojiBtn.disabled=v;gifBtn.disabled=v},get(){return this._disabled!==false}});
+  messageInput.disabled=orig;syncFileAttachment();
 })();
 function isEncryptedMessage(value){return !!value&&Array.isArray(value.iv)&&value.iv.length===12&&Array.isArray(value.data)&&value.data.length>0&&value.data.length<=MAX_MESSAGE_SIZE+32&&value.iv.every(Number.isInteger)&&value.data.every(Number.isInteger)}
 function clearRemoteScreenShare(status='Not sharing'){
@@ -841,7 +846,7 @@ async function processIncoming(t){const POOL=8;const queue=t.writeQueue;let acti
   }finally{clearInterval(watchdog);try{await flushBatch()}catch{}}
 }
 setStatus('Not connected');
-function enableLocalTestControls(){if(!LOCAL_TEST_MODE)return;messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;callBtn.disabled=false;screenBtn.disabled=false;statusText.textContent='Local test mode';pairHint.textContent='Test mode is on — messages stay on this device until you pair with a friend.'}
+function enableLocalTestControls(){if(!LOCAL_TEST_MODE)return;messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=false;syncFileAttachmentUi();callBtn.disabled=false;screenBtn.disabled=false;statusText.textContent='Local test mode';pairHint.textContent='Test mode is on — messages stay on this device until you pair with a friend.'}
 enableLocalTestControls();
 
 async function ss(key){if(window.pairSettings){try{return await window.pairSettings.get(key)}catch{}}try{return localStorage.getItem('pair.'+key)}catch{}}
@@ -1094,7 +1099,7 @@ function syncActiveDmTransport(){
   messageInput.disabled=!ready;messageForm.querySelector('.send').disabled=!ready;
   // Choosing a file is allowed before the media peer exists. The selected file
   // waits for the on-demand direct connection; it is never sent via Cloudflare.
-  fileInput.disabled=relayVoiceMode||!friend?.online||directorySocket?.readyState!==WebSocket.OPEN;
+  fileInput.disabled=relayVoiceMode||!friend?.online||directorySocket?.readyState!==WebSocket.OPEN;syncFileAttachmentUi();
   if(callActive||friendInCall)callBtn.disabled=false;else callBtn.disabled=!friend?.online;
   $('.connection').classList.toggle('connected',ready);
   statusText.textContent=ready?(friend?.online?(relayVoiceMode?'Encrypted text · low-bandwidth voice relay':inBackgroundCall?'Encrypted text · call continues in background':'Encrypted live text'):'Encrypted text · offline delivery ready'):dmConnectingPeerId===activePeerId?'Connecting media…':friend?.online?'Preparing encrypted text…':'Offline · waiting for secure device key';
@@ -1260,7 +1265,7 @@ async function waitForDmMediaConnection(peerId,plan,timeoutMs){
 }
 function abandonDmMediaAttempt(peerId){
   if(pc||signaling)disconnectRoom();
-  dmPeerId=peerId;dmConnectingPeerId=peerId;
+  dmPeerId=peerId;dmConnectingPeerId=peerId;syncActiveDmTransport();
 }
 async function ensureDmMediaConnection(peerId=activePeerId,{requireFileChannel=false}={}){
   const friend=directoryUser(peerId);if(!peerId||!friend?.online)throw new Error('Your friend is offline');
@@ -1347,7 +1352,7 @@ function selectServer(id){const server=directorySnapshot.servers?.find(item=>ite
   // A server rail click is browsing, not an instruction to leave a direct or
   // server call.  The call dock remains the owner of those live P2P sessions.
   activePeerId='';activeServerId=id;document.body.classList.add('server-view');$('#friendsNavigation').hidden=true;$('#serverNavigation').hidden=false;$('#serverMemberPanel').hidden=false;$('#homeButton').classList.remove('active');renderServers();renderChannels();renderDmVoiceUI();const first=server.channels?.find(channel=>channel.type==='text')||server.channels?.[0];if(first)selectServerChannel(id,first.id)}
-async function selectServerChannel(serverId,channelId){const server=directorySnapshot.servers?.find(item=>item.id===serverId),channel=server?.channels?.find(item=>item.id===channelId);if(!server||!channel)return;activeServerId=serverId;activeChannelId=channelId;activePeerId='';roomTitle.textContent=channel.name;$('#chatTitle').textContent=channel.name;$('#roomContextLabel').textContent=server.name.toUpperCase();$('#chatModePill').textContent=channel.type==='voice'?'VOICE':'P2P MESH';messageInput.placeholder='Message #'+channel.name;openConversation('server:'+serverId+':'+channelId);renderChannels();if(channel.type==='voice'&&!serverVoiceStream){setServerStatus('Double-click '+channel.name+' to join voice');renderCallButtonState('start','Join voice','Join voice channel')}else{setServerStatus('Connecting to online server members…');renderCallButtonState(serverVoiceStream?'end':'start',serverVoiceStream?'Leave voice':'Start call',serverVoiceStream?'Leave voice channel':'Start voice call')}syncServerMesh();messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=true}
+async function selectServerChannel(serverId,channelId){const server=directorySnapshot.servers?.find(item=>item.id===serverId),channel=server?.channels?.find(item=>item.id===channelId);if(!server||!channel)return;activeServerId=serverId;activeChannelId=channelId;activePeerId='';roomTitle.textContent=channel.name;$('#chatTitle').textContent=channel.name;$('#roomContextLabel').textContent=server.name.toUpperCase();$('#chatModePill').textContent=channel.type==='voice'?'VOICE':'P2P MESH';messageInput.placeholder='Message #'+channel.name;openConversation('server:'+serverId+':'+channelId);renderChannels();if(channel.type==='voice'&&!serverVoiceStream){setServerStatus('Double-click '+channel.name+' to join voice');renderCallButtonState('start','Join voice','Join voice channel')}else{setServerStatus('Connecting to online server members…');renderCallButtonState(serverVoiceStream?'end':'start',serverVoiceStream?'Leave voice':'Start call',serverVoiceStream?'Leave voice channel':'Start voice call')}syncServerMesh();messageInput.disabled=false;messageForm.querySelector('.send').disabled=false;fileInput.disabled=true;syncFileAttachmentUi()}
 const baseSelectServerChannel=selectServerChannel;
 selectServerChannel=async function(serverId,channelId){await baseSelectServerChannel(serverId,channelId);const channel=activeChannel();if(channel?.type==='text'){$('#chatModePill').textContent='ENCRYPTED LIVE';setServerStatus('Encrypted live text · Cloudflare stores no messages',true);const server=activeServer();if(server&&!await serverTextKey(server)){await requestServerTextKey(server);pairHint.textContent='Waiting for an online member to share this server’s secure text key.'}}};
 function serverOnlineMembers(serverId=joinedVoiceServerId||activeServerId){const server=directorySnapshot.servers?.find(item=>item.id===serverId);return server?(server.members||[]).filter(id=>id!==directoryUserId&&directorySnapshot.members?.[id]?.online):[]}
@@ -1543,7 +1548,7 @@ queueMicrotask(async()=>{installDirectoryUI();installChannelDialog();installVoic
 async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
   // Tear down any prior session so a second Host/Join click (or host→leave→host)
   // doesn't leak an old pc/signaling whose handlers fire stale signals.
-  reconnectCall=callActive;if(pc||signaling)disconnectRoom();
+  reconnectCall=callActive;if(pc||signaling){disconnectRoom();syncActiveDmTransport()}
   role=kind;directoryTrustedConnection=!!expectedPeerId;dmPeerId=expectedPeerId||activePeerId;if(expectedPeerId)dmConnectingPeerId=expectedPeerId;const baseAddress=PAIR_SIGNAL_SERVER; const room=String(explicitRoom||$('#roomCode').value).trim().toUpperCase();
   if(!/^(?:\d{5}|[A-Z0-9_-]{16,64})$/.test(room))return pairHint.textContent='Enter the five-digit invite code.';
   const address=roomSignalAddress(baseAddress,room);
@@ -1630,7 +1635,7 @@ function disconnectRoom(){abortScreenSharePicker();if(pc&&pc._connectTimer){clea
   // and the send loop will abort cleanly.
   busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();dmConnectingPeerId='';pendingVoiceStartPeerId='';
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
-  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();  activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;screenAudioTransceiver=null;dmPeerId='';dmCallPeerId='';localCallSessionId='';remoteCallSessionId='';deriveGen++;setParticipant(participantYou,false);setFriendPresence(false,{animate:false,sound:false});voiceLog.innerHTML='';setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
+  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();cancelledOffers.clear();activeTransfers.forEach(t=>t.abort=true);activeTransfers.clear();pendingFrames.clear();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;screenAudioTransceiver=null;dmPeerId='';dmCallPeerId='';localCallSessionId='';remoteCallSessionId='';deriveGen++;setParticipant(participantYou,false);setFriendPresence(false,{animate:false,sound:false});voiceLog.innerHTML='';setStatus('Not connected');if(activePeerId)syncActiveDmTransport();$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
 const disconnectRoomWithoutPendingReset=disconnectRoom;
 disconnectRoom=function(){clearPendingFrames();return disconnectRoomWithoutPendingReset()};
 $('#leaveRoom').onclick=()=>{disconnectRoom();relayVoiceMode=false;dmIceServers=directIceServers();syncActiveDmTransport()};
