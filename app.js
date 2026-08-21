@@ -193,7 +193,11 @@ async function busSafeSend(data){let retries=0;for(;;){const bus=fileBus();if(!b
   // we never overflow it (which would throw and abort the whole transfer).
   if(bus.bufferedAmount>SEND_WINDOW){if(!await awaitBusDrain(bus))throw new Error('File transfer stalled — the direct connection stopped draining');continue}
   try{bus.send(data);return}catch(e){const m=String(e?.message||'').toLowerCase();if(m.includes('send queue is full')||m.includes('buffered')||m.includes('invalid state')){retries++;if(retries>100)throw new Error('send failed after excessive retries');if(!await awaitBusDrain(bus))throw new Error('File transfer stalled — the direct connection stopped draining');continue}throw e}}}
-let sendAbort=new Map(),fileSeq=0;
+// Both peers used to start at sequence 1. Simultaneous uploads therefore
+// collided in the shared control maps. Start in a random safe-integer range so
+// each endpoint has a practically unique transfer namespace, while keeping the
+// numeric wire format compatible with older app versions.
+const fileSeqSeed=crypto.getRandomValues(new Uint32Array(2));let sendAbort=new Map(),fileSeq=fileSeqSeed[0]*0x100000+(fileSeqSeed[1]&0xffff);
 // Pack metadata+iv+ciphertext into one binary frame: [4B json len][json][iv 12B][ct].
 // One send() per chunk (no separate control frame). JSON carries seq/last flags.
 function packChunk(seq,offset,ivBuf,ctBuf,last){const hdr=JSON.stringify({t:'c',s:seq,o:offset,l:last?1:0});const h=enc.encode(hdr);const frame=new ArrayBuffer(4+h.length+12+ctBuf.byteLength);const v=new DataView(frame);v.setUint32(0,h.length);new Uint8Array(frame,4,h.length).set(h);new Uint8Array(frame,4+h.length,12).set(ivBuf);new Uint8Array(frame,4+h.length+12).set(ctBuf);return frame}
@@ -683,7 +687,12 @@ processSignal.onclick=async()=>{if(pairSignalBusy){pairHint.textContent='Still p
 copySignal.onclick=()=>copyOutgoingCode().catch(e=>{pairHint.textContent='Could not copy code: '+(e?.message||e)});
 messageForm.onsubmit=async e=>{e.preventDefault();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE){pairHint.textContent='Messages are limited to 64 KB.';return}if(!sharedKey){if(LOCAL_TEST_MODE){addMessage(text,true,gif);messageInput.value='';setPendingGif(null);return}return}send({t:'msg',v:await seal(payload)});addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics)};
 async function waitForDirectFileChannel(peerId,timeoutMs=30000){const until=Date.now()+timeoutMs;while(Date.now()<until){if(fileBus()&&pc?.connectionState==='connected'&&dmPeerId===peerId)return true;await new Promise(resolve=>setTimeout(resolve,100))}return false}
-fileInput.onchange=async()=>{const selected=[...fileInput.files];fileInput.value='';if(!selected.length)return;if(activePeerId&&!fileBus()&&!LOCAL_TEST_MODE){try{pairHint.textContent='Connecting directly for file transfer…';await ensureDmMediaConnection(activePeerId);if(!await waitForDirectFileChannel(activePeerId))throw new Error('Direct file connection timed out. Files are never relayed through Cloudflare.');pairHint.textContent='Direct file connection ready.'}catch(error){pairHint.textContent=error?.message||'Could not connect for file transfer';return}}selected.forEach(file=>sendFile(file));};
+fileInput.onchange=async()=>{const selected=[...fileInput.files];fileInput.value='';if(!selected.length)return;
+  // The fallback is deliberately voice-only. Files are never relayed through Cloudflare.
+  // Do not make the user wait for a file channel that cannot exist
+  // on it, and never tear down their call merely because they chose a file.
+  if(relayVoiceMode){pairHint.textContent='File transfer needs a direct connection. This call is using the voice relay, so your call stays active.';return}
+  if(activePeerId&&!fileBus()&&!LOCAL_TEST_MODE){try{pairHint.textContent='Connecting directly for file transfer…';await ensureDmMediaConnection(activePeerId,{requireFileChannel:true});if(!await waitForDirectFileChannel(activePeerId))throw new Error('Direct file connection timed out. Try again after both people reopen the chat.');pairHint.textContent='Direct file connection ready.'}catch(error){pairHint.textContent=error?.message||'Could not connect for file transfer';return}}selected.forEach(file=>sendFile(file));};
 function transfer(name,size,dir){
   const el=document.createElement('div');el.className='transfer';el.innerHTML='<div class="transfer-top"><span class="transfer-name"></span><span class="transfer-status"></span></div><div class="bar"><i></i></div><div class="transfer-stats"><span class="transfer-speed"></span><span class="transfer-eta"></span></div><div class="transfer-peer"></div><div class="transfer-btns"><button class="cancel-btn text-button" hidden>Cancel</button><button class="retry-btn primary" hidden>Retry</button></div>';
   el.querySelector('.transfer-name').textContent=name+' · '+format(size);
@@ -736,7 +745,9 @@ function dropPending(seq){const held=pendingFrames.get(seq);if(!held)return;for(
 // the byte budget correct even in that early-frame race.
 pendingFrames.delete=seq=>{if(!pendingFrames.has(seq))return false;dropPending(seq);return true};
 function clearPendingFrames(){pendingFrames.clear();pendingFrameBytes=0}
-const acceptCards=new Map();
+const acceptCards=new Map(),cancelledOffers=new Map();const CANCELLED_OFFER_TTL=65000,CANCELLED_OFFER_LIMIT=128;
+function rememberCancelledOffer(seq){if(!Number.isSafeInteger(seq)||seq<1)return;cancelledOffers.set(seq,Date.now()+CANCELLED_OFFER_TTL);if(cancelledOffers.size>CANCELLED_OFFER_LIMIT)cancelledOffers.delete(cancelledOffers.keys().next().value)}
+function takeCancelledOffer(seq){const expires=cancelledOffers.get(seq);cancelledOffers.delete(seq);return Number.isFinite(expires)&&expires>Date.now()}
 function showAcceptCard(meta,seq){const card=document.createElement('div');card.className='transfer accept-card';card.innerHTML='<div class="accept-top"><strong class="accept-name"></strong><span class="accept-size"></span></div><p class="accept-hint">Your friend wants to send you a file.</p><div class="accept-btns"><button class="accept-yes primary">Accept</button><button class="accept-no">Decline</button></div>';card.querySelector('.accept-name').textContent=meta.name;card.querySelector('.accept-size').textContent=' · '+format(meta.size);const yes=card.querySelector('.accept-yes'),no=card.querySelector('.accept-no');const msg=document.createElement('div');msg.className='message';const bub=document.createElement('div');bub.className='bubble';bub.append(card);const mta=document.createElement('div');mta.className='meta';mta.textContent=new Date().toLocaleTimeString();msg.append(bub,mta);messages.append(msg);messages.scrollTop=messages.scrollHeight;const resolve=new Promise(r=>{const done=v=>{if(acceptCards.get(seq)!==done)return;clearTimeout(acceptTimer);acceptCards.delete(seq);dropPending(seq);msg.remove();r(v)};const acceptTimer=setTimeout(()=>done(false),60000);acceptCards.set(seq,done);yes.onclick=()=>done(true);no.onclick=()=>done(false)});return resolve}
 // Per-incoming-file ordered write queue so decrypted chunks hit disk in order
 // even though decryption runs concurrently in a pool.
@@ -761,11 +772,20 @@ function enqueueChunk(buf){
   }catch{}
 }
 // Control + chunk handler for the direct WebRTC data channel.
-async function onFileFrame(e){
+async function onFileFrame(e,offerInBackground=false){
   if(e.data instanceof ArrayBuffer){enqueueChunk(new Uint8Array(e.data));return;}
   let o;try{o=JSON.parse(e.data)}catch{return;}
+  // An offer can wait for a person to accept or decline it for a minute. That
+  // wait must not occupy the sole ordered control queue: otherwise its own
+  // Cancel/Reject (and every later transfer) sits behind the dialog and the
+  // file UI appears permanently stuck.
+  if(o.t==='start'&&!offerInBackground){void onFileFrame(e,true);return}
+  // A cancel/end can arrive while the background offer is still decrypting or
+  // while the save dialog is open. Remember it so that async path cannot later
+  // revive an upload the sender has already abandoned.
+  if(o.t==='cancel'||(o.t==='end'&&o.cancelled))rememberCancelledOffer(o.seq);
   try{
-  if(o.t==='start'){let meta;try{meta=JSON.parse(dec.decode(await open(o.v)))}catch{try{await safeSend(JSON.stringify({t:'reject',seq:0}))}catch{};return}const seq=Number(meta.seq);if(!Number.isSafeInteger(seq)||seq<1||!Number.isSafeInteger(meta.size)||meta.size<0||meta.size>MAX||typeof meta.name!=='string'||meta.name.length>255){try{await safeSend(JSON.stringify({t:'reject',seq:0}))}catch{};return}const accepted=await showAcceptCard(meta,seq);if(!accepted){dropPending(seq);await safeSend(JSON.stringify({t:'reject',seq}));return}const t={...meta,seq,received:0,wire:0,el:transfer(meta.name,meta.size,'in'),startTime:performance.now(),frames:[],parts:[],lastSeen:false,abort:false,done:Promise.resolve(),writeError:null,saveMode:'mem',writer:null,stuck:null};t.writeQueue=makeWriteQueue(t);activeTransfers.set(seq,t);let saveErr=null;if(window.pairSave){try{const r=await window.pairSave.start(meta.name);if(r&&r.ok){t.saveMode='pair'}else saveErr='Save dialog declined'}catch(e){saveErr=e.message}}else if(window.showSaveFilePicker){try{const handle=await showSaveFilePicker({suggestedName:meta.name});t.writer=await handle.createWritable();t.saveMode='fileAccess'}catch(e){saveErr=e.message}}else saveErr='No save method available';if(saveErr&&meta.size>5*1024*1024){t.abort=true;try{await safeSend(JSON.stringify({t:'reject',seq}))}catch{};const s=t.el.querySelector('.transfer-status');s.textContent='Failed: '+saveErr;s.classList.add('failed');activeTransfers.delete(seq);return}if(t.saveMode==='mem'&&meta.size>4*1024*1024*1024){alert('No disk streaming available for files over 4 GB. The transfer will fail.');t.abort=true;try{await safeSend(JSON.stringify({t:'reject',seq}))}catch{};const s=t.el.querySelector('.transfer-status');s.textContent='Failed: File too large for memory mode';s.classList.add('failed');activeTransfers.delete(seq);return}
+  if(o.t==='start'){let meta;try{meta=JSON.parse(dec.decode(await open(o.v)))}catch{try{await safeSend(JSON.stringify({t:'reject',seq:0}))}catch{};return}const seq=Number(meta.seq);if(!Number.isSafeInteger(seq)||seq<1||!Number.isSafeInteger(meta.size)||meta.size<0||meta.size>MAX||typeof meta.name!=='string'||meta.name.length>255){try{await safeSend(JSON.stringify({t:'reject',seq:0}))}catch{};return}if(takeCancelledOffer(seq))return;const accepted=await showAcceptCard(meta,seq);if(!accepted){dropPending(seq);await safeSend(JSON.stringify({t:'reject',seq}));return}if(takeCancelledOffer(seq)){dropPending(seq);return}const t={...meta,seq,received:0,wire:0,el:transfer(meta.name,meta.size,'in'),startTime:performance.now(),frames:[],parts:[],lastSeen:false,abort:false,done:Promise.resolve(),writeError:null,saveMode:'mem',writer:null,stuck:null};t.writeQueue=makeWriteQueue(t);activeTransfers.set(seq,t);let saveErr=null;if(window.pairSave){try{const r=await window.pairSave.start(meta.name);if(r&&r.ok){t.saveMode='pair'}else saveErr='Save dialog declined'}catch(e){saveErr=e.message}}else if(window.showSaveFilePicker){try{const handle=await showSaveFilePicker({suggestedName:meta.name});t.writer=await handle.createWritable();t.saveMode='fileAccess'}catch(e){saveErr=e.message}}else saveErr='No save method available';if(t.abort||takeCancelledOffer(seq)){t.abort=true;if(t.saveMode==='pair')try{await window.pairSave.cancel()}catch{}if(t.writer)try{await t.writer.abort()}catch{}activeTransfers.delete(seq);return}if(saveErr&&meta.size>5*1024*1024){t.abort=true;try{await safeSend(JSON.stringify({t:'reject',seq}))}catch{};const s=t.el.querySelector('.transfer-status');s.textContent='Failed: '+saveErr;s.classList.add('failed');activeTransfers.delete(seq);return}if(t.saveMode==='mem'&&meta.size>4*1024*1024*1024){alert('No disk streaming available for files over 4 GB. The transfer will fail.');t.abort=true;try{await safeSend(JSON.stringify({t:'reject',seq}))}catch{};const s=t.el.querySelector('.transfer-status');s.textContent='Failed: File too large for memory mode';s.classList.add('failed');activeTransfers.delete(seq);return}
   // Tell the sender we accepted, so it begins streaming.
   await safeSend(JSON.stringify({t:'accept',seq}));
   // Drain any chunk frames that arrived on the relay before this 'start'.
@@ -1242,7 +1262,7 @@ function abandonDmMediaAttempt(peerId){
   if(pc||signaling)disconnectRoom();
   dmPeerId=peerId;dmConnectingPeerId=peerId;
 }
-async function ensureDmMediaConnection(peerId=activePeerId){
+async function ensureDmMediaConnection(peerId=activePeerId,{requireFileChannel=false}={}){
   const friend=directoryUser(peerId);if(!peerId||!friend?.online)throw new Error('Your friend is offline');
   if(dmMediaPlan?.peerId===peerId)return dmMediaPlan.promise;
   if(pc&&dmPeerId===peerId&&['connected','connecting','new'].includes(pc.connectionState))return pc;
@@ -1264,6 +1284,10 @@ async function ensureDmMediaConnection(peerId=activePeerId){
       if(attempt<3)await delay(350*attempt);
     }
     if(plan.cancelled)throw new Error('A peer connection was started from the other side');
+    // TURN fallback is intentionally voice-only and has no `files` channel.
+    // A file request must stop here instead of silently connecting to that
+    // fallback and waiting for a channel which will never be created.
+    if(requireFileChannel)throw new Error('Could not establish a direct file connection. Files are not sent through the voice relay.');
     pairHint.textContent='Direct connection failed. Preparing low-bandwidth voice relay…';
     dmIceServers=await requestTurnCredentials();relayVoiceMode=true;
     const session=clientHex(16);
@@ -1613,7 +1637,7 @@ $('#leaveRoom').onclick=()=>{disconnectRoom();relayVoiceMode=false;dmIceServers=
 function clearTransfers(){
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();
   acceptWait.forEach(w=>{try{w.reject(new Error('Cleared'))}catch{}});acceptWait.clear();
-  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();
+  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();cancelledOffers.clear();
   activeTransfers.forEach(t=>{t.abort=true;if(t.saveMode==='pair')try{window.pairSave.cancel()}catch{}if(t.writer)try{t.writer.abort()}catch{}});activeTransfers.clear();
   pendingFrames.clear();outTransfers.clear();
   pendingFrameBytes=0;

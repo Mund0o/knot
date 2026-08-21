@@ -59,6 +59,11 @@ async function routeLinuxDesktopAudio(state) {
 function scheduleLinuxDesktopAudioRoute(state, delay = 80) {
   if (linuxShareAudio !== state) return;
   clearTimeout(state.routeTimer);
+  // PipeWire needs a short, silent settling period after the null sink and its
+  // loopback have been created. Moving live streams while that graph is still
+  // negotiating can replay an invalid startup buffer at full volume.
+  const warmupDelay = Math.max(0, (state.routeReadyAt || 0) - Date.now());
+  const routeDelay = Math.max(delay, warmupDelay);
   state.routeTimer = setTimeout(async () => {
     state.routeTimer = null;
     if (linuxShareAudio !== state) return;
@@ -66,7 +71,7 @@ function scheduleLinuxDesktopAudioRoute(state, delay = 80) {
     state.routeRunning = true;
     try { do { state.routeAgain = false;await routeLinuxDesktopAudio(state); } while (state.routeAgain && linuxShareAudio === state); }
     finally { state.routeRunning = false; }
-  }, delay);
+  }, routeDelay);
 }
 function startLinuxShareAudio(webContents) {
   if (process.platform !== 'linux') return null;
@@ -93,7 +98,10 @@ function startLinuxShareAudio(webContents) {
   // sources even though PipeWire created them successfully, which used to make
   // a healthy share route appear as "sound unavailable".
   const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const state = { original, sink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [], routeTimer: null, routeRunning: false, routeAgain: false, pcmChunks: [], pcmBytes: 0 };
+  // Do not redirect real desktop audio until the new monitor and loopback have
+  // settled. This costs only a fraction of a second of initial share audio and
+  // prevents the full-volume startup burst reported on PipeWire systems.
+  const state = { original, sink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [], routeTimer: null, routeRunning: false, routeAgain: false, routeReadyAt: Date.now() + 650, pcmChunks: [], pcmBytes: 0 };
   linuxShareAudio = state;
   const failCaptureRoute = message => {
     if (linuxShareAudio !== state) return;
