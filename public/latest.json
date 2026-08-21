@@ -1,10 +1,10 @@
 {
-  "version": "1.1.75",
-  "notes": "Update available.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.75/pair-p2p-1.1.75.tar.gz",
-  "linuxSha256": "796a27984e5bcc020a632b249a844b83b1312f54254eafc057d386f8a1655f21",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.75/Knot-1.1.75.AppImage",
-  "linuxAppImageSha256": "868dc58471de2d8029c3704e12f424faa367e8ecd8d3121ec848a2ba0ff1bb71",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.75/Knot.Setup.1.1.75.exe",
-  "winSha256": "9123460f13f6561b1b60597dd45c21cac78dd05a0503ba6823030a4b9c0016dd"
+  "version": "1.1.76",
+  "notes": "Calls stay connected when you open Home\nServer voice audio reliability fixes\nFaster high-bandwidth file transfers\nClearer server invites and account sign-up",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.76/pair-p2p-1.1.76.tar.gz",
+  "linuxSha256": "1dca5700fe7ed11a2b8cb8cc6b26d2ae196b3c7205db658935d4d68e376bada6",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.76/Knot-1.1.76.AppImage",
+  "linuxAppImageSha256": "01a346e98f283a75a44fcc418a34ee94b449f1b1152c924755a8f2c67c058ff9",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.76/Knot.Setup.1.1.76.exe",
+  "winSha256": "d892257a9535a545c7ad80711517c93dc79c3f8610c54356ede83e44959a8b74"
 }

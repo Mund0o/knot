@@ -98,9 +98,20 @@
           <div class="account-mode-tabs" role="tablist" aria-label="Account action"><button id="authSignupTab" class="active" type="button" role="tab" aria-selected="true">Sign up</button><button id="authSigninTab" type="button" role="tab" aria-selected="false">Sign in</button></div>
           <label for="authUsername"><span>Username</span><input id="authUsername" type="text" minlength="3" maxlength="24" autocomplete="username" spellcheck="false" placeholder="your_username" /></label>
           <label for="authPassword"><span>Password</span><input id="authPassword" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="At least 8 characters" /></label>
+          <label class="account-remember" for="authRemember"><input id="authRemember" type="checkbox" checked /><span><strong>Remember me on this device</strong><small>Keep your secure session here so you do not need to sign in next time.</small></span></label>
           <button id="authSubmit" class="primary" type="button">Create secure account</button>
           <p id="authStatus" class="settings-hint" aria-live="polite">Usernames are unique. The 600,000-round password protection runs on this device; only a derived verifier crosses WSS/TLS.</p>
           <button id="authContinueLocal" class="text-button" type="button">Continue with a device-only identity</button>
+        </section>
+      </dialog>
+      <dialog id="serverInviteDialog" class="server-invite-dialog" aria-labelledby="serverInviteTitle">
+        <section>
+          <span class="eyebrow">SERVER INVITE</span>
+          <h2 id="serverInviteTitle">Bring someone into this server</h2>
+          <p>Send this five-digit code to a friend. It expires in 15 minutes.</p>
+          <label for="serverInviteCodeOutput"><span>Invite code</span><input id="serverInviteCodeOutput" type="text" readonly aria-label="Server invite code" /></label>
+          <div class="server-invite-actions"><button id="copyServerInvite" class="primary" type="button">Copy invite code</button><button id="closeServerInvite" class="text-button" type="button">Done</button></div>
+          <p id="serverInviteStatus" class="settings-hint" aria-live="polite">Creating a secure invite…</p>
         </section>
       </dialog>
       <button id="panelBackdrop" class="panel-backdrop" type="button" aria-label="Close open panel" hidden></button>

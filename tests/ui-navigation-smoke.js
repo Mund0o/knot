@@ -245,7 +245,8 @@ app.whenReady().then(async () => {
       const localDeviceKey=await devicePublicKey(),incomingBits=await crypto.subtle.deriveBits({name:'ECDH',public:await importPub(localDeviceKey)},otherIdentity.privateKey,256),incomingLabel=relayBytes('knot-live-pair-v1|'+[directoryUserId,otherId].sort().join('|')),incomingMaterial=new Uint8Array(incomingBits.byteLength+incomingLabel.byteLength);incomingMaterial.set(new Uint8Array(incomingBits));incomingMaterial.set(incomingLabel,new Uint8Array(incomingBits).byteLength);const incomingKey=await crypto.subtle.importKey('raw',await crypto.subtle.digest('SHA-256',incomingMaterial),{name:'AES-GCM'},false,['encrypt','decrypt']),incomingId='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1',incomingCipher=await sealRelay(incomingKey,chatPayload('live encrypted reply',null),relayAad('dm',incomingId,otherId,directoryUserId));await receiveRelayText({type:'relay-text',scope:'dm',from:otherId,id:incomingId,cipher:incomingCipher,offline:true});assert(document.querySelector('#messages').textContent.includes('live encrypted reply')&&relayDm.some(value=>value.type==='relay-ack'&&value.id===incomingId),'a queued encrypted DM was not decrypted and acknowledged locally');
       selectServer(serverId);
       assert(callActive&&!document.querySelector('#dmVoiceDock').hidden,'opening a server disconnected or hid the DM call');
-      showFriends();
+      home.click();await new Promise(resolve=>setTimeout(resolve,0));
+      assert(callActive&&dmCallPeerId===friendId&&!document.querySelector('#dmVoiceDock').hidden,'the Home logo disconnected an active direct call');
 
       remoteScreen.srcObject=new MediaStream();remoteScreen.hidden=false;remoteScreenExpected=true;updateScreenLayout();
       assert(!remoteShareBadge.hidden&&participantFriend.classList.contains('has-share'),'remote share was not discoverable beside its owner');
