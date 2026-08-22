@@ -1,10 +1,10 @@
 {
-  "version": "1.1.78",
-  "notes": "Clear TCP vs WebRTC labels on every file transfer\nLive file-transfer route status in Settings\nTCP-first file transfers with WebRTC fallback\nCancel and close controls for file transfers\nScreen-share viewer notification chime",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.78/pair-p2p-1.1.78.tar.gz",
-  "linuxSha256": "927940dfb22980cea961bc5ffb6a35637cc03056dbc7c656d927adb10e699105",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.78/Knot-1.1.78.AppImage",
-  "linuxAppImageSha256": "f45cf00f4b774dec34b5e8fdab9d1d6fe1803e4dfee8dda1a8fd36ffaeb5d51c",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.78/Knot.Setup.1.1.78.exe",
-  "winSha256": "4aea3c6d7bc90108f3f10d7b68b68bd5a1adbf111830a72815977589c02914d0"
+  "version": "1.1.79",
+  "notes": "Fixed loud audio burst when starting a Linux desktop-audio screen share\nShared computer sound now fades in cleanly at start and after stalls\nMore reliable share-audio teardown on PipeWire systems",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.79/pair-p2p-1.1.79.tar.gz",
+  "linuxSha256": "91afd9549eb47735f4911f08e6dbc572872a2e2909b847eafa44e48814b86a70",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.79/Knot-1.1.79.AppImage",
+  "linuxAppImageSha256": "323371098d75bfe5716b131d640ba8944d9e1d889353a1cc203bbeecc03557a5",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.79/Knot.Setup.1.1.79.exe",
+  "winSha256": "2c4929c181128d055d1aed9bf4719f02baeffc74de9d93431f54984781150150"
 }
