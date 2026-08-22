@@ -47,6 +47,10 @@ function parseArgs(argv) {
 }
 
 async function discoverEmojis(fetcher) {
+  // Sitemaps carry the modern catalog; the legacy JSON API exposes an older
+  // slice (underscore slugs) whose detail pages live at the same paths. Merge
+  // both sources so pre-rebrand entries — including most WTFPL/CC BY uploads —
+  // are never missed.
   const index = await fetcher(`${BASE}/sitemap.xml`);
   const files = [...String(index).matchAll(/<loc>(https:\/\/emoji\.gg\/sitemap\/emojis\/\d+)<\/loc>/g)].map(m => m[1]);
   if (!files.length) throw new Error('No emoji sitemaps found in sitemap index');
@@ -56,6 +60,13 @@ async function discoverEmojis(fetcher) {
     for (const m of String(xml).matchAll(/<loc>(https:\/\/emoji\.gg\/emoji\/[^<]+)<\/loc>/g)) urls.push(m[1]);
     await new Promise(resolve => setTimeout(resolve, 300));
   }
+  try {
+    const apiItems = await fetcher(`${BASE}/api`);
+    for (const item of Array.isArray(apiItems) ? apiItems : []) {
+      if (item?.slug) urls.push(`${BASE}/emoji/${item.slug}`);
+    }
+    console.log(`Legacy API supplement: ${Array.isArray(apiItems) ? apiItems.length : 0} entries merged.`);
+  } catch (error) { console.warn('Legacy API unavailable, continuing with sitemap only:', error.message); }
   return [...new Set(urls)];
 }
 
@@ -66,7 +77,7 @@ function parseDetailPage(html, url) {
   const description = meta('og:description') || '';
   const licenseMatch = /fa-award[^>]*><\/i>\s*([^<]+?)\s*(?:License)?\s*<\/h5>/.exec(html);
   const authorMatch = /\bby ([^.<]+)[.<]/i.exec(description);
-  const idMatch = /\/emoji\/(\d+)-/.exec(url);
+  const idMatch = /\/emoji\/(\d+)[-_]/.exec(url);
   return {
     url,
     name: title ? title.replace(/\s*-\s*Discord Emoji\s*$/i, '').trim() : '',
@@ -88,6 +99,12 @@ async function processOne(fetcher, url, args, db, counts) {
   try {
     const html = await fetcher(url);
     const detail = parseDetailPage(html, url);
+    const known = db.prepare('SELECT id FROM items WHERE external_id=?').get(detail.externalId);
+    if (known) {
+      db.prepare("UPDATE crawl_state SET status='duplicate' WHERE url=?").run(url);
+      counts.duplicate++;
+      return { ok: true, duplicate: true };
+    }
     const license = normalizeLicense(detail.licenseText);
     if (!MIRRORABLE(license) || !detail.name || !detail.image) {
       const reason = !MIRRORABLE(license) ? `license:${license}` : (!detail.name ? 'no-name' : 'no-image');
@@ -133,6 +150,7 @@ async function processOne(fetcher, url, args, db, counts) {
     fs.mkdirSync(path.dirname(path.join(args.output, relPath)), { recursive: true });
     fs.writeFileSync(path.join(args.output, relPath), buffer);
     const normalized = normalizeName(detail.name);
+    try {
     db.prepare(`INSERT INTO items(external_id,name,normalized_name,slug,category,animated,mime,ext,width,height,file_size,
         asset_hash,asset_path,license,author,source_page,original_url,attribution_required,faves,search_text)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
@@ -140,6 +158,12 @@ async function processOne(fetcher, url, args, db, counts) {
       animated ? 1 : 0, sniffed.mime, sniffed.ext, dims.width, dims.height, buffer.length,
       hash, relPath, license, detail.author, url, detail.image, attributionRequired(license) ? 1 : 0,
       0, normalized);
+    } catch (error) {
+      if (!String(error.message).includes('UNIQUE')) throw error;
+      db.prepare("UPDATE crawl_state SET status='duplicate' WHERE url=?").run(url);
+      counts.duplicate++;
+      return { ok: true, duplicate: true };
+    }
     db.prepare("UPDATE crawl_state SET status='complete',last_error='' WHERE url=?").run(url);
     return { ok: true, accepted: true, animated };
   } catch (error) {
