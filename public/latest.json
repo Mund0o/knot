@@ -1,10 +1,10 @@
 {
-  "version": "1.1.80",
-  "notes": "Fixed stalled TCP file transfers caused by dropped first chunks\nDirect TCP file lane now works over IPv6 connections\nLarge transfers apply backpressure instead of growing memory\nFaster recovery when the fast lane drops mid-transfer",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.80/pair-p2p-1.1.80.tar.gz",
-  "linuxSha256": "03c0491a316dc4606970886884d315499e23c787775a225758b7c472c8ffb75b",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.80/Knot-1.1.80.AppImage",
-  "linuxAppImageSha256": "9a443d2d8000b6206838e416d3dc79cba447c10c7e02dc1896ccf0bfa67417d5",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.80/Knot.Setup.1.1.80.exe",
-  "winSha256": "4af3c6971842eba2d5db67f734a4742d82d803034310143adea614399645a452"
+  "version": "1.1.81",
+  "notes": "File transfers no longer trust a dead TCP lane after a connection drop\nTCP fast lane skips unroutable addresses when probing\nCleaner recovery when the peer connection drops mid-session",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.81/pair-p2p-1.1.81.tar.gz",
+  "linuxSha256": "10027ccd8f1644591bef5528ecf207a67a1d94f6d0cb7b5b5f81c7d0e59f87a9",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.81/Knot-1.1.81.AppImage",
+  "linuxAppImageSha256": "65ada2bfd2b5569e4c166aa12953707f8d4c0b555c5cc430bff07b2871d5b619",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.81/Knot.Setup.1.1.81.exe",
+  "winSha256": "03164981dbc373e39f9293eb317173a7878cafbc6ad565f491b5a50190d05023"
 }
