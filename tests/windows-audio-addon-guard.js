@@ -60,9 +60,18 @@ try {
     queued.port.onmessage({ data: pcm });
   }
   assert.strictEqual(queued.frames, 3840, 'worklet queue did not trim back to 80 ms');
-  const output = [[new Float32Array(128), new Float32Array(128)]];
-  queued.process([], output);
-  assert.strictEqual(output[0][0][0], 5, 'worklet played stale queued audio after a renderer stall');
+  // Resume replays no stale audio: after the short de-click fade-in, every
+  // played sample must come from the newest trimmed window (packet 5).
+  const played = [];
+  for (let quantum = 0; quantum < 8; quantum++) {
+    const output = [[new Float32Array(128), new Float32Array(128)]];
+    queued.process([], output);
+    played.push(...output[0][0]);
+  }
+  assert.strictEqual(played[0], 0, 'resume did not start from the fade-in floor');
+  for (let frame = 512; frame < played.length; frame++) {
+    assert.strictEqual(played[frame], 5 + Math.floor(frame / 960), 'worklet played stale queued audio after a renderer stall');
+  }
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const addonSource = fs.readFileSync(path.join(__dirname, '..', 'addon', 'pair-capture.cc'), 'utf8');
   const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
