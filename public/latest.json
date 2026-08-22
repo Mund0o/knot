@@ -1,10 +1,10 @@
 {
-  "version": "1.1.79",
-  "notes": "Fixed loud audio burst when starting a Linux desktop-audio screen share\nShared computer sound now fades in cleanly at start and after stalls\nMore reliable share-audio teardown on PipeWire systems",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.79/pair-p2p-1.1.79.tar.gz",
-  "linuxSha256": "91afd9549eb47735f4911f08e6dbc572872a2e2909b847eafa44e48814b86a70",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.79/Knot-1.1.79.AppImage",
-  "linuxAppImageSha256": "323371098d75bfe5716b131d640ba8944d9e1d889353a1cc203bbeecc03557a5",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.79/Knot.Setup.1.1.79.exe",
-  "winSha256": "2c4929c181128d055d1aed9bf4719f02baeffc74de9d93431f54984781150150"
+  "version": "1.1.80",
+  "notes": "Fixed stalled TCP file transfers caused by dropped first chunks\nDirect TCP file lane now works over IPv6 connections\nLarge transfers apply backpressure instead of growing memory\nFaster recovery when the fast lane drops mid-transfer",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.80/pair-p2p-1.1.80.tar.gz",
+  "linuxSha256": "03c0491a316dc4606970886884d315499e23c787775a225758b7c472c8ffb75b",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.80/Knot-1.1.80.AppImage",
+  "linuxAppImageSha256": "9a443d2d8000b6206838e416d3dc79cba447c10c7e02dc1896ccf0bfa67417d5",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.80/Knot.Setup.1.1.80.exe",
+  "winSha256": "4af3c6971842eba2d5db67f734a4742d82d803034310143adea614399645a452"
 }
