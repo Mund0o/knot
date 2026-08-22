@@ -1,10 +1,10 @@
 {
-  "version": "1.1.77",
-  "notes": "TCP-first file transfers with WebRTC fallback\nCancel and close controls for file transfers\nFaster, queue-safe WebRTC transfers\nScreen-share viewer notification chime\nEmoji and GIF picker layering fix",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.77/pair-p2p-1.1.77.tar.gz",
-  "linuxSha256": "9bc6c28c354a138da1a91299d7be2dd6250e04a527e14afe26a3522632b49ec4",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.77/Knot-1.1.77.AppImage",
-  "linuxAppImageSha256": "128660ce28820d832eecad91806bf265c6fdb66f5513ecefad15fe707f9ed4a9",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.77/Knot.Setup.1.1.77.exe",
-  "winSha256": "a2628fe9eb78a50ad9d15030b8e8213423b1363fa331f4b9d3f254b45c6d72c4"
+  "version": "1.1.78",
+  "notes": "Clear TCP vs WebRTC labels on every file transfer\nLive file-transfer route status in Settings\nTCP-first file transfers with WebRTC fallback\nCancel and close controls for file transfers\nScreen-share viewer notification chime",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.78/pair-p2p-1.1.78.tar.gz",
+  "linuxSha256": "927940dfb22980cea961bc5ffb6a35637cc03056dbc7c656d927adb10e699105",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.78/Knot-1.1.78.AppImage",
+  "linuxAppImageSha256": "f45cf00f4b774dec34b5e8fdab9d1d6fe1803e4dfee8dda1a8fd36ffaeb5d51c",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.78/Knot.Setup.1.1.78.exe",
+  "winSha256": "4aea3c6d7bc90108f3f10d7b68b68bd5a1adbf111830a72815977589c02914d0"
 }
