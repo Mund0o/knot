@@ -38,7 +38,7 @@ contextBridge.exposeInMainWorld('pairSave', {
 contextBridge.exposeInMainWorld('pairDirectFile', {
   listen: port => ipcRenderer.invoke('pair:directFileListen', port),
   register: (token, key) => ipcRenderer.invoke('pair:directFileRegister', token, key),
-  connect: (host, port, token, key) => ipcRenderer.invoke('pair:directFileConnect', host, port, token, key),
+  connect: (host, port, token, key, options) => ipcRenderer.invoke('pair:directFileConnect', host, port, token, key, options),
   send: (id, data) => ipcRenderer.invoke('pair:directFileSend', id, data),
   close: id => ipcRenderer.send('pair:directFileClose', id),
   // Release the receiver-side flow-control window once a frame has been

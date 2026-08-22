@@ -583,10 +583,29 @@ function transferLaneText(value){const lane=normalizedTransferLane(value);return
 function setTransferRoute(el,value){const route=el?.querySelector('.transfer-route');if(!route)return;const lane=normalizedTransferLane(value);route.dataset.lane=lane;route.textContent=transferLaneText(lane)}
 function refreshTransferRouteUi(){const lane=directFileId?'tcp':'webrtc';try{outTransfers.forEach(el=>setTransferRoute(el,lane));activeTransfers.forEach(t=>setTransferRoute(t.el,lane))}catch{}renderTransferSetupStatus()}
 function tcpToken(){return base64UrlEncode(crypto.getRandomValues(new Uint8Array(24)))}
-async function remoteTcpAddress(){if(!pc?.getStats)return '';const stats=await pc.getStats();let pair=null;stats.forEach(r=>{if(r.type==='candidate-pair'&&(r.selected||r.nominated)&&!pair)pair=r});const remote=pair&&stats.get(pair.remoteCandidateId);const address=String(remote?.address||remote?.ip||'');return /^(?:\d{1,3}\.){3}\d{1,3}$|^[0-9a-f:]+$/i.test(address)?address:''}
+function validTcpHost(address){const value=String(address||'');if(/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value))return true;// Unscoped link-local v6 has no interface scope here and cannot be routed.
+  return /^[0-9a-f:]+$/i.test(value)&&!/^fe[89ab]/i.test(value)}
+function tcpHostRank(address){if(/^\d+\.\d+\.\d+\.\d+$/.test(address)){const parts=address.split('.').map(Number);if(parts[0]===10||(parts[0]===172&&parts[1]>=16&&parts[1]<=31)||(parts[0]===192&&parts[1]===168))return 0}return 1}
+// One ICE address is rarely the whole story: mDNS hiding, firewalls and NAT
+// loopback make the selected pair's remote address unreliable for TCP even
+// when other exchanged candidates are directly reachable on the LAN. Collect
+// every remote candidate the pairs actually used, private ranges first.
+async function remoteTcpAddresses(){
+  if(!pc?.getStats)return [];const stats=await pc.getStats();let pair=null;const remoteIds=new Set();
+  stats.forEach(r=>{if(r.type!=='candidate-pair')return;remoteIds.add(r.remoteCandidateId);if((r.selected||r.nominated)&&!pair)pair=r});
+  const remotes=[];stats.forEach(r=>{if(r.type==='candidate'&&remoteIds.has(r.id)&&validTcpHost(r.address||r.ip))remotes.push(String(r.address||r.ip))});
+  const selected=pair&&stats.get(pair.remoteCandidateId),first=selected&&validTcpHost(selected.address||selected.ip)?String(selected.address||selected.ip):null;
+  const seen=new Set(first?[first]:[]);
+  const rest=[];
+  for(const address of remotes.sort((a,b)=>tcpHostRank(a)-tcpHostRank(b))){
+    const key=address.toLowerCase();if(seen.has(key))continue;seen.add(key);rest.push(address);
+  }
+  return [...(first?[first]:[]),...rest].slice(0,5)
+}
 function closeTcpLane(){if(directFileId)try{window.pairDirectFile?.close(directFileId)}catch{}directFileId='';refreshTransferRouteUi()}
 if(window.pairDirectFile){window.pairDirectFile.onFrame((id,data)=>{if(!directFileId){directFileId=id;refreshTransferRouteUi()}if(id!==directFileId){try{window.pairDirectFile.ack(id,data.byteLength||0)}catch{}return}const bytes=data instanceof ArrayBuffer?data:Uint8Array.from(data||[]).buffer;receiveQueue=receiveQueue.then(()=>onFileFrame({data:bytes})).catch(()=>{}).finally(()=>{try{window.pairDirectFile.ack(id,bytes.byteLength)}catch{}})});window.pairDirectFile.onClose(id=>{if(id===directFileId){directFileId='';refreshTransferRouteUi()}})}
-async function prepareTcpLane(){if(fileTransportMode==='webrtc')return false;if(directFileId)return true;if(!window.pairDirectFile||!directFileKey||!fileBus()){if(fileTransportMode==='tcp')throw new Error('TCP fast transfer is unavailable for this connection');return false}const token=tcpToken();const ready=new Promise((resolve,reject)=>{const timeout=setTimeout(()=>{tcpLaneWait.delete(token);reject(new Error('TCP port did not respond'))},5000);tcpLaneWait.set(token,{resolve:port=>{clearTimeout(timeout);resolve(port)},reject})});await safeSend(JSON.stringify({t:'tcp-prepare',token,port:tcpFilePort}));try{const port=await ready,host=await remoteTcpAddress();if(!host)throw new Error('Could not determine your friend’s direct address');directFileId=await window.pairDirectFile.connect(host,port,token,directFileKey);pairHint.textContent='Fast direct TCP file connection ready.';refreshTransferRouteUi();return true}catch(error){tcpLaneWait.delete(token);if(fileTransportMode==='tcp')throw error;pairHint.textContent='TCP fast path unavailable; using direct WebRTC.';refreshTransferRouteUi();return false}}
+function friendlyTcpLaneError(error){const raw=String(error?.message||error).replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/,'');if(/timed out|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|unreachable|EACCES/i.test(raw))return 'Could not reach your friend on TCP port '+tcpFilePort+'. Their firewall must allow Knot, or that port must be forwarded.';return raw}
+async function prepareTcpLane(){if(fileTransportMode==='webrtc')return false;if(directFileId)return true;if(!window.pairDirectFile||!directFileKey||!fileBus()){if(fileTransportMode==='tcp')throw new Error('TCP fast transfer is unavailable for this connection');return false}const token=tcpToken();const ready=new Promise((resolve,reject)=>{const timeout=setTimeout(()=>{tcpLaneWait.delete(token);reject(new Error('TCP port did not respond'))},5000);tcpLaneWait.set(token,{resolve:port=>{clearTimeout(timeout);resolve(port)},reject})});await safeSend(JSON.stringify({t:'tcp-prepare',token,port:tcpFilePort}));try{const port=await ready,hosts=await remoteTcpAddresses();if(!hosts.length)throw new Error('Could not determine your friend’s direct address');let lastError=null;for(const host of hosts){try{directFileId=await window.pairDirectFile.connect(host,port,token,directFileKey,{timeout:2000});break}catch(error){lastError=error}}if(!directFileId)throw lastError||new Error('Your friend did not answer on their TCP port');pairHint.textContent='Fast direct TCP file connection ready.';refreshTransferRouteUi();return true}catch(error){tcpLaneWait.delete(token);if(fileTransportMode==='tcp')throw new Error(friendlyTcpLaneError(error));pairHint.textContent='TCP fast path unavailable; using direct WebRTC.';refreshTransferRouteUi();return false}}
 
 // ICE servers use public STUN by default. Set PAIR_TURN to a JSON array of your
 // own TURN servers when a direct route is unavailable; Electron validates that

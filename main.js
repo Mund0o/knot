@@ -446,10 +446,12 @@ ipcMain.handle('pair:directFileRegister', async (event, token, keyValue) => {
   const key = directKey(keyValue); if (!key || !directFileHost) return false;
   directFileHost.register(token, key, peer => attachDirectPeer(event.sender, peer)); return true;
 });
-ipcMain.handle('pair:directFileConnect', async (event, host, portValue, token, keyValue) => {
+ipcMain.handle('pair:directFileConnect', async (event, host, portValue, token, keyValue, options) => {
   if (!isPairRenderer(event) || typeof host !== 'string' || !nodeNet.isIP(host) || typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw new Error('invalid direct-file connection');
   const port = validDirectPort(portValue), key = directKey(keyValue); if (!port || !key) throw new Error('invalid direct-file credentials');
-  const peer = await connectDirectFile(host, port, token, key); return attachDirectPeer(event.sender, peer);
+  const requestedTimeout = Number(options?.timeout);
+  const connectOptions = Number.isFinite(requestedTimeout) ? { timeout: Math.max(1000, Math.min(10000, Math.floor(requestedTimeout))) } : {};
+  const peer = await connectDirectFile(host, port, token, key, connectOptions); return attachDirectPeer(event.sender, peer);
 });
 ipcMain.handle('pair:directFileSend', async (event, id, data) => {
   if (!isPairRenderer(event) || typeof id !== 'string' || !data || data.byteLength > MAX_IPC_CHUNK) throw new Error('invalid direct-file frame');
