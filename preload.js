@@ -144,6 +144,14 @@ contextBridge.exposeInMainWorld('pairCapture', {
   }
 });
 
+
+// Emoji.gg local catalog search (collected via npm run emoji:collect).
+contextBridge.exposeInMainWorld('pairEmojiCatalog', {
+  available: () => ipcRenderer.invoke('pair:emojiSearch', {}).then(r => r.total > 0).catch(() => false),
+  search: params => ipcRenderer.invoke('pair:emojiSearch', params),
+  get: id => ipcRenderer.invoke('pair:emojiGet', id),
+});
+
 // Pull-based GPU AV1 bridge: renderer and data-channel backpressure naturally
 // pause reads instead of allowing encoded video to accumulate without bounds.
 contextBridge.exposeInMainWorld('pairNativeScreen', {

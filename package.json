@@ -12,6 +12,8 @@
   "scripts": {
     "start": "electron .",
     "signal": "node server.js",
+    "emoji:collect": "node tools/emoji-collector/cli.js",
+    "emoji:verify": "node tools/emoji-collector/verify.js",
     "worker:dev": "wrangler dev",
     "worker:check": "wrangler deploy --dry-run",
     "test:ui": "electron tests/ui-navigation-smoke.js",
@@ -25,7 +27,8 @@
     "test:windows-audio": "node tests/windows-audio-addon-guard.js && electron tests/windows-audio-renderer-smoke.js",
     "test:worker": "node tests/worker-offline-mailbox.js && wrangler deploy --dry-run",
     "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-service.js && electron tests/linux-gpu-runtime.js",
-    "test": "npm run test:worker && npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
+    "test": "npm run test:emoji && npm run test:worker && npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
+    "test:emoji": "node tests/emoji-catalog.js",
     "deploy": "wrangler deploy",
     "dist": "electron-builder --linux tar.gz AppImage",
     "dist:win": "npm run verify:addon && electron-builder --win nsis",
@@ -52,6 +55,7 @@
     "appId": "com.pair.p2p",
     "productName": "Knot",
     "files": [
+      "emoji-catalog.js",
       "index.html",
       "styles.css",
       "app.js",

@@ -9,8 +9,16 @@ const nodeNet = require('net');
 const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const APP_ICON = path.join(__dirname, 'build', 'icon.png');
+const emojiCatalog = require('./emoji-catalog');
 
 app.setName('Knot');
+
+// The locally collected emoji catalog serves content-addressed, immutable
+// assets over its own scheme so sandboxed renderer pages can reference them
+// without touching raw filesystem paths.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'emoji', privileges: { standard: false, secure: true, supportFetchAPI: true, stream: true } },
+]);
 
 let mainWin = null;
 let pendingSource = null;
@@ -582,6 +590,26 @@ app.on('child-process-gone', (_event, details) => {
 });
 
 app.whenReady().then(() => {
+  // Emoji.gg catalog: indexed local search + content-addressed asset serving.
+  // A missing/unbuilt catalog degrades to empty results with zero startup cost.
+  if (emojiCatalog.init()) {
+    protocol.handle('emoji', request => {
+      try {
+        const match = /^emoji:\/\/([0-9a-f]{2})\/([0-9a-f]{64})\.(gif|png|webp|jpg)$/.exec(request.url);
+        if (!match) return new Response(null, { status: 400 });
+        const abs = path.join(emojiCatalog.CATALOG_DIR, 'originals', match[1], `${match[2]}.${match[3]}`);
+        if (!fs.existsSync(abs)) return new Response(null, { status: 404 });
+        const mime = { gif: 'image/gif', png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg' }[match[3]];
+        return new Response(fs.readFileSync(abs), {
+          headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=31536000, immutable' },
+        });
+      } catch { return new Response(null, { status: 404 }); }
+    });
+    ipcMain.handle('pair:emojiSearch', (event, params) => isPairRenderer(event)
+      ? emojiCatalog.search(params || {}) : { items: [], nextCursor: null, total: 0 });
+    ipcMain.handle('pair:emojiGet', (event, id) => isPairRenderer(event) ? emojiCatalog.get(id) : null);
+    ipcMain.handle('pair:emojiAttributions', event => isPairRenderer(event) ? emojiCatalog.attributions() : []);
+  }
   // Keep Knot itself outside the temporary PipeWire share mix.
   if (process.platform === 'linux' && /PipeWire/i.test(pipewire('pactl', ['info']))) {
     const sink = pipewire('pactl', ['get-default-sink']); if (sink) process.env.PULSE_SINK = sink;

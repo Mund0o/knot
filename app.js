@@ -226,7 +226,7 @@ async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
 function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}
 function safeExternalUrl(value){try{const u=new URL(value);return u.protocol==='https:'||u.protocol==='http:'?u.href:null}catch{return null}}
-function safePreviewUrl(value){const url=safeExternalUrl(value);return url?.startsWith('https:')?url:null}
+function safePreviewUrl(value){const raw=String(value||'');if(/^emoji:\/\/[0-9a-f]{2}\/[0-9a-f]{64}\.(gif|png|webp|jpg)$/.test(raw))return raw;const url=safeExternalUrl(value);return url?.startsWith('https:')?url:null}
 function youtubeVideoId(value){
   try{
     const u=new URL(value),host=u.hostname.toLowerCase().replace(/^www\./,'').replace(/^m\./,'');let id='';
@@ -308,65 +308,270 @@ let emojiPicker=null,emojiBtn=null,gifPicker=null,gifBtn=null,pendingGif=null,gi
 function setPendingGif(item){pendingGif=item?.url?{url:item.url,thumb:item.thumb||item.url,analytics:item.analytics||null,emoji:item.emoji===true}:null;if(!gifAttachment)return;gifAttachment.hidden=!pendingGif;if(!pendingGif)return;gifAttachment.querySelector('img').src=pendingGif.thumb;gifAttachment.querySelector('.gif-attachment-name').textContent='1 GIF attached';messageInput.focus()}
 function buildEmojiPicker(){
   const wrap=document.createElement('div');wrap.className='emoji-picker';wrap.classList.add('hidden');
+  const searchRow=document.createElement('div');searchRow.className='emoji-picker-search-row';
+  const searchInput=document.createElement('input');searchInput.type='search';searchInput.className='emoji-picker-search';searchInput.placeholder='Search emojis…';searchInput.setAttribute('aria-label','Search emojis');
+  searchRow.append(searchInput);
   const tabs=document.createElement('div');tabs.className='emoji-tabs';
   const body=document.createElement('div');body.className='emoji-body';
+  const pageRegistry=[];
+  let activePage=null,prefsLoaded=false,catalogAvailable=false;
+
+  const hoverCard=document.createElement('div');hoverCard.className='emoji-hover-card';hoverCard.hidden=true;
+
+  function registerPage(tabLabel,tabTitle,pageBuilder,{onShow=null}={}){
+    const tab=document.createElement('button');tab.type='button';tab.className='emoji-tab';tab.textContent=tabLabel;tab.title=tabTitle;tab.setAttribute('aria-label',tabTitle);
+    const page=document.createElement('div');page.className='emoji-page hidden';
+    tabs.append(tab);body.append(page);
+    const entry={tab,page,onShow};
+    tab.onclick=()=>activatePage(entry);
+    pageRegistry.push(entry);
+    if(pageBuilder)pageBuilder(page,entry);
+    return entry;
+  }
+  function activatePage(entry){
+    pageRegistry.forEach(p=>p.page.classList.add('hidden'));
+    pageRegistry.forEach(p=>p.tab.classList.remove('active'));
+    entry.page.classList.remove('hidden');entry.tab.classList.add('active');activePage=entry;
+    exitHover();
+    if(entry.onShow)entry.onShow();
+  }
+
+  // --- Recent -----------------------------------------------------------------
+  const recentGrid=document.createElement('div');recentGrid.className='emoji-grid';
+  registerPage('🕘','Recent',page=>page.append(recentGrid));
+
+  // --- Favorites ----------------------------------------------------------------
+  const favGrid=document.createElement('div');favGrid.className='emoji-grid';
+  registerPage('⭐','Favorites',page=>page.append(favGrid),{onShow:()=>renderFavPage()});
+
+  // --- Unicode categories ---------------------------------------------------------
   EMOJI_CATS.forEach((cat,i)=>{
-    const tab=document.createElement('button');tab.type='button';tab.className='emoji-tab'+(i===0?' active':'');tab.textContent=cat.emojis[0];tab.title=cat.name;tab.setAttribute('aria-label',cat.name);
-    tab.onclick=()=>{body.querySelectorAll('.emoji-page').forEach(p=>p.classList.add('hidden'));body.children[i].classList.remove('hidden');tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));tab.classList.add('active')};
-    tabs.append(tab);
-    const page=document.createElement('div');page.className='emoji-page';page.classList.toggle('hidden',i!==0);
-    const heading=document.createElement('div');heading.className='emoji-category-title';heading.textContent=cat.name;
-    const grid=document.createElement('div');grid.className='emoji-grid';
-    cat.emojis.forEach(e=>{
-      const btn=document.createElement('button');btn.type='button';btn.className='emoji-item';btn.textContent=e;
-      btn.onclick=()=>{const inp=messageInput;const s=inp.selectionStart;const v=inp.value;inp.value=v.slice(0,s)+e+v.slice(inp.selectionEnd);inp.selectionStart=inp.selectionEnd=s+e.length;inp.focus();wrap.classList.add('hidden')};
-      grid.append(btn);
+    registerPage(cat.emojis[0],cat.name,page=>{
+      const heading=document.createElement('div');heading.className='emoji-category-title';heading.textContent=cat.name;
+      const grid=document.createElement('div');grid.className='emoji-grid';
+      cat.emojis.forEach(e=>{
+        const btn=document.createElement('button');btn.type='button';btn.className='emoji-item';btn.textContent=e;
+        btn.onclick=()=>{const inp=messageInput;const s=inp.selectionStart;const v=inp.value;inp.value=v.slice(0,s)+e+v.slice(inp.selectionEnd);inp.selectionStart=inp.selectionEnd=s+e.length;inp.focus();recordEmojiUse({t:'u',c:e});wrap.classList.add('hidden')};
+        grid.append(btn);
+      });
+      page.append(heading,grid);
     });
-    page.append(heading,grid);
-    body.append(page);
   });
-  // Animated tab: transparent sticker loops from Giphy/Klipy — Discord-style
-  // animated emoji that send immediately as compact inline GIFs.
-  const animTab=document.createElement('button');animTab.type='button';animTab.className='emoji-tab';animTab.textContent='🎞';animTab.title='Animated';animTab.setAttribute('aria-label','Animated emoji');
-  const animPage=document.createElement('div');animPage.className='emoji-page animated-page hidden';
-  const animSearch=document.createElement('input');animSearch.className='animated-search';animSearch.placeholder='Search animated…';animSearch.autocomplete='off';animSearch.setAttribute('aria-label','Search animated emoji');
-  const animGrid=document.createElement('div');animGrid.className='animated-emoji-grid';animGrid.innerHTML='<span class="gif-hint">Loading…</span>';
-  let animQuery='',animOffset=0,animTimer=null;
-  const loadAnim=append=>{
-    const token=animQuery+'|'+(append?animOffset:0);
-    animGrid._loading=token;if(!append)animGrid.innerHTML='<span class="gif-hint">Loading…</span>';
-    Promise.all([
-      giphyFetch('search','stickers',animQuery,append?animOffset:0).then(d=>(d.data||[]).map(g=>{const im=g.images?.fixed_width_small||g.images?.fixed_width||g.images?.downsized||{};const thumb=im.url||g.images?.original?.url;return{id:g.id,thumb,url:g.images?.original?.url||thumb,klipy:false,giphyType:'stickers'}})).catch(()=>[]),
-      klipyFetch('stickers',animQuery,append?animOffset:0).then(d=>(d.results||[]).map(k=>{const fm=k.media_formats||{};return{id:k.id,thumb:fm.tinygif?.url||fm.gif?.url,url:fm.gif?.url||fm.tinygif?.url,klipy:true}})).catch(()=>[])
-    ]).then(([a,b])=>{
-      if(animGrid._loading!==token)return;
-      if(!append)animGrid.innerHTML='';
-      const items=[];for(let i=0;i<Math.max(a.length,b.length);i++){if(a[i])items.push(a[i]);if(b[i])items.push(b[i])}
-      if(!items.length&&!append){animGrid.innerHTML='<span class="gif-hint">No results</span>';return}
-      for(const item of items){
-        if(!item.thumb||!item.url)continue;
-        const btn=document.createElement('button');btn.type='button';btn.className='animated-emoji-item';btn.title='Send animated emoji';
-        const img=document.createElement('img');img.src=item.thumb;img.loading='lazy';img.alt='';
-        btn.append(img);
-        btn.onclick=()=>{
-          setPendingGif({url:item.url,thumb:item.thumb,analytics:item,emoji:true});
-          wrap.classList.add('hidden');
-          animSearch.value='';animQuery='';animOffset=0;loadAnim(false);
-          messageForm.requestSubmit();
-        };
-        animGrid.append(btn);
+
+  // --- Animated sticker loops -------------------------------------------------------
+  registerPage('🎞','Animated',(animPage,animatedEntry)=>{
+    const animSearch=document.createElement('input');animSearch.className='animated-search';animSearch.placeholder='Search animated…';animSearch.autocomplete='off';animSearch.setAttribute('aria-label','Search animated emoji');
+    const animGrid=document.createElement('div');animGrid.className='animated-emoji-grid';animGrid.innerHTML='<span class="gif-hint">Loading…</span>';
+    let animQuery='',animOffset=0,animTimer=null;
+    const loadAnim=append=>{
+      const token=animQuery+'|'+(append?animOffset:0);
+      animGrid._loading=token;if(!append)animGrid.innerHTML='<span class="gif-hint">Loading…</span>';
+      Promise.all([
+        giphyFetch('search','stickers',animQuery,append?animOffset:0).then(d=>(d.data||[]).map(g=>{const im=g.images?.fixed_width_small||g.images?.fixed_width||g.images?.downsized||{};const thumb=im.url||g.images?.original?.url;return{id:g.id,thumb,url:g.images?.original?.url||thumb,klipy:false,giphyType:'stickers'}})).catch(()=>[]),
+        klipyFetch('stickers',animQuery,append?animOffset:0).then(d=>(d.results||[]).map(k=>{const fm=k.media_formats||{};return{id:k.id,thumb:fm.tinygif?.url||fm.gif?.url,url:fm.gif?.url||fm.tinygif?.url,klipy:true}})).catch(()=>[])
+      ]).then(([a,b])=>{
+        if(animGrid._loading!==token)return;
+        if(!append)animGrid.innerHTML='';
+        const items=[];for(let i=0;i<Math.max(a.length,b.length);i++){if(a[i])items.push(a[i]);if(b[i])items.push(b[i])}
+        if(!items.length&&!append){animGrid.innerHTML='<span class="gif-hint">No results</span>';return}
+        for(const item of items){
+          if(!item.thumb||!item.url)continue;
+          const btn=document.createElement('button');btn.type='button';btn.className='animated-emoji-item';btn.title='Send animated emoji';
+          const img=document.createElement('img');img.src=item.thumb;img.loading='lazy';img.alt='';
+          btn.append(img);
+          btn.onclick=()=>{
+            setPendingGif({url:item.url,thumb:item.thumb,analytics:item,emoji:true});
+            wrap.classList.add('hidden');
+            animSearch.value='';animQuery='';animOffset=0;loadAnim(false);
+            messageForm.requestSubmit();
+          };
+          animGrid.append(btn);
+        }
+      });
+    };
+    animSearch.oninput=()=>{clearTimeout(animTimer);const q=animSearch.value.trim();animTimer=setTimeout(()=>{animQuery=q;animOffset=0;if(q&&q.length<2){animGrid.innerHTML='<span class="gif-hint">Type at least 2 characters to search</span>';return}loadAnim(false)},250)};
+    animGrid.onscroll=()=>{if(animGrid._loading)return;if(animGrid.scrollTop+animGrid.clientHeight>=animGrid.scrollHeight-60){animOffset+=24;loadAnim(true)}};
+    animPage.append(animSearch,animGrid);
+    animatedEntry.onShow=()=>{if(!animGrid.querySelector('.animated-emoji-item')&&!animGrid._loading)loadAnim(false)};
+  });
+
+  // --- Emoji.gg catalog (Discover) -----------------------------------------------
+  const catChipRow=document.createElement('div');catChipRow.className='catalog-chip-row';
+  const catChips={all:['All',true],animated:['Animated'],static:['Static']};
+  let catType='all';
+  for(const [value,[label,selected]] of Object.entries(catChips)){
+    const chip=document.createElement('button');chip.type='button';chip.className='catalog-chip'+(selected?' selected':'');chip.textContent=label;
+    chip.onclick=()=>{catType=value;catChipRow.querySelectorAll('.catalog-chip').forEach(c=>c.classList.remove('selected'));chip.classList.add('selected');runCatalogQuery()};
+    catChipRow.append(chip);
+  }
+  const catalogStatus=document.createElement('span');catalogStatus.className='catalog-status';
+  catChipRow.append(catalogStatus);
+  const catalogGrid=document.createElement('div');catalogGrid.className='catalog-grid';
+  const catalogSentinel=document.createElement('div');catalogSentinel.className='catalog-sentinel';
+  catalogGrid.append(catalogSentinel);
+  const catPage=document.createElement('div');
+  registerPage('🗂','Discover — Emoji.gg catalog',()=>{},{}); // placeholder replaced below
+  const catalogEntry=pageRegistry[pageRegistry.length-1];
+  body.removeChild(catalogEntry.page);
+  catalogEntry.page=catPage;body.append(catPage);
+  catalogEntry.onShow=()=>{if(catalogAvailable&&!catalogGrid.querySelector('.catalog-tile'))runCatalogQuery()};
+
+  let catalogCursor=null,catalogBusy=false,catalogToken=0,catalogQuery='';
+  function catalogTile(item){
+    const btn=document.createElement('button');btn.type='button';btn.className='catalog-tile';btn.dataset.id=String(item.id);
+    const img=document.createElement('img');img.src=item.url;img.loading='lazy';img.alt=item.name;img.decoding='async';
+    btn.append(img);
+    bindCatalogTile(btn,item);
+    return btn;
+  }
+  function bindCatalogTile(btn,item){
+    btn.onclick=event=>{
+      if(event.shiftKey){toggleCatalogFavorite(item);paintFavoriteStates();return}
+      setPendingGif({url:item.url,thumb:item.url,analytics:null,emoji:true});
+      wrap.classList.add('hidden');
+      recordEmojiUse({t:'cat',id:String(item.id),name:item.name,url:item.url,animated:item.animated});
+      messageForm.requestSubmit();
+    };
+    btn.onmouseenter=()=>showHover(item,btn);
+    btn.onfocus=()=>showHover(item,btn);
+    btn.onmouseleave=exitHoverSoon;
+    btn.onblur=exitHoverSoon;
+  }
+  async function runCatalogQuery(){
+    if(!window.pairEmojiCatalog)return;
+    const token=++catalogToken;
+    catalogCursor=null;catalogBusy=true;
+    catalogGrid.querySelectorAll('.catalog-tile').forEach(el=>el.remove());
+    catalogStatus.textContent='';
+    await appendCatalogBatch(token,true);
+    catalogBusy=false;
+  }
+  async function appendCatalogBatch(token,reset){
+    const cursor=reset?0:(catalogCursor??0);
+    const res=await window.pairEmojiCatalog.search({q:catalogQuery,type:catType,cursor,limit:60}).catch(()=>null);
+    if(token!==catalogToken)return false;
+    if(res){
+      catalogCursor=res.nextCursor;
+      if(res.items.length){
+        const frag=document.createDocumentFragment();
+        for(const item of res.items)frag.append(catalogTile(item));
+        catalogGrid.insertBefore(frag,catalogSentinel);
+      } else if(reset){
+        catalogStatus.textContent=catalogQuery?'No results':'Catalog empty — run npm run emoji:collect';
       }
-    });
-  };
-  animTab.onclick=()=>{body.querySelectorAll('.emoji-page').forEach(p=>p.classList.add('hidden'));tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));animTab.classList.add('active');animPage.classList.remove('hidden');if(!animGrid.querySelector('.animated-emoji-item'))loadAnim(false)};
-  animSearch.oninput=()=>{clearTimeout(animTimer);const q=animSearch.value.trim();animTimer=setTimeout(()=>{animQuery=q;animOffset=0;if(q&&q.length<2){animGrid.innerHTML='<span class="gif-hint">Type at least 2 characters to search</span>';return}loadAnim(false)},250)};
-  animGrid.onscroll=()=>{if(animGrid._loading)return;if(animGrid.scrollTop+animGrid.clientHeight>=animGrid.scrollHeight-60){animOffset+=24;loadAnim(true)}};
-  animPage.append(animSearch,animGrid);body.append(animPage);tabs.append(animTab);
-  wrap.append(tabs,body);
-  // Close on outside click
+    }
+    return true;
+  }
+  catalogSentinelObserver=new IntersectionObserver(entries=>{
+    if(!entries.some(e=>e.isIntersecting)||catalogBusy||catalogCursor===null||!catalogEntry.page.classList.contains('hidden'))return;
+    catalogBusy=true;const token=catalogToken;
+    appendCatalogBatch(token,false).finally(()=>{if(token===catalogToken)catalogBusy=false});
+  },{root:body,rootMargin:'300px'});
+  catalogSentinelObserver.observe(catalogSentinel);
+
+  // --- Hover preview -----------------------------------------------------------------
+  function showHover(item,tile){
+    if(hoverTimer){clearTimeout(hoverTimer);hoverTimer=null}
+    hoverCard.innerHTML='';
+    const img=document.createElement('img');img.src=item.url;img.alt='';img.decoding='async';
+    const name=document.createElement('strong');name.textContent=item.name;name.title=item.name;
+    const metaLine=document.createElement('small');metaLine.textContent=(item.animated?'Animated · ':'')+item.license+(item.author?' · by '+item.author:'');
+    const actions=document.createElement('div');actions.className='emoji-hover-actions';
+    const fav=document.createElement('button');fav.type='button';fav.className='text-button emoji-fav-btn'+(catalogFavSet().has(String(item.id))?' on':'');
+    fav.textContent=catalogFavSet().has(String(item.id))?'★ Favorited':'☆ Favorite';
+    fav.onclick=e=>{e.stopPropagation();toggleCatalogFavorite(item);fav.classList.toggle('on',catalogFavSet().has(String(item.id)));fav.textContent=catalogFavSet().has(String(item.id))?'★ Favorited':'☆ Favorite';paintFavoriteStates()};
+    actions.append(fav);
+    hoverCard.append(img,name,metaLine,actions);
+    hoverCard.hidden=false;
+    const wrapRect=wrap.getBoundingClientRect(),tileRect=tile.getBoundingClientRect();
+    hoverCard.style.left=Math.max(6,Math.min(wrapRect.width-hoverCard.offsetWidth-8,tileRect.left-wrapRect.left+tileRect.width/2-hoverCard.offsetWidth/2))+'px';
+    hoverCard.style.top=(tileRect.top-wrapRect.top>hoverCard.offsetHeight+14?tileRect.top-wrapRect.top-hoverCard.offsetHeight-6:tileRect.bottom-wrapRect.top+6)+'px';
+  }
+  let hoverTimer=null;
+  function exitHoverSoon(){if(hoverTimer)clearTimeout(hoverTimer);hoverTimer=setTimeout(exitHover,180)}
+  function exitHover(){if(hoverTimer){clearTimeout(hoverTimer);hoverTimer=null}hoverCard.hidden=true}
+
+  // --- Favorites / recents rendering ---------------------------------------------------
+  function renderFavPage(){
+    favGrid.replaceChildren();
+    const favs=catalogFavorites||[];
+    if(!favs.length){const p=document.createElement('p');p.className='social-empty';p.textContent='Star an emoji from Discover to pin it here.';favGrid.append(p);return}
+    for(const item of favs.slice().reverse()){
+      const btn=document.createElement('button');btn.type='button';btn.className='catalog-tile';btn.title=item.name;
+      const img=document.createElement('img');img.src=item.url;img.loading='lazy';img.alt=item.name;
+      btn.append(img);bindCatalogTile(btn,{...item});favGrid.append(btn);
+    }
+  }
+  function renderRecentPage(){
+    recentGrid.replaceChildren();
+    if(!emojiRecents.length){const p=document.createElement('p');p.className='social-empty';p.textContent='Emojis you use appear here.';recentGrid.append(p);return}
+    for(const entry of emojiRecents){
+      if(entry.t==='u'){
+        const btn=document.createElement('button');btn.type='button';btn.className='emoji-item';btn.textContent=entry.c;
+        btn.onclick=()=>{const inp=messageInput;const s=inp.selectionStart;inp.value=inp.value.slice(0,s)+entry.c+inp.value.slice(inp.selectionEnd);inp.selectionStart=inp.selectionEnd=s+entry.c.length;inp.focus();recordEmojiUse(entry);wrap.classList.add('hidden')};
+        recentGrid.append(btn);
+      } else {
+        const btn=document.createElement('button');btn.type='button';btn.className='catalog-tile';btn.title=entry.name||'';
+        const img=document.createElement('img');img.src=entry.url;img.loading='lazy';img.alt=entry.name||'';img.decoding='async';
+        btn.append(img);bindCatalogTile(btn,entry);recentGrid.append(btn);
+      }
+    }
+  }
+  function paintFavoriteStates(){
+    renderRecentPage();
+    if(activePage&&activePage.tab.getAttribute('aria-label')==='Favorites')renderFavPage();
+  }
+
+  // --- Search ---------------------------------------------------------------------------
+  let searchDebounce=null,lastBrowsePage=null;
+  const searchResultsPage=document.createElement('div');searchResultsPage.className='emoji-page hidden';
+  const searchResultsGrid=document.createElement('div');searchResultsGrid.className='catalog-grid';
+  const searchStatusLabel=document.createElement('span');searchStatusLabel.className='catalog-status';
+  searchResultsPage.append(searchStatusLabel,searchResultsGrid);
+  body.append(searchResultsPage);
+  const searchEntry={tab:null,page:searchResultsPage,onShow:null};pageRegistry.push(searchEntry);
+
+  searchInput.addEventListener('input',()=>{
+    clearTimeout(searchDebounce);
+    const q=searchInput.value.trim();
+    if(q.length<2){
+      if(lastBrowsePage)activatePage(lastBrowsePage);
+      lastBrowsePage=null;return;
+    }
+    if(!lastBrowsePage)lastBrowsePage=activePage||pageRegistry[2];
+    searchDebounce=setTimeout(async()=>{
+      const token=++catalogToken;
+      pageRegistry.forEach(p=>p.page.classList.add('hidden'));
+      pageRegistry.forEach(p=>p.tab.classList.remove('active'));
+      searchResultsPage.classList.remove('hidden');activePage=searchEntry;exitHover();
+      searchStatusLabel.textContent='Searching…';
+      const res=await window.pairEmojiCatalog.search({q,type:catType,cursor:0,limit:120}).catch(()=>null);
+      if(token!==catalogToken)return;
+      searchResultsGrid.querySelectorAll('.catalog-tile').forEach(el=>el.remove());
+      searchStatusLabel.textContent=res?(res.items.length?'':'No results — try another word'):'Search failed';
+      if(res)for(const item of res.items)searchResultsGrid.append(catalogTile(item));
+    },150);
+  });
+  searchInput.onkeydown=e=>{if(e.key==='Escape'){searchInput.value='';if(lastBrowsePage)activatePage(lastBrowsePage)}};
+
+  wrap.append(searchRow,tabs,body,hoverCard);
   document.addEventListener('click',e=>{if(!wrap.contains(e.target)&&e.target!==emojiBtn)wrap.classList.add('hidden')});
+
+  // Async prep: preferences + catalog availability decide Recent/Fav/Discover.
+  (async()=>{
+    await loadEmojiPrefs();
+    renderRecentPage();
+    catalogAvailable=await window.pairEmojiCatalog.available().catch(()=>false);
+    if(!catalogAvailable){
+      tabs.removeChild(catalogEntry.tab);body.removeChild(catalogEntry.page);
+      const i=pageRegistry.indexOf(catalogEntry);if(i>-1)pageRegistry.splice(i,1);
+      searchRow.style.display='none';
+    }
+    activatePage(pageRegistry[2]); // default: first unicode category
+  })();
   return wrap;
 }
+
 function buildGifPicker(){
   const wrap=document.createElement('div');wrap.className='gif-picker';wrap.classList.add('hidden');
   const tabs=document.createElement('div');tabs.className='gif-picker-tabs';
@@ -434,6 +639,32 @@ function klipyFetch(type,query,offset){
 function klipyShare(id){try{fetch(`https://api.klipy.com/v1/registershare?key=wDEDuoSRgy4oajhdMGJ7gtS2cFBB3DtWULsUYodKIRhcXvHreSPr6eNM3nm0oWc1&id=${id}`)}catch{}}
 function giphyAnalytics(giphyId,type){
   try{fetch('https://api.giphy.com/v1/analytics/action/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action_type:'SENT',action_object_type:type==='stickers'?'sticker':'gif',action_object_id:giphyId})})}catch{}
+}
+// Catalog emoji preferences: favorites + recents persist locally beside the
+// existing settings conventions (message history lives in the same store).
+let emojiRecents=null,catalogFavorites=null;
+async function loadEmojiPrefs(){
+  if(!Array.isArray(emojiRecents)){try{emojiRecents=JSON.parse(await ss('emojiRecents')||'[]')}catch{}if(!Array.isArray(emojiRecents))emojiRecents=[]}
+  if(!Array.isArray(catalogFavorites)){try{catalogFavorites=JSON.parse(await ss('catalogFavorites')||'[]')}catch{}if(!Array.isArray(catalogFavorites))catalogFavorites=catalogFavorites&&typeof catalogFavorites==='object'?[]:[]}
+}
+function recordEmojiUse(entry){
+  if(!Array.isArray(emojiRecents))return;
+  const key=entry.t==='u'?'u:'+entry.c:'cat:'+entry.id;
+  const existing=emojiRecents.findIndex(e=>(e.t==='u'?'u:'+e.c:'cat:'+e.id)===key);
+  if(existing>-1)emojiRecents.splice(existing,1);
+  emojiRecents.unshift({...entry,at:Date.now()});
+  if(emojiRecents.length>48)emojiRecents.length=48;
+  ssSet('emojiRecents',JSON.stringify(emojiRecents));
+}
+function catalogFavSet(){return new Set((catalogFavorites||[]).map(f=>String(f.id)))}
+function toggleCatalogFavorite(item){
+  if(!Array.isArray(catalogFavorites))catalogFavorites=[];
+  const id=String(item.id),i=catalogFavorites.findIndex(f=>String(f.id)===id);
+  if(i>-1)catalogFavorites.splice(i,1);
+  else catalogFavorites.push({id:String(item.id),name:item.name,url:item.url,animated:item.animated,license:item.license});
+  if(catalogFavorites.length>200)catalogFavorites.length=200;
+  ssSet('catalogFavorites',JSON.stringify(catalogFavorites));
+  return i===-1;
 }
 function getFavs(){try{const d=localStorage.getItem('pair.gifFavs');return d?JSON.parse(d):[]}catch{return[]}}
 function saveFavs(f){try{localStorage.setItem('pair.gifFavs',JSON.stringify(f))}catch{}}
@@ -984,6 +1215,40 @@ function addScreenShareSettings(){
 }
 const restoreScreenShareSettings=addScreenShareSettings();
 document.querySelectorAll('.settings-tab').forEach(tab=>tab.onclick=()=>openSettingsTab(tab.dataset.settingsTab));
+let emojiAttributionsLoaded=false;
+const originalOpenSettingsTab=openSettingsTab;
+openSettingsTab=function(name){
+  originalOpenSettingsTab(name);
+  if(name==='emojis'&&!emojiAttributionsLoaded){
+    emojiAttributionsLoaded=true;
+    (async()=>{
+      const statsEl=$('#emojiCatalogStats'),list=$('#emojiAttributions');
+      if(!statsEl||!list)return;
+      if(!window.pairEmojiCatalog){statsEl.textContent='Local emoji catalog is not installed. Run npm run emoji:collect to build it.';return}
+      const res=await window.pairEmojiCatalog.search({q:'',cursor:0,limit:2000}).catch(()=>null);
+      if(!res||!res.total){statsEl.textContent='Local emoji catalog is empty. Run npm run emoji:collect to build it.';return}
+      const details=await Promise.all(res.items.map(item=>window.pairEmojiCatalog.get(item.id).catch(()=>null)));
+      statsEl.textContent=res.total.toLocaleString()+' emojis mirrored locally from Emoji.gg — animated '+res.items.filter(i=>i.animated).length+'+ — creators credited below.';
+      const frag=document.createDocumentFragment();
+      for(const item of res.items){
+        const detail=item&&item.sourcePage?item:details.find(d=>d&&String(d.id)===String(item.id));
+        if(!detail)continue;
+        const row=document.createElement('div');row.className='emoji-attribution-row';
+        const img=document.createElement('img');img.src=detail.url;img.loading='lazy';img.alt='';
+        const copy=document.createElement('div');copy.className='min-w-0';
+        const strong=document.createElement('strong');strong.textContent=detail.name;
+        const small=document.createElement('small');small.textContent=(detail.animated?'Animated · ':'')+'by '+(detail.author||'unknown creator');
+        copy.append(strong,small);
+        const pill=document.createElement('span');pill.className='license-pill'+(detail.license==='CC-BY-4.0'?' cc':detail.license==='WTFPL'?' wtfpl':'');pill.textContent=detail.license;
+        if(detail.attributionRequired)pill.title='CC BY 4.0 — creator attribution required and provided here.';
+        const link=document.createElement('a');link.href=detail.sourcePage;link.target='_blank';link.rel='noopener noreferrer';link.textContent='source';
+        row.append(img,copy,pill,link);
+        frag.append(row);
+      }
+      list.replaceChildren(frag);
+    })();
+  }
+};
 const screenShareSettingsReady=restoreScreenShareSettings();
 function makeDeviceOption(value,label){const option=document.createElement('option');option.value=value;option.textContent=label;return option}
 async function refreshAudioDevices(){try{const devices=await navigator.mediaDevices.enumerateDevices();const inputs=devices.filter(device=>device.kind==='audioinput'),outputs=devices.filter(device=>device.kind==='audiooutput');inputDevice.replaceChildren(makeDeviceOption('default','System default'));outputDevice.replaceChildren(makeDeviceOption('default','System default'));inputs.forEach((device,index)=>inputDevice.append(makeDeviceOption(device.deviceId,device.label||'Microphone '+(index+1))));outputs.forEach((device,index)=>outputDevice.append(makeDeviceOption(device.deviceId,device.label||'Speaker '+(index+1))));inputDevice.value=[...inputDevice.options].some(option=>option.value===inputDeviceId)?inputDeviceId:'default';outputDevice.value=[...outputDevice.options].some(option=>option.value===outputDeviceId)?outputDeviceId:'default';deviceHint.textContent=(inputs.length||outputs.length)?'Device list updated.':'Connect or allow a microphone to reveal device names.'}catch{deviceHint.textContent='Knot could not read audio devices yet.'}}
