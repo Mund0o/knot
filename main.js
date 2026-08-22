@@ -90,11 +90,10 @@ function startLinuxShareAudio(webContents) {
   // fanned every stream into two sinks; PipeWire could exhaust its playback
   // buffers on a busy call, making a burst/beep and starving the share monitor.
   // A one-way loopback keeps local playback and isolated capture independent.
-  const loop = pipewire('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${original}`, 'latency_msec=40']);
-  if (!loop) {
-    pipewire('pactl', ['unload-module', module]);
-    return null;
-  }
+  // The loopback itself is loaded below only after the monitor has settled:
+  // connecting it while the graph negotiates replayed an invalid buffer into
+  // the real speakers at full volume — the loud burst heard when sharing
+  // started with desktop audio.
   const moved = [];
   // Capture the monitor directly instead of asking Chromium to expose it as a
   // microphone. Chromium's Linux device enumeration can omit virtual monitor
@@ -104,7 +103,7 @@ function startLinuxShareAudio(webContents) {
   // Do not redirect real desktop audio until the new monitor and loopback have
   // settled. This costs only a fraction of a second of initial share audio and
   // prevents the full-volume startup burst reported on PipeWire systems.
-  const state = { original, sink, module, loop, capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [], routeTimer: null, routeRunning: false, routeAgain: false, routeReadyAt: Date.now() + 650, pcmChunks: [], pcmBytes: 0 };
+  const state = { original, sink, module, loop: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [], routeTimer: null, loopTimer: null, routeRunning: false, routeAgain: false, routeReadyAt: Date.now() + 650, discardUntil: Date.now() + 250, pcmChunks: [], pcmBytes: 0 };
   linuxShareAudio = state;
   const failCaptureRoute = message => {
     if (linuxShareAudio !== state) return;
@@ -113,8 +112,24 @@ function startLinuxShareAudio(webContents) {
     // desktop streams moved into it.
     stopLinuxShareAudio();
   };
+  // Load the monitor→speakers loopback only after the new sink and monitor
+  // have settled, but always before the first scheduled desktop-audio move
+  // (routeReadyAt). Created during negotiation, it could replay an invalid
+  // buffer into the real output at full volume; created against a quiet,
+  // running monitor it starts silently. Failure here ends the audio route so
+  // desktop sound is never stranded in the private share sink.
+  state.loopTimer = setTimeout(() => {
+    state.loopTimer = null;
+    if (linuxShareAudio !== state) return;
+    state.loop = pipewire('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${original}`, 'latency_msec=40']);
+    if (!state.loop) failCaptureRoute('Could not create the Knot Share Audio loopback');
+  }, 600);
   capture.stdout.on('data', chunk => {
     if (linuxShareAudio !== state || !webContents || webContents.isDestroyed()) return;
+    // A fresh PipeWire monitor can emit uninitialized negotiation buffers in
+    // its first moments; interpreted as float PCM those are enormous samples,
+    // i.e. a full-scale blast for the peer. Drop this bounded startup window.
+    if (Date.now() < state.discardUntil) return;
     state.pcmChunks.push(chunk);state.pcmBytes += chunk.byteLength;
     // One 20 ms stereo float packet per IPC message matches Opus cadence and
     // avoids flooding Electron's renderer/main bridge with tiny parec chunks.
@@ -154,11 +169,12 @@ function stopLinuxShareAudio() {
   linuxShareAudio = null;
   if (state.watch) try { state.watch.kill(); } catch {}
   clearTimeout(state.routeTimer);
+  if (state.loopTimer) { clearTimeout(state.loopTimer); state.loopTimer = null; }
   for (const audit of state.audits || []) clearTimeout(audit);
   if (state.capture) try { state.capture.kill(); } catch {}
   state.pcmChunks.length = 0;state.pcmBytes = 0;
   for (const input of state.moved || []) pipewireOk('pactl', ['move-sink-input', input.id, input.sink]);
-  pipewire('pactl', ['unload-module', state.loop]);
+  if (state.loop) pipewire('pactl', ['unload-module', state.loop]);
   pipewire('pactl', ['unload-module', state.module]);
 }
 

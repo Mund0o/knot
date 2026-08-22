@@ -5,6 +5,11 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     this.offset = 0;
     this.frames = 0;
     this.started = false;
+    // Fade in over ~10.7 ms at 48 kHz every time playback starts or resumes
+    // after an underrun. Entering at full amplitude made any residual capture
+    // discontinuity audible as a click or pop in the shared computer sound.
+    this.fadeInFrames = 512;
+    this.fadedIn = this.fadeInFrames;
     this.port.onmessage = event => {
       let samples = event.data instanceof Float32Array ? event.data : new Float32Array(event.data || 0);
       let frames = Math.floor(samples.length / 2);
@@ -52,6 +57,7 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     if (!this.started) {
       if (this.frames < 1920) return true;
       this.started = true;
+      this.fadedIn = 0;
     }
     for (let frame = 0; frame < left.length; frame++) {
       const chunk = this.queue[0];
@@ -59,9 +65,14 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
         this.started = false;
         break;
       }
+      let gain = 1;
+      if (this.fadedIn < this.fadeInFrames) {
+        gain = this.fadedIn / this.fadeInFrames;
+        this.fadedIn++;
+      }
       const index = this.offset * 2;
-      left[frame] = chunk[index] || 0;
-      right[frame] = chunk[index + 1] || 0;
+      left[frame] = (chunk[index] || 0) * gain;
+      right[frame] = (chunk[index + 1] || 0) * gain;
       this.offset++;
       this.frames--;
       if (this.offset >= Math.floor(chunk.length / 2)) {
