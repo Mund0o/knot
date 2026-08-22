@@ -696,3 +696,16 @@ body.screen-share-active .server-stage-avatar.speaking{position:relative;z-index
 
 /* Local microphone processing choices live with the device controls. */
 .noise-processing-card{display:grid;gap:11px;margin:2px 0 4px;padding:13px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--stroke-quiet));border-radius:12px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 9%,var(--surface)),var(--surface))}.noise-processing-card>div{display:flex;flex-direction:column;gap:3px}.noise-processing-card>div strong{font-size:12px}.noise-processing-card>div small{color:var(--subtle);font-size:10px;line-height:1.4}.noise-processing-card .settings-field{gap:5px}.noise-processing-card .settings-field span{font-size:10px}.noise-processing-card select:disabled{cursor:not-allowed;opacity:.65}
+
+/* Animated emoji: compact transparent sticker loops that send inline like emoji. */
+.animated-page{display:flex;flex-direction:column}
+.animated-search{height:34px;margin:9px;border-color:var(--stroke-quiet);border-radius:9px;background:var(--field);font-size:12px;text-align:center}
+.animated-search:focus{text-align:left}
+.animated-emoji-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px;max-height:300px;padding:0 9px 9px;overflow-y:auto}
+.animated-emoji-grid .gif-hint{grid-column:1/-1;padding:14px;color:var(--muted);font-size:12px;text-align:center}
+.animated-emoji-item{min-height:0;padding:0;border:0;border-radius:9px;background:transparent;overflow:hidden}
+.animated-emoji-item:hover{border:0;background:var(--surface-hover)}
+.animated-emoji-item img{display:block;width:100%;object-fit:contain}
+.gif-attachment-message.gif-emoji{width:auto;display:inline-block;margin-top:4px}
+.gif-attachment-message.gif-emoji img{width:auto;max-width:72px;max-height:48px;background:transparent}
+@media(max-width:570px){.animated-emoji-grid{grid-template-columns:repeat(auto-fill,minmax(56px,1fr))}}
