@@ -455,7 +455,15 @@ ipcMain.handle('pair:directFileSend', async (event, id, data) => {
   if (!isPairRenderer(event) || typeof id !== 'string' || !data || data.byteLength > MAX_IPC_CHUNK) throw new Error('invalid direct-file frame');
   const peer = directFilePeers.get(id); if (!peer) throw new Error('direct-file connection is closed'); await peer.sendAsync(data); return true;
 });
-ipcMain.on('pair:directFileClose', (event, id) => { if (isPairRenderer(event) && typeof id === 'string') closeDirectPeer(id); });
+ipcMain.on('pair:directFileClose', (event, id) => { if (!isPairRenderer(event)) return; if (typeof id === 'string') closeDirectPeer(id); });
+// Renderer acknowledgement of consumed file frames. This bounds the IPC queue
+// between the TCP lane and slow disk writes instead of letting pending frames
+// grow without limit during very large transfers.
+ipcMain.on('pair:directFileAck', (event, id, bytes) => {
+  if (!isPairRenderer(event) || typeof id !== 'string') return;
+  const peer = directFilePeers.get(id); const count = Math.max(0, Math.min(Number(bytes) || 0, 1024 * 1024 * 1024));
+  if (peer && count) peer.credit(count);
+});
 
 // --- Settings persistence (sandboxed renderer can't rely on localStorage) ---
 // Writes/reads a small JSON file in the app's userData directory so room code

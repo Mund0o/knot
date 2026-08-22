@@ -7,6 +7,18 @@ const crypto = require('crypto');
 
 const MAX_HANDSHAKE = 4096;
 const MAX_FRAME = 8 * 1024 * 1024;
+const CONNECT_TIMEOUT = 5000;
+// Receive flow control between this process and its own renderer. Frames are
+// forwarded over IPC as they decrypt; if the renderer's disk writes fall
+// behind a fast LAN peer, these bounds pause the socket instead of letting
+// pending IPC frames grow without limit. Pausing closes the TCP receive
+// window, which throttles the remote sender through ordinary TCP, so peers
+// running older versions need no changes. The high-water mark MUST stay below
+// the renderer's per-transfer ACTIVE_FRAME_LIMIT (64 MiB) plus one maximum
+// frame: crossing it would make enqueueChunk silently drop a chunk and stall
+// the whole transfer instead of applying backpressure.
+const DEFAULT_HIGH_WATER = 48 * 1024 * 1024;
+const DEFAULT_LOW_WATER = 12 * 1024 * 1024;
 
 function seal(key, plain) {
   const iv = crypto.randomBytes(12);
@@ -26,12 +38,38 @@ function pack(frame) {
 }
 
 class PeerSocket {
-  constructor(socket, key) {
+  constructor(socket, key, options = {}) {
     this.socket = socket; this.key = key; this.buffer = Buffer.alloc(0); this.closed = false;
-    this.onFrame = () => {}; this.onClose = () => {};
+    const high = Number(options.highWater), low = Number(options.lowWater);
+    this.highWater = high > 0 ? high : DEFAULT_HIGH_WATER;
+    // Keep resume strictly below pause so a single acknowledgement batch
+    // cannot flip-flop the socket every frame.
+    this.lowWater = Math.min(low > 0 ? low : DEFAULT_LOW_WATER, this.highWater / 2);
+    this.inflight = 0; this.paused = false;
+    this._frameHandler = null; this._earlyFrames = []; this.onClose = () => {};
     socket.on('data', b => this._read(b));
     socket.once('close', () => { this.closed = true; this.onClose(); });
     socket.once('error', () => {});
+  }
+  // Frames can decode before the owner assigns a handler: the accept path
+  // feeds pipelined bytes left over from the handshake, and a fast sender's
+  // first chunk may already be in that buffer. Queue them instead of letting
+  // a default no-op swallow the data, then flush on assignment.
+  get onFrame() { return this._frameHandler || (frame => {}); }
+  set onFrame(handler) {
+    this._frameHandler = handler || (frame => {});
+    if (this._earlyFrames.length && this._frameHandler) {
+      const early = this._earlyFrames; this._earlyFrames = [];
+      for (const frame of early) if (!this._emit(frame)) return;
+    }
+  }
+  _emit(frame) {
+    this.inflight += frame.length;
+    // Stop reading above the high-water mark; resume once the renderer has
+    // acknowledged enough consumption below the low-water mark.
+    if (!this.paused && this.inflight > this.highWater) { this.paused = true; try { this.socket.pause(); } catch {} }
+    try { this.onFrame(frame); } catch { this.socket.destroy(new Error('invalid encrypted frame')); return false; }
+    return true;
   }
   _read(chunk) {
     this.buffer = Buffer.concat([this.buffer, chunk]);
@@ -40,8 +78,20 @@ class PeerSocket {
       if (!len || len > MAX_FRAME) return this.socket.destroy(new Error('invalid frame length'));
       if (this.buffer.length < 4 + len) return;
       const encrypted = this.buffer.subarray(4, 4 + len); this.buffer = this.buffer.subarray(4 + len);
-      try { this.onFrame(open(this.key, encrypted)); } catch { this.socket.destroy(new Error('invalid encrypted frame')); return; }
+      let plain;
+      try { plain = open(this.key, encrypted); } catch { this.socket.destroy(new Error('invalid encrypted frame')); return; }
+      if (!this._frameHandler) { this._earlyFrames.push(plain); continue; }
+      if (!this._emit(plain)) return;
     }
+  }
+  // Acknowledge consumed bytes from the renderer. Purely local accounting:
+  // the wire protocol is unchanged and no remote acknowledgement exists.
+  credit(bytes) {
+    if (this.closed) return;
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value <= 0) return;
+    this.inflight = Math.max(0, this.inflight - value);
+    if (this.paused && this.inflight <= this.lowWater) { this.paused = false; try { this.socket.resume(); } catch {} }
   }
   send(data) {
     if (this.closed) throw new Error('socket closed');
@@ -65,20 +115,38 @@ class PeerSocket {
 }
 
 class DirectFileHost {
-  constructor(port = 8787) { this.port = port; this.server = null; this.tokens = new Map(); }
+  constructor(port = 8787, options = {}) { this.port = port; this.peerOptions = options || {}; this.server = null; this.tokens = new Map(); }
   listen() {
     if (this.server) return Promise.resolve();
-    this.server = net.createServer(socket => this._accept(socket));
-    this.server.on('error', () => {});
-    return new Promise((resolve, reject) => {
-      const fail = e => { this.server = null; reject(e); };
-      this.server.once('error', fail);
-      this.server.listen(this.port, '0.0.0.0', () => { this.server.removeListener('error', fail); resolve(); });
+    const start = host => new Promise((resolve, reject) => {
+      const server = net.createServer(socket => this._accept(socket));
+      const fail = error => { try { server.close(); } catch {} reject(error); };
+      server.once('error', fail);
+      server.listen(this.port, host, () => {
+        server.removeListener('error', fail);
+        // Keep serving after runtime errors; only listen failures reject.
+        server.on('error', () => {});
+        resolve(server);
+      });
     });
+    return (async () => {
+      // '::' accepts IPv6 and IPv4-mapped connections. ICE may report either
+      // address family for the selected candidate pair, so the fast lane must
+      // accept both; fall back when the system has no IPv6 stack at all.
+      try { this.server = await start('::'); }
+      catch (error) {
+        if (error && ['EADDRNOTAVAIL', 'EAFNOSUPPORT', 'ENOTSUP'].includes(error.code)) this.server = await start('0.0.0.0');
+        else throw error;
+      }
+    })();
   }
   register(token, key, onPeer) {
     if (!/^[A-Za-z0-9_-]{32,}$/.test(token) || !Buffer.isBuffer(key) || key.length !== 32) throw new Error('invalid direct-file credentials');
-    this.tokens.set(token, { key, onPeer, expiry: Date.now() + 60000 });
+    // Sweep tokens whose owner never completed a connection instead of
+    // accumulating them for the lifetime of the listener.
+    const now = Date.now();
+    for (const [stale, item] of this.tokens) if (item.expiry < now) this.tokens.delete(stale);
+    this.tokens.set(token, { key, onPeer, expiry: now + 60000 });
   }
   _accept(socket) {
     socket.setNoDelay(true); socket.setTimeout(10000, () => socket.destroy());
@@ -91,23 +159,50 @@ class DirectFileHost {
       const item = typeof hello.token === 'string' ? this.tokens.get(hello.token) : null;
       if (!item || item.expiry < Date.now()) return socket.destroy();
       this.tokens.delete(hello.token); socket.setTimeout(0); socket.write('PAIR/1 OK\n');
-      const peer = new PeerSocket(socket, item.key);
-      if (buffer.length > nl + 1) peer._read(buffer.subarray(nl + 1));
+      const peer = new PeerSocket(socket, item.key, this.peerOptions);
+      // Wire the owner before consuming any pipelined handshake leftovers so
+      // a fast sender's first frames are never decoded without a handler.
       item.onPeer(peer, hello);
+      if (buffer.length > nl + 1) peer._read(buffer.subarray(nl + 1));
     };
     socket.on('data', read);
   }
   close() { if (this.server) { try { this.server.close(); } catch {} this.server = null; } this.tokens.clear(); }
 }
 
-function connect(host, port, token, key) {
+function connect(host, port, token, key, options = {}) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host, port }); socket.setNoDelay(true);
-    socket.once('error', reject); socket.once('connect', () => socket.write(JSON.stringify({ v: 1, token }) + '\n'));
+    let settled = false;
+    // Every failure path destroys the socket: a dropped SYN or a bad token
+    // must not leave a half-open connection hanging for minutes.
+    const fail = error => {
+      if (settled) return;
+      settled = true; clearTimeout(timer);
+      socket.removeListener('data', read);
+      socket.destroy();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const timer = setTimeout(() => fail(new Error('direct-file connection timed out')), Number(options.timeout) || CONNECT_TIMEOUT);
+    const onClose = () => fail(new Error('direct-file connection closed'));
+    socket.once('error', fail);
+    socket.once('close', onClose);
+    const read = b => {
+      response = Buffer.concat([response, b]);
+      if (response.length > MAX_HANDSHAKE) return fail(new Error('direct-file authentication failed'));
+      const nl = response.indexOf(10); if (nl < 0) return;
+      socket.removeListener('data', read);
+      if (response.subarray(0, nl).toString() !== 'PAIR/1 OK') return fail(new Error('direct-file authentication failed'));
+      settled = true; clearTimeout(timer);
+      socket.removeListener('error', fail); socket.removeListener('close', onClose);
+      const peer = new PeerSocket(socket, key, options);
+      if (response.length > nl + 1) peer._read(response.subarray(nl + 1));
+      resolve(peer);
+    };
     let response = Buffer.alloc(0);
-    const read = b => { response = Buffer.concat([response, b]); const nl = response.indexOf(10); if (nl < 0) return; socket.removeListener('data', read); if (response.subarray(0, nl).toString() !== 'PAIR/1 OK') return reject(new Error('direct-file authentication failed')); const peer = new PeerSocket(socket, key); if (response.length > nl + 1) peer._read(response.subarray(nl + 1)); resolve(peer); };
+    socket.once('connect', () => socket.write(JSON.stringify({ v: 1, token }) + '\n'));
     socket.on('data', read);
   });
 }
 
-module.exports = { DirectFileHost, PeerSocket, connect, seal, open };
+module.exports = { DirectFileHost, PeerSocket, connect, seal, open, pack };

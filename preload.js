@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld('pairDirectFile', {
   connect: (host, port, token, key) => ipcRenderer.invoke('pair:directFileConnect', host, port, token, key),
   send: (id, data) => ipcRenderer.invoke('pair:directFileSend', id, data),
   close: id => ipcRenderer.send('pair:directFileClose', id),
+  // Release the receiver-side flow-control window once a frame has been
+  // consumed, so a slow disk pauses the TCP lane instead of growing memory.
+  ack: (id, bytes) => ipcRenderer.send('pair:directFileAck', id, bytes),
   onFrame: cb => { const listener = (_event, id, data) => cb?.(id, data); ipcRenderer.on('pair:directFileFrame', listener); return () => ipcRenderer.removeListener('pair:directFileFrame', listener); },
   onClose: cb => { const listener = (_event, id) => cb?.(id); ipcRenderer.on('pair:directFileClose', listener); return () => ipcRenderer.removeListener('pair:directFileClose', listener); }
 });
