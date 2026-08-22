@@ -1,10 +1,10 @@
 {
-  "version": "1.1.76",
-  "notes": "Calls stay connected when you open Home\nServer voice audio reliability fixes\nFaster high-bandwidth file transfers\nClearer server invites and account sign-up",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.76/pair-p2p-1.1.76.tar.gz",
-  "linuxSha256": "1dca5700fe7ed11a2b8cb8cc6b26d2ae196b3c7205db658935d4d68e376bada6",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.76/Knot-1.1.76.AppImage",
-  "linuxAppImageSha256": "01a346e98f283a75a44fcc418a34ee94b449f1b1152c924755a8f2c67c058ff9",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.76/Knot.Setup.1.1.76.exe",
-  "winSha256": "d892257a9535a545c7ad80711517c93dc79c3f8610c54356ede83e44959a8b74"
+  "version": "1.1.77",
+  "notes": "TCP-first file transfers with WebRTC fallback\nCancel and close controls for file transfers\nFaster, queue-safe WebRTC transfers\nScreen-share viewer notification chime\nEmoji and GIF picker layering fix",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.77/pair-p2p-1.1.77.tar.gz",
+  "linuxSha256": "9bc6c28c354a138da1a91299d7be2dd6250e04a527e14afe26a3522632b49ec4",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.77/Knot-1.1.77.AppImage",
+  "linuxAppImageSha256": "128660ce28820d832eecad91806bf265c6fdb66f5513ecefad15fe707f9ed4a9",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.77/Knot.Setup.1.1.77.exe",
+  "winSha256": "a2628fe9eb78a50ad9d15030b8e8213423b1363fa331f4b9d3f254b45c6d72c4"
 }

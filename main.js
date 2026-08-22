@@ -4,6 +4,9 @@ const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
+const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
+const nodeNet = require('net');
+const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const APP_ICON = path.join(__dirname, 'build', 'icon.png');
 
@@ -162,10 +165,11 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
+const DIRECT_FILE_DEFAULT_PORT = 8787;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
 const DEEPFILTER_ASSETS = Object.freeze({
   wasm: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'pkg', 'df_bg.wasm'),
@@ -397,6 +401,46 @@ ipcMain.handle('pair:saveEnd', event => {
 
 ipcMain.handle('pair:saveCancel', event => isPairRenderer(event) ? closeStream().then(() => true) : false);
 
+// Optional native TCP lane for large P2P files. The renderer can register only
+// one-time credentials generated from an already authenticated paired session;
+// this listener never accepts arbitrary unauthenticated traffic.
+let directFileHost = null, directFilePort = 0;
+const directFilePeers = new Map();
+function validDirectPort(value) { const port = Number(value); return Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : 0; }
+function directKey(value) { try { const key = Buffer.from(value); return key.length === 32 ? key : null; } catch { return null; } }
+function closeDirectPeer(id) { const peer = directFilePeers.get(id); directFilePeers.delete(id); try { peer?.close(); } catch {} }
+function attachDirectPeer(owner, peer) {
+  const id = crypto.randomBytes(16).toString('hex'); directFilePeers.set(id, peer);
+  peer.onFrame = frame => { if (!owner.isDestroyed()) owner.send('pair:directFileFrame', id, frame); };
+  peer.onClose = () => { directFilePeers.delete(id); if (!owner.isDestroyed()) owner.send('pair:directFileClose', id); };
+  return id;
+}
+async function ensureDirectFileHost(port) {
+  if (directFileHost && directFilePort === port) return;
+  if (directFileHost) { directFileHost.close(); directFileHost = null; directFilePort = 0; }
+  const host = new DirectFileHost(port); await host.listen(); directFileHost = host; directFilePort = port;
+}
+ipcMain.handle('pair:directFileListen', async (event, portValue) => {
+  if (!isPairRenderer(event)) return { ok: false, error: 'unauthorized' };
+  const port = validDirectPort(portValue); if (!port) return { ok: false, error: 'Choose a port from 1024 through 65535.' };
+  try { await ensureDirectFileHost(port); return { ok: true, port }; } catch (error) { return { ok: false, error: error?.message || 'Could not listen on that TCP port.' }; }
+});
+ipcMain.handle('pair:directFileRegister', async (event, token, keyValue) => {
+  if (!isPairRenderer(event) || typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) return false;
+  const key = directKey(keyValue); if (!key || !directFileHost) return false;
+  directFileHost.register(token, key, peer => attachDirectPeer(event.sender, peer)); return true;
+});
+ipcMain.handle('pair:directFileConnect', async (event, host, portValue, token, keyValue) => {
+  if (!isPairRenderer(event) || typeof host !== 'string' || !nodeNet.isIP(host) || typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw new Error('invalid direct-file connection');
+  const port = validDirectPort(portValue), key = directKey(keyValue); if (!port || !key) throw new Error('invalid direct-file credentials');
+  const peer = await connectDirectFile(host, port, token, key); return attachDirectPeer(event.sender, peer);
+});
+ipcMain.handle('pair:directFileSend', async (event, id, data) => {
+  if (!isPairRenderer(event) || typeof id !== 'string' || !data || data.byteLength > MAX_IPC_CHUNK) throw new Error('invalid direct-file frame');
+  const peer = directFilePeers.get(id); if (!peer) throw new Error('direct-file connection is closed'); await peer.sendAsync(data); return true;
+});
+ipcMain.on('pair:directFileClose', (event, id) => { if (isPairRenderer(event) && typeof id === 'string') closeDirectPeer(id); });
+
 // --- Settings persistence (sandboxed renderer can't rely on localStorage) ---
 // Writes/reads a small JSON file in the app's userData directory so room code
 // and signaling address survive restarts even in sandboxed Electron on file://.
@@ -586,6 +630,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', async () => {
   nativeScreenService?.stop();
   stopLinuxShareAudio();
+  for (const id of directFilePeers.keys()) closeDirectPeer(id);
+  directFileHost?.close(); directFileHost = null;
   await closeStream();
   stopNativeCapture();
   if (process.platform !== 'darwin') app.quit();

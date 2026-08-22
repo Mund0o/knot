@@ -33,6 +33,18 @@ contextBridge.exposeInMainWorld('pairSave', {
   cancel: () => ipcRenderer.invoke('pair:saveCancel')
 });
 
+// The native TCP file lane is deliberately narrow: the sandboxed renderer can
+// exchange authenticated encrypted frames, but cannot open arbitrary sockets.
+contextBridge.exposeInMainWorld('pairDirectFile', {
+  listen: port => ipcRenderer.invoke('pair:directFileListen', port),
+  register: (token, key) => ipcRenderer.invoke('pair:directFileRegister', token, key),
+  connect: (host, port, token, key) => ipcRenderer.invoke('pair:directFileConnect', host, port, token, key),
+  send: (id, data) => ipcRenderer.invoke('pair:directFileSend', id, data),
+  close: id => ipcRenderer.send('pair:directFileClose', id),
+  onFrame: cb => { const listener = (_event, id, data) => cb?.(id, data); ipcRenderer.on('pair:directFileFrame', listener); return () => ipcRenderer.removeListener('pair:directFileFrame', listener); },
+  onClose: cb => { const listener = (_event, id) => cb?.(id); ipcRenderer.on('pair:directFileClose', listener); return () => ipcRenderer.removeListener('pair:directFileClose', listener); }
+});
+
 // Settings persistence bridge for the sandboxed renderer. Falls through to
 // localStorage automatically when running in a browser (no IPC available).
 contextBridge.exposeInMainWorld('pairSettings', {

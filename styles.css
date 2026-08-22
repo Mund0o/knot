@@ -422,6 +422,13 @@ body{background:var(--background);background-attachment:fixed}.app-shell{display
 /* Navigation and the friend panel must never run below a small window. */
 .app-rail{box-sizing:border-box;overflow-y:auto;overscroll-behavior:contain}.rail-top,.rail-bottom{flex:0 0 auto}.rail-add{display:grid!important;visibility:visible!important}@supports(height:100dvh){.connect-drawer[open]{top:50dvh;max-height:calc(100dvh - 28px)}}@media(max-height:560px){.app-rail{height:100dvh;min-height:0;padding-block:8px}.rail-top,.rail-bottom{gap:6px}.rail-bottom{margin-top:auto}}
 
+/* The call dock is sticky, but composer popovers belong above it. The chat
+   scroll area remains contained; only its transient picker overlay may escape
+   the workspace boundary. */
+.workspace:has(.composer .gif-picker:not(.hidden)),.workspace:has(.composer .emoji-picker:not(.hidden)),.workspace:has(.composer .plus-popup:not(.hidden)){position:relative;z-index:100;overflow:visible}.workspace .chat:has(.gif-picker:not(.hidden)),.workspace .chat:has(.emoji-picker:not(.hidden)),.workspace .chat:has(.plus-popup:not(.hidden)){overflow:visible}
+
+.transfer-setup{margin-top:16px;padding:13px;border:1px solid var(--stroke-quiet);border-radius:10px;background:var(--field);color:var(--muted);font-size:12px;line-height:1.45}.transfer-setup strong{display:block;margin-bottom:6px;color:var(--text);font-size:13px}.transfer-setup ol{margin:0;padding-left:21px}.transfer-setup li+li{margin-top:5px}.transfer-help{margin-top:13px;border-top:1px solid var(--stroke-quiet);padding-top:12px;color:var(--muted);font-size:12px;line-height:1.45}.transfer-help summary{cursor:pointer;color:var(--text);font-weight:750}.transfer-help ul{margin:9px 0 0;padding-left:19px}.transfer-help li+li{margin-top:6px}
+
 /* The drawer is centered with a transform, so its entrance animation must retain it. */
 @keyframes pair-drawer-rise{from{opacity:0;transform:translate(-50%,calc(-50% + 10px)) scale(.985)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}.connect-drawer[open]{animation:pair-drawer-rise .26s cubic-bezier(.2,.8,.2,1) both}
 

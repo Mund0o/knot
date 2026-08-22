@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.76",
+  "version": "1.1.77",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -15,6 +15,7 @@
     "worker:dev": "wrangler dev",
     "worker:check": "wrangler deploy --dry-run",
     "test:ui": "electron tests/ui-navigation-smoke.js",
+    "test:direct-file": "node tests/direct-file-lane.js",
     "test:deepfilter": "electron tests/deepfilter-local-smoke.js",
     "test:screen:h264": "electron tests/screen-quality-smoke.js --codec=H264",
     "test:screen:av1": "electron tests/screen-quality-smoke.js --codec=AV1",
@@ -54,6 +55,7 @@
       "index.html",
       "styles.css",
       "app.js",
+      "direct-file.js",
       "main.js",
       "linux-gpu.js",
       "gpu-acceleration.js",
