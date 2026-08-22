@@ -85,10 +85,11 @@ if (exact.items.length > 1) {
   if (names.includes('party')) assert.strictEqual(names[0], 'party', 'exact match not ranked first');
 }
 
-// Synonyms.
-const synonym = catalog.search({ q: 'lmao' });
+// Synonyms: 'lol' expands to laugh/laughing/lmao.
+const synonym = catalog.search({ q: 'lol' });
 const direct = catalog.search({ q: 'laugh' });
-assert(synonym.items.some(i => direct.items.some(d => d.id === i.id)) || synonym.items.length === 0, 'synonym expansion broken');
+assert(synonym.items.length > 0 && direct.items.length > 0, 'synonym or direct search empty');
+assert(synonym.items.some(i => direct.items.some(d => d.id === i.id)), 'lol did not surface laugh-tagged results');
 
 // Exact recall + typo tolerance, derived from rows that definitely exist now.
 const probeRow = db.prepare('SELECT normalized_name FROM items WHERE length(normalized_name)>=6 ORDER BY id DESC LIMIT 1').get();
