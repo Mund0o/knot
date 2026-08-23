@@ -1,10 +1,10 @@
 {
-  "version": "1.1.85",
-  "notes": "Emoji picker refined: section rail with Recents, Favorites, Animated and Discover\nEmoji catalog finalized and bundled into the app — 11.7k animated + 3k static emojis work offline everywhere\nSearch ranking improved so exact names always win",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.85/pair-p2p-1.1.85.tar.gz",
-  "linuxSha256": "9c60e8f5f625624bd3b6673a58d9756d1ec436120f4da08462fd66beea61751f",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.85/Knot-1.1.85.AppImage",
-  "linuxAppImageSha256": "5f0cb893efb32fd6d87fd02168fbe147a561f9497d1e59fa5bad18506dfb3cb0",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.85/Knot.Setup.1.1.85.exe",
-  "winSha256": "d2c1a98121cdc2ded3a56a93ac24155f7fbc50d082e3a5f8093f618356f6448a"
+  "version": "1.1.86",
+  "notes": "Login, device identity and chat history now survive updates and keyring changes on Linux\nEmoji catalog state is clearly reported in the picker\nStorage self-heals to the most portable format after every read",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.86/pair-p2p-1.1.86.tar.gz",
+  "linuxSha256": "9ea42973d8d2bd5ed451e37f996d9167cb34897eac09870fe555a795d749743e",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.86/Knot-1.1.86.AppImage",
+  "linuxAppImageSha256": "f945ed66139ef15820c0ef3c4da07e1d83c7b7d0018f0565bb944de7238f0df1",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.86/Knot.Setup.1.1.86.exe",
+  "winSha256": "330fd49b91ba05683c1481b1ad2753183fafc0bd1fc5a1b04f2909c336b84237"
 }
