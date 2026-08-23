@@ -22,7 +22,19 @@ function stageEmojiCatalog(projectDir) {
   fs.mkdirSync(path.join(stage, 'manifest'), { recursive: true });
   const dbSrc = path.join(srcCatalog, 'manifest', 'catalog.db');
   const dbDst = path.join(stage, 'manifest', 'catalog.db');
-  if (!fs.existsSync(dbSrc)) return; // no catalog yet: packaged app degrades gracefully
+  if (!fs.existsSync(dbSrc)) {
+    // CI checkouts don't carry the gitignored catalog. Fetch the pinned
+    // snapshot release instead of shipping installers without emojis.
+    if (!process.env.CI) return;
+    console.log('[emoji-catalog] fetching pinned snapshot for packaging…');
+    const { execSync } = require('child_process');
+    const tmp = path.join(projectDir, '.emoji-catalog-fetch');
+    fs.mkdirSync(tmp, { recursive: true });
+    execSync(`gh release download catalog-v1 -R ${process.env.GITHUB_REPOSITORY} -p "emoji-catalog.tar.gz" -O "${path.join(tmp, 'catalog.tar.gz')}" --clobber`, { stdio: 'inherit', cwd: projectDir });
+    execSync(`tar -xzf "${path.join(tmp, 'catalog.tar.gz')}" -C "${srcCatalog}"`, { stdio: 'inherit' });
+    fs.rmSync(tmp, { recursive: true, force: true });
+    if (!fs.existsSync(dbSrc)) throw new Error('catalog snapshot did not contain manifest/catalog.db');
+  }
   fs.copyFileSync(dbSrc, dbDst);
   try { // fold any write-ahead log into the staged copy
     const { DatabaseSync } = require('node:sqlite');

@@ -1,10 +1,10 @@
 {
-  "version": "1.1.84",
-  "notes": "Emoji picker redesigned: section rail with Recents, Favorites, Animated stickers and the Emoji.gg catalog\nInstant catalog search with typo tolerance and Animated/Static filters\nHover previews showing creator credits, license and a favorite toggle",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.84/pair-p2p-1.1.84.tar.gz",
-  "linuxSha256": "9a8e5caac814f2114d70bdcad19bdb4fdea54a1e10b3ac718454ef22147061ec",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.84/Knot-1.1.84.AppImage",
-  "linuxAppImageSha256": "ed64a11090a28d26c802f61c4c423b7d0843eca58dc924a3438d61ee65f49180",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.84/Knot.Setup.1.1.84.exe",
-  "winSha256": "38b091ae9f2f9d3b4a1622da25fa1695f373ed822e38d815beadf07f9940f339"
+  "version": "1.1.85",
+  "notes": "Emoji picker refined: section rail with Recents, Favorites, Animated and Discover\nEmoji catalog finalized and bundled into the app — works offline everywhere\nSearch ranking improved so exact names always win",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.85/pair-p2p-1.1.85.tar.gz",
+  "linuxSha256": "9c60e8f5f625624bd3b6673a58d9756d1ec436120f4da08462fd66beea61751f",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.85/Knot-1.1.85.AppImage",
+  "linuxAppImageSha256": "5f0cb893efb32fd6d87fd02168fbe147a561f9497d1e59fa5bad18506dfb3cb0",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.85/Knot.Setup.1.1.85.exe",
+  "winSha256": "d4e2bca5bab9f880535e64a6334601b13c4482287d34364a420d99cc31288de4"
 }
