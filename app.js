@@ -311,8 +311,10 @@ function buildEmojiPicker(){
   const searchRow=document.createElement('div');searchRow.className='emoji-picker-search-row';
   const searchInput=document.createElement('input');searchInput.type='search';searchInput.className='emoji-picker-search';searchInput.placeholder='Search emojis…';searchInput.setAttribute('aria-label','Search emojis');
   searchRow.append(searchInput);
-  const tabs=document.createElement('div');tabs.className='emoji-tabs';
+  const tabs=document.createElement('div');tabs.className='emoji-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Emoji sections');
+  const pagesWrap=document.createElement('div');pagesWrap.className='emoji-pages';
   const body=document.createElement('div');body.className='emoji-body';
+  body.append(tabs,pagesWrap);
   const pageRegistry=[];
   let activePage=null,prefsLoaded=false,catalogAvailable=false;
 
@@ -321,7 +323,7 @@ function buildEmojiPicker(){
   function registerPage(tabLabel,tabTitle,pageBuilder,{onShow=null}={}){
     const tab=document.createElement('button');tab.type='button';tab.className='emoji-tab';tab.textContent=tabLabel;tab.title=tabTitle;tab.setAttribute('aria-label',tabTitle);
     const page=document.createElement('div');page.className='emoji-page hidden';
-    tabs.append(tab);body.append(page);
+    tabs.append(tab);pagesWrap.append(page);
     const entry={tab,page,onShow};
     tab.onclick=()=>activatePage(entry);
     pageRegistry.push(entry);
@@ -466,7 +468,7 @@ function buildEmojiPicker(){
     if(!entries.some(e=>e.isIntersecting)||catalogBusy||catalogCursor===null||!catalogEntry.page.classList.contains('hidden'))return;
     catalogBusy=true;const token=catalogToken;
     appendCatalogBatch(token,false).finally(()=>{if(token===catalogToken)catalogBusy=false});
-  },{root:body,rootMargin:'300px'});
+  },{root:pagesWrap,rootMargin:'300px'});
   catalogSentinelObserver.observe(catalogSentinel);
 
   // --- Hover preview -----------------------------------------------------------------
@@ -528,8 +530,7 @@ function buildEmojiPicker(){
   const searchResultsGrid=document.createElement('div');searchResultsGrid.className='catalog-grid';
   const searchStatusLabel=document.createElement('span');searchStatusLabel.className='catalog-status';
   searchResultsPage.append(searchStatusLabel,searchResultsGrid);
-  body.append(searchResultsPage);
-  const searchEntry={tab:null,page:searchResultsPage,onShow:null};pageRegistry.push(searchEntry);
+  const searchEntry={tab:null,page:searchResultsPage,onShow:null};pageRegistry.push(searchEntry);pagesWrap.append(searchResultsPage);
 
   searchInput.addEventListener('input',()=>{
     clearTimeout(searchDebounce);
@@ -554,7 +555,8 @@ function buildEmojiPicker(){
   });
   searchInput.onkeydown=e=>{if(e.key==='Escape'){searchInput.value='';if(lastBrowsePage)activatePage(lastBrowsePage)}};
 
-  wrap.append(searchRow,tabs,body,hoverCard);
+  const mainRow=document.createElement('div');mainRow.className='emoji-main';mainRow.append(tabs,pagesWrap);
+  wrap.append(searchRow,mainRow,hoverCard);
   document.addEventListener('click',e=>{if(!wrap.contains(e.target)&&e.target!==emojiBtn)wrap.classList.add('hidden')});
 
   // Async prep: preferences + catalog availability decide Recent/Fav/Discover.
@@ -571,7 +573,6 @@ function buildEmojiPicker(){
   })();
   return wrap;
 }
-
 function buildGifPicker(){
   const wrap=document.createElement('div');wrap.className='gif-picker';wrap.classList.add('hidden');
   const tabs=document.createElement('div');tabs.className='gif-picker-tabs';

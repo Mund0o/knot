@@ -739,3 +739,22 @@ body.screen-share-active .server-stage-avatar.speaking{position:relative;z-index
 .license-pill.cc{background:rgba(102,117,255,.16);color:#b9c1ff}
 .license-pill.wtfpl{background:rgba(67,181,129,.15);color:#8fe6b8}
 .license-pill a{margin-left:6px;color:#65b7ff;text-decoration:none}
+
+/* Emoji picker v3: two-pane layout speaking the GIF picker's visual language —
+   vertical section rail on the left, roomy scrollable grid on the right. */
+.emoji-picker{width:min(440px,calc(100vw - 40px));padding:0;border-color:var(--stroke);border-radius:14px;background:var(--surface)}
+.emoji-picker-search-row{padding:10px;border-bottom:1px solid var(--stroke-quiet)}
+.emoji-picker-search{height:36px;font-size:12px;text-align:left;border-radius:9px;background:var(--field)}
+.emoji-main{display:flex;height:360px}
+.emoji-tabs{display:flex;width:48px;flex:0 0 48px;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;border-bottom:0;border-right:1px solid var(--stroke-quiet);overflow-y:auto;scrollbar-width:none}
+.emoji-tabs::-webkit-scrollbar{display:none}
+.emoji-tab{display:grid;width:36px;min-width:36px;min-height:36px;padding:0;place-items:center;border:0;border-radius:9px;background:transparent;color:var(--muted);font-size:18px}
+.emoji-tab:hover,.emoji-tab.active{background:var(--surface-hover);color:#fff}
+.emoji-tab.active{box-shadow:inset 2px 0 0 var(--accent),inset 0 0 0 1px var(--stroke-quiet)}
+.emoji-pages{position:relative;display:flex;flex:1;min-width:0;flex-direction:column}
+.emoji-page{display:flex;min-height:0;flex:1;flex-direction:column;overflow-y:auto;overscroll-behavior:contain}
+.emoji-page.hidden{display:none!important}
+.emoji-page .emoji-grid,.emoji-page .animated-emoji-grid,.emoji-page .catalog-grid{max-height:none;flex:0 0 auto}
+.emoji-page .emoji-category-title{position:sticky;top:0;z-index:1;margin:0;padding:9px 12px 6px;background:var(--surface)}
+.emoji-hover-card img{width:84px;height:84px}
+@media(max-width:570px){.emoji-picker{width:min(400px,calc(100vw - 24px))}.emoji-main{height:320px}.catalog-grid{grid-template-columns:repeat(auto-fill,minmax(50px,1fr))}}
