@@ -1,10 +1,10 @@
 {
-  "version": "1.1.83",
-  "notes": "Fixed a startup crash introduced in 1.1.82 (missing electron protocol import)\nEmoji catalog now resolves from installed-app locations automatically",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.83/pair-p2p-1.1.83.tar.gz",
-  "linuxSha256": "86193170f6935fab698a980fabff7e71d173d8e3a06bdeeaec098b9900b1f405",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.83/Knot-1.1.83.AppImage",
-  "linuxAppImageSha256": "3635953836a6c53f5dfd373a1958f446c3f9fb34b6c9c1bfe7f06a14e5632a80",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.83/Knot.Setup.1.1.83.exe",
-  "winSha256": "ac1ded1816352c75f5e323843e58705111dc1fa086ac3c936d32618010cde674"
+  "version": "1.1.84",
+  "notes": "Emoji picker redesigned: section rail with Recents, Favorites, Animated stickers and the Emoji.gg catalog\nInstant catalog search with typo tolerance and Animated/Static filters\nHover previews showing creator credits, license and a favorite toggle",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.84/pair-p2p-1.1.84.tar.gz",
+  "linuxSha256": "9a8e5caac814f2114d70bdcad19bdb4fdea54a1e10b3ac718454ef22147061ec",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.84/Knot-1.1.84.AppImage",
+  "linuxAppImageSha256": "ed64a11090a28d26c802f61c4c423b7d0843eca58dc924a3438d61ee65f49180",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.84/Knot.Setup.1.1.84.exe",
+  "winSha256": "38b091ae9f2f9d3b4a1622da25fa1695f373ed822e38d815beadf07f9940f339"
 }
