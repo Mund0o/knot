@@ -48,15 +48,15 @@ function open(outputDir) {
     CREATE INDEX IF NOT EXISTS idx_state_status ON crawl_state(status);
     CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE VIRTUAL TABLE IF NOT EXISTS emoji_fts USING fts5(
-      normalized_name, tags, category_name, content='items', content_rowid='id'
+      normalized_name, search_text, content='items', content_rowid='id'
     );
     CREATE TRIGGER IF NOT EXISTS items_ai AFTER INSERT ON items BEGIN
-      INSERT INTO emoji_fts(rowid, normalized_name, tags, category_name)
-      VALUES (new.id, new.normalized_name, new.search_text, '');
+      INSERT INTO emoji_fts(rowid, normalized_name, search_text)
+      VALUES (new.id, new.normalized_name, new.search_text);
     END;
     CREATE TRIGGER IF NOT EXISTS items_ad AFTER DELETE ON items BEGIN
-      INSERT INTO emoji_fts(emoji_fts, rowid, normalized_name, tags, category_name)
-      VALUES ('delete', old.id, old.normalized_name, old.search_text, '');
+      INSERT INTO emoji_fts(emoji_fts, rowid, normalized_name, search_text)
+      VALUES ('delete', old.id, old.normalized_name, old.search_text);
     END;
   `);
   return db;

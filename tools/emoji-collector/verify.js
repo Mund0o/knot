@@ -20,7 +20,7 @@ const rows = db.prepare('SELECT id,name,asset_hash,asset_path,mime,animated FROM
 let verified = 0, animDrift = 0, missing = 0, corrupt = 0, purged = 0;
 for (const row of rows) {
   const abs = path.join(outputDir, row.asset_path);
-  if (!fs.existsSync(abs)) { missing++; console.warn('MISSING:', row.name, row.asset_path); if (args.repair) { db.prepare('DELETE FROM items WHERE id=?').run(row.id); db.prepare("INSERT INTO emoji_fts(emoji_fts,rowid,normalized_name,tags,category_name) VALUES('delete',?,?, '', '')").run(row.id, row.normalized_name || ''); purged++; } continue; }
+  if (!fs.existsSync(abs)) { missing++; console.warn('MISSING:', row.name, row.asset_path); if (args.repair) { db.prepare('DELETE FROM items WHERE id=?').run(row.id); db.prepare("INSERT INTO emoji_fts(emoji_fts,rowid,normalized_name,search_text) VALUES('delete',?,?,?)").run(row.id, row.normalized_name || '', row.search_text || ''); purged++; } continue; }
   const buffer = fs.readFileSync(abs);
   const hash = crypto.createHash('sha256').update(buffer).digest('hex');
   if (hash !== row.asset_hash) { corrupt++; console.warn('HASH MISMATCH:', row.name); if (args.repair) { db.prepare('DELETE FROM items WHERE id=?').run(row.id); purged++; } continue; }
