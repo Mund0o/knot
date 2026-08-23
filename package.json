@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.84",
+  "version": "1.1.85",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -50,7 +50,12 @@
     "ws": "^8.18.3"
   },
   "build": {
-    "extraResources": [{ "from": "dist-emoji-catalog", "to": "emoji-catalog" }],
+    "extraResources": [
+      {
+        "from": "dist-emoji-catalog",
+        "to": "emoji-catalog"
+      }
+    ],
     "asar": true,
     "beforePack": "scripts/before-pack.js",
     "appId": "com.pair.p2p",
