@@ -1,5 +1,5 @@
 const path = require('path');
-const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, safeStorage, protocol } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
@@ -592,13 +592,13 @@ app.on('child-process-gone', (_event, details) => {
 app.whenReady().then(() => {
   // Emoji.gg catalog: indexed local search + content-addressed asset serving.
   // A missing/unbuilt catalog degrades to empty results with zero startup cost.
-  if (emojiCatalog.init()) {
+  if (emojiCatalog.init(app)) {
     protocol.handle('emoji', request => {
       try {
         const match = /^emoji:\/\/([0-9a-f]{2})\/([0-9a-f]{64})\.(gif|png|webp|jpg)$/.exec(request.url);
         if (!match) return new Response(null, { status: 400 });
-        const abs = path.join(emojiCatalog.CATALOG_DIR, 'originals', match[1], `${match[2]}.${match[3]}`);
-        if (!fs.existsSync(abs)) return new Response(null, { status: 404 });
+        const abs = emojiCatalog.resolveAsset(`${match[1]}/${match[2]}.${match[3]}`);
+        if (!abs) return new Response(null, { status: 404 });
         const mime = { gif: 'image/gif', png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg' }[match[3]];
         return new Response(fs.readFileSync(abs), {
           headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=31536000, immutable' },

@@ -6,7 +6,17 @@ const path = require('path');
 const fs = require('fs');
 const { DatabaseSync } = require('node:sqlite');
 
-const CATALOG_DIR = path.join(__dirname, 'emoji-catalog');
+const PREFERRED_DIR = 'emoji-catalog';
+// Resolution order: explicit env override, then the app's userData directory
+// (canonical for installs), then the development folder beside this module.
+function candidateDirs(app) {
+  const list = [];
+  if (process.env.KNOT_EMOJI_CATALOG) list.push(process.env.KNOT_EMOJI_CATALOG);
+  try { if (app?.getPath) list.push(path.join(app.getPath('userData'), PREFERRED_DIR)); } catch {}
+  list.push(path.join(__dirname, PREFERRED_DIR));
+  return [...new Set(list)];
+}
+const CATALOG_DIR = path.join(__dirname, PREFERRED_DIR);
 const SYNONYMS = {
   lol: ['laugh', 'laughing', 'lmao'], cry: ['crying', 'sad', 'tears'],
   mad: ['angry', 'rage'], heart: ['love', 'hearts'], skull: ['dead', 'death'],
@@ -14,16 +24,32 @@ const SYNONYMS = {
   cat: ['kitty', 'kitten'], frog: ['pepe'], dance: ['dancing', 'party'],
 };
 let db = null;
+let activeRoots = [];
 
 function normalizeName(name) { return String(name || '').toLowerCase().replace(/[_\-+.]+/g, ' ').replace(/\s+/g, ' ').trim(); }
 
 function available() { return !!db; }
 
-function init() {
-  const dbPath = path.join(CATALOG_DIR, 'manifest', 'catalog.db');
-  if (!fs.existsSync(dbPath)) return false;
-  try { db = new DatabaseSync(dbPath); } catch (error) { console.warn('[emoji catalog] unavailable:', error.message); db = null; }
-  return !!db;
+// Open whichever catalog database is most recently updated so an installed
+// app automatically follows a collection still running in the dev tree.
+function init(app) {
+  const dirs = candidateDirs(app).filter(dir => fs.existsSync(path.join(dir, 'manifest', 'catalog.db')));
+  if (!dirs.length) { db = null; activeRoots = []; return false; }
+  dirs.sort((a, b) => fs.statSync(path.join(b, 'manifest', 'catalog.db')).mtimeMs - fs.statSync(path.join(a, 'manifest', 'catalog.db')).mtimeMs);
+  try { db = new DatabaseSync(path.join(dirs[0], 'manifest', 'catalog.db')); } catch (error) { console.warn('[emoji catalog] unavailable:', error.message); db = null; return false; }
+  activeRoots = dirs;
+  return true;
+}
+
+function dir() { return activeRoots[0] || CATALOG_DIR; }
+
+function resolveAsset(relPath) {
+  if (!/^[0-9a-f]{2}\/[0-9a-f]{64}\.(gif|png|webp|jpg)$/.test(relPath)) return null;
+  for (const root of activeRoots) {
+    const abs = path.join(root, 'originals', relPath);
+    if (fs.existsSync(abs)) return abs;
+  }
+  return null;
 }
 
 function stats() {
@@ -140,4 +166,4 @@ function attributions() {
     .map(row => ({ ...row, attributionRequired: !!row.attributionRequired }));
 }
 
-module.exports = { CATALOG_DIR, init, available, search, get, attributions, stats, normalizeName };
+module.exports = { CATALOG_DIR, dir, resolveAsset, init, available, search, get, attributions, stats, normalizeName };
