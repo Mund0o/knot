@@ -50,6 +50,7 @@
     "ws": "^8.18.3"
   },
   "build": {
+    "extraResources": [{ "from": "dist-emoji-catalog", "to": "emoji-catalog" }],
     "asar": true,
     "beforePack": "scripts/before-pack.js",
     "appId": "com.pair.p2p",

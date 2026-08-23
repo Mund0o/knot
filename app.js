@@ -340,11 +340,17 @@ function buildEmojiPicker(){
 
   // --- Recent -----------------------------------------------------------------
   const recentGrid=document.createElement('div');recentGrid.className='emoji-grid';
-  registerPage('🕘','Recent',page=>page.append(recentGrid));
+  registerPage('🕘','Recent',page=>{
+    const heading=document.createElement('div');heading.className='emoji-category-title';heading.textContent='Recently used';
+    page.append(heading,recentGrid);
+  });
 
   // --- Favorites ----------------------------------------------------------------
   const favGrid=document.createElement('div');favGrid.className='emoji-grid';
-  registerPage('⭐','Favorites',page=>page.append(favGrid),{onShow:()=>renderFavPage()});
+  registerPage('⭐','Favorites',page=>{
+    const heading=document.createElement('div');heading.className='emoji-category-title';heading.textContent='Favorites';
+    page.append(heading,favGrid);
+  },{onShow:()=>renderFavPage()});
 
   // --- Unicode categories ---------------------------------------------------------
   EMOJI_CATS.forEach((cat,i)=>{

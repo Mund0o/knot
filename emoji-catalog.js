@@ -12,6 +12,7 @@ const PREFERRED_DIR = 'emoji-catalog';
 function candidateDirs(app) {
   const list = [];
   if (process.env.KNOT_EMOJI_CATALOG) list.push(process.env.KNOT_EMOJI_CATALOG);
+  try { if (app?.isPackaged && process.resourcesPath) list.push(path.join(process.resourcesPath, PREFERRED_DIR)); } catch {}
   try { if (app?.getPath) list.push(path.join(app.getPath('userData'), PREFERRED_DIR)); } catch {}
   list.push(path.join(__dirname, PREFERRED_DIR));
   return [...new Set(list)];
@@ -61,21 +62,22 @@ function stats() {
 // beats prefix beats substring beats tag hit; popularity then a stable id as
 // tie-breakers so identical scores never shuffle between keystrokes.
 function scoreRow(row, normQuery, tokens) {
-  let score = 0;
   if (!normQuery) return row.faves || 0;
-  if (row.normalized_name === normQuery) score += 1000;
-  else if (row.normalized_name.startsWith(normQuery)) score += 600;
-  else if (row.normalized_name.includes(normQuery)) score += 300;
+  // Tiers are exclusive: a better tier always outranks any pile of weaker
+  // signals, so an exact name can never lose to a longer name that merely
+  // starts with the query.
   const words = row.normalized_name.split(' ');
+  let base;
+  if (normQuery === row.normalized_name) base = 1000;
+  else if (words.includes(normQuery)) base = 800;
+  else if (row.normalized_name.startsWith(normQuery)) base = 600;
+  else if (words.some(word => word.startsWith(normQuery))) base = 400;
+  else if (row.normalized_name.includes(normQuery)) base = 200;
+  else base = 0;
+  let score = base;
   for (const token of tokens) {
-    if (words.includes(token)) score += 500;
-    else if (words.some(word => word.startsWith(token))) score += 250;
-    if (token.length >= 3 && row.normalized_name.includes(token)) score += 100;
-    const tags = row.search_text && row.search_text !== row.normalized_name ? row.search_text.toLowerCase() : '';
-    if (tags) {
-      if (tags.split(/[^a-z0-9]+/).includes(token)) score += 150;
-      else if (tags.includes(token)) score += 60;
-    }
+    if (token.length >= 3 && words.some(word => word.startsWith(token))) score += 40;
+    if (token.length >= 3 && row.normalized_name.includes(token)) score += 20;
   }
   score += Math.min(50, (row.faves || 0) / 20);
   return score;
