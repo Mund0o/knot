@@ -31,6 +31,7 @@ function stageEmojiCatalog(projectDir) {
     const tmp = path.join(projectDir, '.emoji-catalog-fetch');
     fs.mkdirSync(tmp, { recursive: true });
     execSync(`gh release download catalog-v1 -R ${process.env.GITHUB_REPOSITORY} -p "emoji-catalog.tar.gz" -O "${path.join(tmp, 'catalog.tar.gz')}" --clobber`, { stdio: 'inherit', cwd: projectDir });
+    fs.mkdirSync(path.join(srcCatalog, 'manifest'), { recursive: true });
     execSync(`tar -xzf "${path.join(tmp, 'catalog.tar.gz')}" -C "${srcCatalog}"`, { stdio: 'inherit' });
     fs.rmSync(tmp, { recursive: true, force: true });
     if (!fs.existsSync(dbSrc)) throw new Error('catalog snapshot did not contain manifest/catalog.db');
