@@ -178,7 +178,7 @@ async function processOne(fetcher, url, args, db, counts) {
     const permanent = !!error.permanent;
     db.prepare('UPDATE crawl_state SET status=?,last_error=? WHERE url=?')
       .run(permanent ? 'failed-permanent' : 'failed-temporary', String(error.message).slice(0, 200), url);
-    return { error };
+    return { error, blocked: error instanceof BlockedError || !!error.blocked };
   }
 }
 
@@ -191,7 +191,17 @@ async function main() {
 
   console.log('[Emoji Collector v2 — sitemap crawl]');
   console.log('Discovering sitemap URLs…');
-  const allUrls = await discoverEmojis(fetcher);
+  let allUrls;
+  try { allUrls = await discoverEmojis(fetcher); }
+  catch (error) {
+    if (error instanceof BlockedError || error?.blocked) {
+      console.error(`Emoji.gg blocked collection (${error.message}); stopping without retrying aggressively.`);
+      db.close();
+      process.exitCode = 3;
+      return;
+    }
+    throw error;
+  }
   console.log(`Candidates discovered: ${allUrls.length}`);
 
   const priorState = new Map(db.prepare('SELECT url,status FROM crawl_state').all().map(r => [r.url, r.status]));
@@ -209,8 +219,15 @@ async function main() {
       if (!url) return;
       const result = await processOne(fetcher, url, args, db, counts);
       processed++;
-      if (result.accepted && !result.animated) counts.staticAccepted++;
-      if (result.accepted && result.animated) counts.animated++;
+      if (result.blocked) {
+        blocked = true;
+        console.warn(`\nEmoji.gg blocked collection (${result.error?.message || 'request rejected'}); preserving progress for --resume.`);
+        return;
+      }
+      if (result.accepted) {
+        counts.accepted++;
+        if (result.animated) counts.animated++; else counts.staticAccepted++;
+      }
       else if (result.error && !result.error.permanent) counts.failedTemporary++;
       else if (result.error) counts.failedPermanent++;
       else if (result.assetFail) counts.failedPermanent++;

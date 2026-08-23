@@ -144,7 +144,14 @@ function search({ q = '', type = 'all', cursor = 0, limit = 60 } = {}) {
 function toPublicItem(row) {
   return {
     id: row.external_id, name: row.name, animated: !!row.animated,
-    url: `emoji:///${String(row.asset_hash).slice(0, 2)}/${row.asset_hash}.${row.ext}`,
+    // Keep the prefix as the custom-scheme host. The previous three-slash URL
+    // put it in the path while the protocol handler (and saved-message URL
+    // validator) correctly expected emoji://<prefix>/<hash>.<ext>.
+    url: `emoji://${String(row.asset_hash).slice(0, 2)}/${row.asset_hash}.${row.ext}`,
+    // Used only if a recipient does not have this catalog snapshot locally.
+    // The app prefers the offline emoji:// copy and falls back to this HTTPS
+    // source after a load failure.
+    fallbackUrl: row.original_url,
     license: row.license, author: row.author || '', category: row.category,
     sourcePage: row.source_page, faves: row.faves || 0,
   };
@@ -162,10 +169,8 @@ function get(externalId) {
 
 function attributions() {
   if (!db) return [];
-  return db.prepare(`SELECT external_id AS id, name, author, license, source_page AS sourcePage,
-      animated, attribution_required AS attributionRequired
-    FROM items ORDER BY license ASC, normalized_name ASC LIMIT 2000`).all()
-    .map(row => ({ ...row, attributionRequired: !!row.attributionRequired }));
+  return db.prepare(`SELECT * FROM items ORDER BY license ASC, normalized_name ASC LIMIT 2000`).all()
+    .map(row => ({ ...toPublicItem(row), attributionRequired: !!row.attribution_required }));
 }
 
 module.exports = { CATALOG_DIR, dir, resolveAsset, init, available, search, get, attributions, stats, normalizeName };

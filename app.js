@@ -226,7 +226,7 @@ async function open(o){return new Uint8Array(await crypto.subtle.decrypt({name:'
 async function openBytes(iv,data){return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv:new Uint8Array(iv)},sharedKey,data))}
 function send(o){if(chat?.readyState==='open')chat.send(JSON.stringify(o))}
 function safeExternalUrl(value){try{const u=new URL(value);return u.protocol==='https:'||u.protocol==='http:'?u.href:null}catch{return null}}
-function safePreviewUrl(value){const raw=String(value||'');if(/^emoji:\/\/[0-9a-f]{2}\/[0-9a-f]{64}\.(gif|png|webp|jpg)$/.test(raw))return raw;const url=safeExternalUrl(value);return url?.startsWith('https:')?url:null}
+function safePreviewUrl(value){const raw=String(value||'');if(/^emoji:\/\/(?:\/)?[0-9a-f]{2}\/[0-9a-f]{64}\.(gif|png|webp|jpg)$/.test(raw))return raw;const url=safeExternalUrl(value);return url?.startsWith('https:')?url:null}
 function youtubeVideoId(value){
   try{
     const u=new URL(value),host=u.hostname.toLowerCase().replace(/^www\./,'').replace(/^m\./,'');let id='';
@@ -276,8 +276,8 @@ const TEXT_EMOTICONS=[
   [/:'-?\(/g,'😢'],[/(?:x|X)-?D/g,'😆'],[/(:|=)-?D/g,'😄'],[/(:|=)-?\)/g,'🙂'],[/(:|=)-?\(/g,'🙁'],[/-?;\)/g,'😉'],[/(:|=)-?[pP]/g,'😛'],[/(:|=)-?[oO]/g,'😮'],[/:\//g,'😕'],[/<3/g,'❤️']
 ];
 function convertEmoticons(text){return String(text||'').split(/(\s+)/).map(token=>/^https?:\/\//i.test(token)?token:TEXT_EMOTICONS.reduce((value,[pattern,replacement])=>value.replace(pattern,replacement),token)).join('')}
-function chatPayload(text,gif){return JSON.stringify({t:'message',text:String(text||''),gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,emoji:gif.emoji===true||undefined}:null})}
-function readChatPayload(value){try{const p=JSON.parse(value);if(p?.t!=='message'||typeof p.text!=='string'||p.text.length>16000)return{text:String(value||''),gif:null};const url=typeof p.gif?.url==='string'&&p.gif.url.length<=4096?safePreviewUrl(p.gif.url):null;return{text:p.text,gif:url?{url,thumb:typeof p.gif.thumb==='string'?p.gif.thumb:url,emoji:p.gif.emoji===true}:null}}catch{return{text:String(value||''),gif:null}}}
+function chatPayload(text,gif){const fallbackUrl=safeExternalUrl(gif?.fallbackUrl);return JSON.stringify({t:'message',text:String(text||''),gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,fallbackUrl:fallbackUrl?.startsWith('https:')?fallbackUrl:undefined,emoji:gif.emoji===true||undefined}:null})}
+function readChatPayload(value){try{const p=JSON.parse(value);if(p?.t!=='message'||typeof p.text!=='string'||p.text.length>16000)return{text:String(value||''),gif:null};const url=typeof p.gif?.url==='string'&&p.gif.url.length<=4096?safePreviewUrl(p.gif.url):null;const fallbackUrl=safeExternalUrl(p.gif?.fallbackUrl);return{text:p.text,gif:url?{url,thumb:typeof p.gif.thumb==='string'?p.gif.thumb:url,fallbackUrl:fallbackUrl?.startsWith('https:')?fallbackUrl:null,emoji:p.gif.emoji===true}:null}}catch{return{text:String(value||''),gif:null}}}
 function addMessage(text,mine=false,gif=null,author=null){
   $('.empty')?.remove();
   const el=document.createElement('div');el.className='message '+(mine?'mine':'');
@@ -288,8 +288,8 @@ function addMessage(text,mine=false,gif=null,author=null){
   const header=document.createElement('div');header.className='message-header';const sender=document.createElement('strong');sender.textContent=name;const time=document.createElement('time');const messageTime=Number(author?.time)||Date.now();time.textContent=new Date(messageTime).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});header.append(sender,time);
   const bubble=document.createElement('div');bubble.className='bubble'+(isEmoji?' emoji-only':'');bubble.innerHTML=renderContent(text);if(!text)bubble.hidden=true;
   content.append(header,bubble);
-  if(gif?.url){const attachment=document.createElement('div');attachment.className='gif-attachment-message'+(gif.emoji?' gif-emoji':'');const link=document.createElement('a');link.href=gif.url;link.target='_blank';link.rel='noopener noreferrer';const image=document.createElement('img');image.src=gif.url;image.alt='GIF attachment';image.loading='lazy';image.referrerPolicy='no-referrer';link.append(image);attachment.append(link);if(!mine&&!gif.emoji){const id=gif.url;const star=document.createElement('button');star.type='button';star.className='gif-message-favorite'+(getFavs().some(f=>f.id===id)?' on':'');star.textContent=star.classList.contains('on')?'★':'☆';star.title=star.classList.contains('on')?'Remove from favorites':'Save GIF';star.onclick=()=>{const on=toggleFav(id,gif.url,gif.thumb||gif.url,{id,url:gif.url,thumb:gif.thumb||gif.url,type:'gifs'});star.classList.toggle('on',on);star.textContent=on?'★':'☆';star.title=on?'Remove from favorites':'Save GIF'};attachment.append(star)}content.append(attachment)}
-  el.append(avatar,content);messages.append(el);messages.scrollTop=messages.scrollHeight;recordConversationMessage({text,mine,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,emoji:gif.emoji===true}:null,author:mine?null:{id:author?.id||'',name,image:'',frame:authorFrame},time:messageTime});
+  if(gif?.url){const attachment=document.createElement('div');attachment.className='gif-attachment-message'+(gif.emoji?' gif-emoji':'');const link=document.createElement('a');link.href=gif.fallbackUrl||gif.url;link.target='_blank';link.rel='noopener noreferrer';const image=document.createElement('img');image.src=gif.url;image.alt='GIF attachment';image.loading='lazy';image.referrerPolicy='no-referrer';if(gif.fallbackUrl)image.onerror=()=>{image.onerror=null;image.src=gif.fallbackUrl;link.href=gif.fallbackUrl};link.append(image);attachment.append(link);if(!mine&&!gif.emoji){const id=gif.url;const star=document.createElement('button');star.type='button';star.className='gif-message-favorite'+(getFavs().some(f=>f.id===id)?' on':'');star.textContent=star.classList.contains('on')?'★':'☆';star.title=star.classList.contains('on')?'Remove from favorites':'Save GIF';star.onclick=()=>{const on=toggleFav(id,gif.url,gif.thumb||gif.url,{id,url:gif.url,thumb:gif.thumb||gif.url,type:'gifs'});star.classList.toggle('on',on);star.textContent=on?'★':'☆';star.title=on?'Remove from favorites':'Save GIF'};attachment.append(star)}content.append(attachment)}
+  el.append(avatar,content);messages.append(el);messages.scrollTop=messages.scrollHeight;recordConversationMessage({text,mine,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,fallbackUrl:gif.fallbackUrl||null,emoji:gif.emoji===true}:null,author:mine?null:{id:author?.id||'',name,image:'',frame:authorFrame},time:messageTime});
 }
 // --- Emoji Picker ------------------------------------------------------------
 const EMOJI_CATS=[
@@ -305,7 +305,7 @@ const EMOJI_CATS=[
   {name:'Flags',emojis:['🏳️','🏴','🏁','🚩','🎌','🏴‍☠️','🇺🇳','🇦🇫','🇦🇱','🇩🇿','🇦🇸','🇦🇩','🇦🇴','🇦🇮','🇦🇶','🇦🇬','🇦🇷','🇦🇲','🇦🇼','🇦🇺','🇦🇹','🇦🇿','🇧🇸','🇧🇭','🇧🇩','🇧🇧','🇧🇾','🇧🇪','🇧🇿','🇧🇯','🇧🇲','🇧🇹','🇧🇴','🇧🇦','🇧🇼','🇧🇷','🇧🇳','🇧🇬','🇧🇫','🇧🇮','🇨🇻','🇰🇭','🇨🇲','🇨🇦','🇨🇫','🇹🇩','🇨🇱','🇨🇳','🇨🇴','🇰🇲','🇨🇩','🇨🇬','🇨🇷','🇨🇮','🇭🇷','🇨🇺','🇨🇾','🇨🇿','🇩🇰','🇩🇯','🇩🇲','🇩🇴','🇪🇨','🇪🇬','🇸🇻','🇬🇶','🇪🇷','🇪🇪','🇸🇿','🇪🇹','🇫🇯','🇫🇮','🇫🇷','🇬🇦','🇬🇲','🇬🇪','🇩🇪','🇬🇭','🇬🇷','🇬🇩','🇬🇹','🇬🇳','🇬🇼','🇬🇾','🇭🇹','🇭🇳','🇭🇺','🇮🇸','🇮🇳','🇮🇩','🇮🇷','🇮🇶','🇮🇪','🇮🇱','🇮🇹','🇯🇲','🇯🇵','🇯🇴','🇰🇿','🇰🇪','🇰🇮','🇰🇼','🇰🇬','🇱🇦','🇱🇻','🇱🇧','🇱🇸','🇱🇷','🇱🇾','🇱🇮','🇱🇹','🇱🇺','🇲🇬','🇲🇼','🇲🇾','🇲🇻','🇲🇱','🇲🇹','🇲🇭','🇲🇷','🇲🇺','🇲🇽','🇫🇲','🇲🇩','🇲🇨','🇲🇳','🇲🇪','🇲🇦','🇲🇿','🇲🇲','🇳🇦','🇳🇷','🇳🇵','🇳🇱','🇳🇿','🇳🇮','🇳🇪','🇳🇬','🇰🇵','🇲🇰','🇳🇴','🇴🇲','🇵🇰','🇵🇼','🇵🇸','🇵🇦','🇵🇬','🇵🇾','🇵🇪','🇵🇭','🇵🇱','🇵🇹','🇶🇦','🇷🇴','🇷🇺','🇷🇼','🇰🇳','🇱🇨','🇻🇨','🇼🇸','🇸🇲','🇸🇹','🇸🇦','🇸🇳','🇷🇸','🇸🇨','🇸🇱','🇸🇬','🇸🇰','🇸🇮','🇸🇧','🇸🇴','🇿🇦','🇰🇷','🇸🇸','🇪🇸','🇱🇰','🇸🇩','🇸🇷','🇸🇪','🇨🇭','🇸🇾','🇹🇼','🇹🇯','🇹🇿','🇹🇭','🇹🇱','🇹🇬','🇹🇴','🇹🇹','🇹🇳','🇹🇷','🇹🇲','🇹🇻','🇺🇬','🇺🇦','🇦🇪','🇬🇧','🇺🇸','🇺🇾','🇺🇿','🇻🇺','🇻🇦','🇻🇪','🇻🇳','🇾🇪','🇿🇲','🇿🇼']}
 ];
 let emojiPicker=null,emojiBtn=null,gifPicker=null,gifBtn=null,pendingGif=null,gifAttachment=null;
-function setPendingGif(item){pendingGif=item?.url?{url:item.url,thumb:item.thumb||item.url,analytics:item.analytics||null,emoji:item.emoji===true}:null;if(!gifAttachment)return;gifAttachment.hidden=!pendingGif;if(!pendingGif)return;gifAttachment.querySelector('img').src=pendingGif.thumb;gifAttachment.querySelector('.gif-attachment-name').textContent='1 GIF attached';messageInput.focus()}
+function setPendingGif(item){pendingGif=item?.url?{url:item.url,thumb:item.thumb||item.url,fallbackUrl:item.fallbackUrl||null,analytics:item.analytics||null,emoji:item.emoji===true}:null;if(!gifAttachment)return;gifAttachment.hidden=!pendingGif;if(!pendingGif)return;gifAttachment.querySelector('img').src=pendingGif.thumb;gifAttachment.querySelector('.gif-attachment-name').textContent='1 GIF attached';messageInput.focus()}
 function buildEmojiPicker(){
   const wrap=document.createElement('div');wrap.className='emoji-picker';wrap.classList.add('hidden');
   const searchRow=document.createElement('div');searchRow.className='emoji-picker-search-row';
@@ -332,7 +332,7 @@ function buildEmojiPicker(){
   }
   function activatePage(entry){
     pageRegistry.forEach(p=>p.page.classList.add('hidden'));
-    pageRegistry.forEach(p=>p.tab.classList.remove('active'));
+    pageRegistry.forEach(p=>{ if(p.tab) p.tab.classList.remove('active'); });
     entry.page.classList.remove('hidden');entry.tab.classList.add('active');activePage=entry;
     exitHover();
     if(entry.onShow)entry.onShow();
@@ -417,11 +417,9 @@ function buildEmojiPicker(){
   const catalogGrid=document.createElement('div');catalogGrid.className='catalog-grid';
   const catalogSentinel=document.createElement('div');catalogSentinel.className='catalog-sentinel';
   catalogGrid.append(catalogSentinel);
-  const catPage=document.createElement('div');
-  registerPage('🗂','Discover — Emoji.gg catalog',()=>{},{}); // placeholder replaced below
-  const catalogEntry=pageRegistry[pageRegistry.length-1];
-  pagesWrap.removeChild(catalogEntry.page);
-  catalogEntry.page=catPage;pagesWrap.append(catPage);
+  const catalogEntry=registerPage('🗂','Discover — Emoji.gg catalog',page=>{
+    page.append(catChipRow,catalogGrid);
+  });
   catalogEntry.onShow=()=>{if(catalogAvailable&&!catalogGrid.querySelector('.catalog-tile'))runCatalogQuery()};
 
   let catalogCursor=null,catalogBusy=false,catalogToken=0,catalogQuery='';
@@ -435,9 +433,9 @@ function buildEmojiPicker(){
   function bindCatalogTile(btn,item){
     btn.onclick=event=>{
       if(event.shiftKey){toggleCatalogFavorite(item);paintFavoriteStates();return}
-      setPendingGif({url:item.url,thumb:item.url,analytics:null,emoji:true});
+      setPendingGif({url:item.url,thumb:item.url,fallbackUrl:item.fallbackUrl,analytics:null,emoji:true});
       wrap.classList.add('hidden');
-      recordEmojiUse({t:'cat',id:String(item.id),name:item.name,url:item.url,animated:item.animated});
+      recordEmojiUse({t:'cat',id:String(item.id),name:item.name,url:item.url,fallbackUrl:item.fallbackUrl||null,animated:item.animated});
       messageForm.requestSubmit();
     };
     btn.onmouseenter=()=>showHover(item,btn);
@@ -470,11 +468,11 @@ function buildEmojiPicker(){
     }
     return true;
   }
-  catalogSentinelObserver=new IntersectionObserver(entries=>{
+  const catalogSentinelObserver=new IntersectionObserver(entries=>{
     if(!entries.some(e=>e.isIntersecting)||catalogBusy||catalogCursor===null||!catalogEntry.page.classList.contains('hidden'))return;
     catalogBusy=true;const token=catalogToken;
     appendCatalogBatch(token,false).finally(()=>{if(token===catalogToken)catalogBusy=false});
-  },{root:pagesWrap,rootMargin:'300px'});
+  },{root:catalogEntry.page,rootMargin:'300px'});
   catalogSentinelObserver.observe(catalogSentinel);
 
   // --- Hover preview -----------------------------------------------------------------
@@ -527,7 +525,7 @@ function buildEmojiPicker(){
   }
   function paintFavoriteStates(){
     renderRecentPage();
-    if(activePage&&activePage.tab.getAttribute('aria-label')==='Favorites')renderFavPage();
+    if(activePage?.tab?.getAttribute('aria-label')==='Favorites')renderFavPage();
   }
 
   // --- Search ---------------------------------------------------------------------------
@@ -549,7 +547,7 @@ function buildEmojiPicker(){
     searchDebounce=setTimeout(async()=>{
       const token=++catalogToken;
       pageRegistry.forEach(p=>p.page.classList.add('hidden'));
-      pageRegistry.forEach(p=>p.tab.classList.remove('active'));
+      pageRegistry.forEach(p=>p.tab?.classList.remove('active'));
       searchResultsPage.classList.remove('hidden');activePage=searchEntry;exitHover();
       searchStatusLabel.textContent='Searching…';
       const res=await window.pairEmojiCatalog.search({q,type:catType,cursor:0,limit:120}).catch(()=>null);
@@ -569,7 +567,7 @@ function buildEmojiPicker(){
   (async()=>{
     await loadEmojiPrefs();
     renderRecentPage();
-    catalogAvailable=await window.pairEmojiCatalog.available().catch(()=>false);
+    catalogAvailable=await window.pairEmojiCatalog?.available?.().catch(()=>false);
     if(!catalogAvailable){
       pagesWrap.querySelectorAll('.emoji-page').forEach(p=>p.classList.add('hidden'));
       tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));
@@ -671,7 +669,7 @@ function toggleCatalogFavorite(item){
   if(!Array.isArray(catalogFavorites))catalogFavorites=[];
   const id=String(item.id),i=catalogFavorites.findIndex(f=>String(f.id)===id);
   if(i>-1)catalogFavorites.splice(i,1);
-  else catalogFavorites.push({id:String(item.id),name:item.name,url:item.url,animated:item.animated,license:item.license});
+  else catalogFavorites.push({id:String(item.id),name:item.name,url:item.url,fallbackUrl:item.fallbackUrl||null,animated:item.animated,license:item.license});
   if(catalogFavorites.length>200)catalogFavorites.length=200;
   ssSet('catalogFavorites',JSON.stringify(catalogFavorites));
   return i===-1;
@@ -801,7 +799,7 @@ function stopWatchingRemoteShare(){
 function receiveDirectMessage(message,peerIdOverride=''){
   const peerId=peerIdOverride||dmPeerId||dmCallPeerId||activePeerId,key=peerId?'dm:'+peerId:'';
   if(peerId)markDmUnread(peerId,message);
-  const friend=directoryUser(peerId),entry={text:message.text,mine:false,gif:message.gif?.url?{url:message.gif.url,thumb:message.gif.thumb||message.gif.url,emoji:message.gif.emoji===true}:null,author:{id:peerId,name:friend?.name||'Friend',image:'',frame:normalizeFrame(friend?.frame)},time:Date.now()};
+  const friend=directoryUser(peerId),entry={text:message.text,mine:false,gif:message.gif?.url?{url:message.gif.url,thumb:message.gif.thumb||message.gif.url,fallbackUrl:message.gif.fallbackUrl||null,emoji:message.gif.emoji===true}:null,author:{id:peerId,name:friend?.name||'Friend',image:'',frame:normalizeFrame(friend?.frame)},time:Date.now()};
   if(!key||activeConversationKey===key){addMessage(message.text,false,message.gif,{id:peerId,name:friend?.name||'Friend',image:friend?.image||'',frame:normalizeFrame(friend?.frame)});return}
   storeConversationEntry(key,entry);
 }
@@ -1235,14 +1233,11 @@ openSettingsTab=function(name){
       const statsEl=$('#emojiCatalogStats'),list=$('#emojiAttributions');
       if(!statsEl||!list)return;
       if(!window.pairEmojiCatalog){statsEl.textContent='Local emoji catalog is not installed. Run npm run emoji:collect to build it.';return}
-      const res=await window.pairEmojiCatalog.search({q:'',cursor:0,limit:2000}).catch(()=>null);
-      if(!res||!res.total){statsEl.textContent='Local emoji catalog is empty. Run npm run emoji:collect to build it.';return}
-      const details=await Promise.all(res.items.map(item=>window.pairEmojiCatalog.get(item.id).catch(()=>null)));
-      statsEl.textContent=res.total.toLocaleString()+' emojis mirrored locally from Emoji.gg — animated '+res.items.filter(i=>i.animated).length+'+ — creators credited below.';
+      const details=await window.pairEmojiCatalog.attributions().catch(()=>null);
+      if(!details?.length){statsEl.textContent='Local emoji catalog is empty. Run npm run emoji:collect to build it.';return}
+      statsEl.textContent='Showing creator and license details for '+details.length.toLocaleString()+' locally mirrored Emoji.gg emojis.';
       const frag=document.createDocumentFragment();
-      for(const item of res.items){
-        const detail=item&&item.sourcePage?item:details.find(d=>d&&String(d.id)===String(item.id));
-        if(!detail)continue;
+      for(const detail of details){
         const row=document.createElement('div');row.className='emoji-attribution-row';
         const img=document.createElement('img');img.src=detail.url;img.loading='lazy';img.alt='';
         const copy=document.createElement('div');copy.className='min-w-0';
@@ -1719,7 +1714,7 @@ const baseSelectServerChannel=selectServerChannel;
 selectServerChannel=async function(serverId,channelId){await baseSelectServerChannel(serverId,channelId);const channel=activeChannel();if(channel?.type==='text'){$('#chatModePill').textContent='ENCRYPTED LIVE';setServerStatus('Encrypted live text · Cloudflare stores no messages',true);const server=activeServer();if(server&&!await serverTextKey(server)){await requestServerTextKey(server);pairHint.textContent='Waiting for an online member to share this server’s secure text key.'}}};
 function serverOnlineMembers(serverId=joinedVoiceServerId||activeServerId){const server=directorySnapshot.servers?.find(item=>item.id===serverId);return server?(server.members||[]).filter(id=>id!==directoryUserId&&directorySnapshot.members?.[id]?.online):[]}
 function serverHistoryKey(serverId,channelId){return 'server:'+serverId+':'+channelId}
-function normalizeServerHistoryEntry(raw,server,forcedAuthorId=''){if(!raw||typeof raw.text!=='string'||raw.text.length>16000)return null;const authorId=forcedAuthorId||raw.author?.id||(raw.mine?directoryUserId:'');if(!/^[a-f0-9]{32}$/.test(authorId)||!server?.members?.includes(authorId))return null;const gifUrl=typeof raw.gif?.url==='string'&&raw.gif.url.length<=4096?safePreviewUrl(raw.gif.url):null,time=Number(raw.time),id=/^[a-f0-9]{32}$/.test(raw.id||'')?raw.id:clientHex(16),member=directoryUser(authorId);return{id,text:raw.text,gif:gifUrl?{url:gifUrl,thumb:typeof raw.gif.thumb==='string'&&safePreviewUrl(raw.gif.thumb)?raw.gif.thumb:gifUrl,emoji:raw.gif?.emoji===true}:null,author:{id:authorId,name:normalizeProfileName(member?.name||raw.author?.name||raw.name,'Server member'),image:'',frame:normalizeFrame(member?.frame||raw.author?.frame||raw.frame)},time:Number.isFinite(time)&&time>0&&time<Date.now()+86400000?time:Date.now(),mine:authorId===directoryUserId}}
+function normalizeServerHistoryEntry(raw,server,forcedAuthorId=''){if(!raw||typeof raw.text!=='string'||raw.text.length>16000)return null;const authorId=forcedAuthorId||raw.author?.id||(raw.mine?directoryUserId:'');if(!/^[a-f0-9]{32}$/.test(authorId)||!server?.members?.includes(authorId))return null;const gifUrl=typeof raw.gif?.url==='string'&&raw.gif.url.length<=4096?safePreviewUrl(raw.gif.url):null,fallbackUrl=safeExternalUrl(raw.gif?.fallbackUrl),time=Number(raw.time),id=/^[a-f0-9]{32}$/.test(raw.id||'')?raw.id:clientHex(16),member=directoryUser(authorId);return{id,text:raw.text,gif:gifUrl?{url:gifUrl,thumb:typeof raw.gif.thumb==='string'&&safePreviewUrl(raw.gif.thumb)?raw.gif.thumb:gifUrl,fallbackUrl:fallbackUrl?.startsWith('https:')?fallbackUrl:null,emoji:raw.gif?.emoji===true}:null,author:{id:authorId,name:normalizeProfileName(member?.name||raw.author?.name||raw.name,'Server member'),image:'',frame:normalizeFrame(member?.frame||raw.author?.frame||raw.frame)},time:Number.isFinite(time)&&time>0&&time<Date.now()+86400000?time:Date.now(),mine:authorId===directoryUserId}}
 function storeServerHistory(serverId,channelId,entries,{render=true}={}){const server=directorySnapshot.servers?.find(item=>item.id===serverId),channel=server?.channels?.find(item=>item.id===channelId);if(!server||!channel)return 0;const key=serverHistoryKey(serverId,channelId),list=conversationHistories[key]||(conversationHistories[key]=[]),ids=new Set(list.map(item=>item.id).filter(Boolean));let added=0;for(const raw of entries||[]){const entry=normalizeServerHistoryEntry(raw,server);if(!entry||ids.has(entry.id))continue;ids.add(entry.id);list.push(entry);added++}if(!added)return 0;list.sort((a,b)=>(Number(a.time)||0)-(Number(b.time)||0)||String(a.id||'').localeCompare(String(b.id||'')));if(list.length>500)list.splice(0,list.length-500);scheduleHistorySave();if(render&&activeConversationKey===key)openConversation(key);return added}
 function localServerHistory(server,channel){const key=serverHistoryKey(server.id,channel.id),list=conversationHistories[key]||(conversationHistories[key]=[]);let changed=false;const normalized=[];for(const raw of list){const entry=normalizeServerHistoryEntry(raw,server);if(!entry)continue;if(!raw.id||!raw.author?.id||raw.mine!==entry.mine)changed=true;normalized.push(entry)}if(changed||normalized.length!==list.length){conversationHistories[key]=normalized.slice(-500);scheduleHistorySave()}return conversationHistories[key]}
 function sendServerHistory(channel,serverId){const server=directorySnapshot.servers?.find(item=>item.id===serverId);if(!server||channel.readyState!=='open')return;for(const serverChannel of server.channels||[]){const entries=localServerHistory(server,serverChannel);let batch=[],size=0;const flush=()=>{if(!batch.length||channel.readyState!=='open')return;channel.send(JSON.stringify({t:'server-history',serverId,channelId:serverChannel.id,entries:batch}));batch=[];size=0};for(const entry of entries){const wire={id:entry.id,text:entry.text,gif:entry.gif,author:entry.author,time:entry.time},bytes=JSON.stringify(wire).length;if(batch.length&&size+bytes>32000)flush();batch.push(wire);size+=bytes}flush()}}
@@ -1862,7 +1857,7 @@ async function attachServerScreenAudio(gen,stream){
 async function stopServerScreenShare(){const stream=serverScreenStream,nativeSession=serverNativeScreenSession;serverScreenGen++;serverScreenStarting=false;if(!stream&&!nativeSession)return;serverScreenStream=null;serverNativeScreenSession=null;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);serverNativeLocalPlayer?.destroy();serverNativeLocalPlayer=null;serverNativeScreenInit=null;if(serverNativeScreenAudioStream){serverNativeScreenAudioStream.getTracks().forEach(track=>track.stop());serverNativeScreenAudioStream=null}stream?.getTracks().forEach(track=>track.stop());cleanupNativeScreenCapture();const preview=$('#serverVoiceScreenPreview');preview.pause();preview.srcObject=null;try{preview.removeAttribute('src');preview.load()}catch{}preview.hidden=true;serverFocusedShareId=serverFocusedShareId===directoryUserId?'':serverFocusedShareId;const stops=[];for(const [peerId,state] of serverPeers){if(state.nativeSendChannel){if(state.nativeSendChannel.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-end',serverId:state.context.serverId}))}catch{}try{state.nativeSendChannel.close()}catch{}state.nativeSendChannel=null}await setServerScreenAudioTrack(state,null).catch(()=>{});for(const sender of state.screenSenders||[])try{state.pc.removeTrack(sender)}catch{}state.screenSenders=[];stops.push(renegotiateServerPeer(peerId,state))}await Promise.allSettled(stops);renderServerVoiceUI()}
 async function joinServerVoice(){const channel=activeChannel();if(!channel||channel.type!=='voice')return callStatus.textContent='Select a voice channel first.';if(dmCallOngoing()){await endCall(false);applyRemoteCallState(false);dmCallPeerId=''}if(serverVoiceStream&&joinedVoiceChannelId===channel.id)return;stopServerVoice();try{const raw=await navigator.mediaDevices.getUserMedia(microphoneConstraints());serverVoiceRawStream=raw;serverVoiceStream=raw;if(noiseReductionMode!=='off')try{const pipeline=noiseReductionMode==='deepfilter'?await createDeepFilterMicrophone(raw):await createRnnoiseMicrophone(raw);serverVoiceNoisePipeline=pipeline;serverVoiceStream=pipeline.stream;activeNoiseProcessor=noiseReductionMode}catch(error){const name=noiseReductionMode==='deepfilter'?'DeepFilterNet3':'RNNoise';deviceHint.textContent=name+' could not start, so Knot is using your raw microphone in this voice channel.';console.warn(name+' server microphone filter unavailable:',error)}serverVoiceMuted=false;serverVoiceStream.getAudioTracks().forEach(track=>track.enabled=true);joinedVoiceServerId=activeServerId;joinedVoiceChannelId=channel.id;joinedVoiceAt=Date.now();monitorSpeaking('server:'+directoryUserId,serverVoiceStream);directorySend({type:'voice-state',serverId:joinedVoiceServerId,channelId:channel.id,joined:true});callStatus.textContent='Joined '+channel.name;callStatus.className='call-status live';renderCallButtonState('end','Leave voice','Leave voice channel');renderChannels();syncServerMesh()}catch(error){callStatus.textContent='Could not join voice: '+(error?.message||error);callStatus.className='call-status';syncServerMesh();renderServerVoiceUI()}}
 function stopServerVoice(){abortScreenSharePicker();serverScreenGen++;serverScreenStarting=false;stopSpeakingMonitor('server:'+directoryUserId);const serverId=joinedVoiceServerId||activeServerId,channelId=joinedVoiceChannelId;if(channelId&&serverId)directorySend({type:'voice-state',serverId,channelId,joined:false});if(serverScreenSharing())stopServerScreenShare();const streams=[serverVoiceStream,serverVoiceRawStream];serverVoiceStream=null;serverVoiceRawStream=null;for(const stream of new Set(streams.filter(Boolean)))try{stream.getTracks().forEach(track=>track.stop())}catch{}stopVoiceNoisePipeline(serverVoiceNoisePipeline);serverVoiceNoisePipeline=null;joinedVoiceServerId='';joinedVoiceChannelId='';joinedVoiceAt=0;serverVoiceMuted=false;serverFocusedShareId='';serverSuppressedShares.clear();clearInterval(voiceElapsedTimer);closeServerMesh();renderServerVoiceUI();if(activeServerId){const voice=activeChannel()?.type==='voice';renderCallButtonState('start',voice?'Join voice':'Start call',voice?'Join voice channel':'Start voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderChannels()}}
-async function sendServerMessage(text,gif){const server=activeServer(),channel=activeChannel();if(!server||!channel||channel.type!=='text')return false;let group=await serverTextKey(server,{create:true});if(!group){await requestServerTextKey(server);pairHint.textContent='Waiting for an online member to share this server’s secure text key.';return false}const id=clientHex(16),time=Date.now(),payload=chatPayload(text,gif),cipher=await sealRelay(group.key,JSON.stringify({payload,time}),relayAad('server',id,directoryUserId,'',server.id,channel.id));if(!directorySend({type:'relay-text',scope:'server',id,serverId:server.id,channelId:channel.id,cipher})){pairHint.textContent='Encrypted text relay is offline.';return false}const entry=normalizeServerHistoryEntry({id,text,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url}:null,author:{id:directoryUserId,name:profileName,image:'',frame:normalizeFrame(profileFrame)},time},server,directoryUserId);if(entry)storeServerHistory(server.id,channel.id,[entry]);return true}
+async function sendServerMessage(text,gif){const server=activeServer(),channel=activeChannel();if(!server||!channel||channel.type!=='text')return false;let group=await serverTextKey(server,{create:true});if(!group){await requestServerTextKey(server);pairHint.textContent='Waiting for an online member to share this server’s secure text key.';return false}const id=clientHex(16),time=Date.now(),payload=chatPayload(text,gif),cipher=await sealRelay(group.key,JSON.stringify({payload,time}),relayAad('server',id,directoryUserId,'',server.id,channel.id));if(!directorySend({type:'relay-text',scope:'server',id,serverId:server.id,channelId:channel.id,cipher})){pairHint.textContent='Encrypted text relay is offline.';return false}const entry=normalizeServerHistoryEntry({id,text,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,fallbackUrl:gif.fallbackUrl||null}:null,author:{id:directoryUserId,name:profileName,image:'',frame:normalizeFrame(profileFrame)},time},server,directoryUserId);if(entry)storeServerHistory(server.id,channel.id,[entry]);return true}
 function profileSnapshotSignature(snapshot){const profiles=[...(snapshot?.friends||[]),...Object.values(snapshot?.members||{})];return JSON.stringify(profiles.map(user=>[user.id,user.name,user.image,user.frame]))}
 function updateDirectorySnapshot(snapshot){
   const previous=directorySnapshot,profilesChanged=profileSnapshotSignature(previous)!==profileSnapshotSignature(snapshot),oldServerIds=new Set((previous.servers||[]).map(server=>server.id)),newServer=pendingServerSelection?(snapshot.servers||[]).find(server=>!oldServerIds.has(server.id)):null,pendingServer=pendingChannelCreation?(snapshot.servers||[]).find(server=>server.id===pendingChannelCreation.serverId):null,newChannel=pendingServer?.channels?.find(channel=>channel.type===pendingChannelCreation?.type&&!pendingChannelCreation.beforeIds.has(channel.id));

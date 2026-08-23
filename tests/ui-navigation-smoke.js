@@ -13,6 +13,11 @@ const updaterSource = fs.readFileSync(path.join(__dirname, '..', 'updater.js'), 
 const workletSource = fs.readFileSync(path.join(__dirname, '..', 'screen-audio-worklet.js'), 'utf8');
 const workerSource = fs.readFileSync(path.join(__dirname, '..', 'worker', 'index.js'), 'utf8');
 const packageSource = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
+if (!rendererSource.includes("const catalogEntry=registerPage('🗂'") || !rendererSource.includes('page.append(catChipRow,catalogGrid)')
+  || !rendererSource.includes('root:catalogEntry.page') || !rendererSource.includes('p.tab?.classList.remove')
+  || !mainSource.includes("'emojiRecents', 'catalogFavorites'") || !preloadSource.includes('attributions: () => ipcRenderer.invoke')) {
+  throw new Error('Emoji.gg Discover is not mounted, paginated, or persisted through the app bridge');
+}
 if (mainSource.includes("appendSwitch('render-node-override'") || mainSource.includes("appendSwitch('use-angle'")) {
   throw new Error('Linux screen sharing still forces a portal-incompatible GPU target');
 }

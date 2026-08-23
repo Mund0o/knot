@@ -1,10 +1,10 @@
 {
-  "version": "1.1.86",
-  "notes": "Login, device identity and chat history now survive updates and keyring changes on Linux\nEmoji catalog state is clearly reported in the picker\nStorage self-heals to the most portable format after every read",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.86/pair-p2p-1.1.86.tar.gz",
-  "linuxSha256": "9ea42973d8d2bd5ed451e37f996d9167cb34897eac09870fe555a795d749743e",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.86/Knot-1.1.86.AppImage",
-  "linuxAppImageSha256": "f945ed66139ef15820c0ef3c4da07e1d83c7b7d0018f0565bb944de7238f0df1",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.86/Knot.Setup.1.1.86.exe",
-  "winSha256": "330fd49b91ba05683c1481b1ad2753183fafc0bd1fc5a1b04f2909c336b84237"
+  "version": "1.1.87",
+  "notes": "Emoji.gg Discover catalog with searchable static and animated emoji\nEmoji favorites and recents now persist\nEmoji attachments render reliably and include a recipient fallback\nScraper is resumable and handles rate limits safely",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.87/pair-p2p-1.1.87.tar.gz",
+  "linuxSha256": "1ed613fc1006380504cdf33df81416f8a905295c674f8c5af7879226e8219082",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.87/Knot-1.1.87.AppImage",
+  "linuxAppImageSha256": "a72a7507c81c74488326d743b18f5b17df88599f05717ecb0c3c69a48b0be76a",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.87/Knot.Setup.1.1.87.exe",
+  "winSha256": "f2843b4dded04d8cce116161fc1f136d94ff89ae1e6ff461e196f469012ba78f"
 }

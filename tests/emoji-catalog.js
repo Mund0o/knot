@@ -118,6 +118,10 @@ const dupHashes = db.prepare('SELECT COUNT(*) c FROM (SELECT asset_hash FROM ite
 assert.strictEqual(dupHashes, 0, 'duplicate assets stored');
 const detail = catalog.get(res.items[0].id);
 assert(detail && detail.sourcePage && detail.originalUrl && typeof detail.attributionRequired === 'boolean', 'detail payload incomplete');
+const attribution = catalog.attributions()[0];
+assert(attribution && /^emoji:\/\/[0-9a-f]{2}\/[0-9a-f]{64}\.(gif|png|webp|jpg)$/.test(attribution.url)
+  && attribution.sourcePage && typeof attribution.attributionRequired === 'boolean', 'attribution payload is not renderable');
+assert(/^https:\/\//.test(res.items[0].fallbackUrl || ''), 'catalog item has no recipient fallback URL');
 console.log(`PASS catalog integrity: ${stats.total} items (${stats.animated} animated), licenses/attribution/dedupe clean`);
 
 // Favorites persistence format.

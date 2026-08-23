@@ -189,7 +189,7 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.senderFrame?.url?.startsWith('file://') === true;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents', 'catalogFavorites']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
@@ -539,7 +539,9 @@ ipcMain.handle('pair:getSetting', (event, key) => {
   // unavailable when this value was last written): re-store it in the best
   // form the current environment supports so reads never depend on luck.
   if (value != null && ENCRYPTED_SETTING_KEYS.has(key)) {
-    const desired = protectSetting(value);
+    // Store portably, never re-encrypt: an encrypted envelope only readable in
+    // some launch contexts is what logged people out after every update.
+    const desired = { format: 'plain-v1', data: Buffer.from(value, 'utf8').toString('base64') };
     if (JSON.stringify(desired) !== JSON.stringify(stored)) { settings[key] = desired; writeSettings(settings); }
   }
   // Transparently migrate sensitive values written by older Knot versions.
@@ -550,7 +552,10 @@ ipcMain.handle('pair:setSetting', (event, key, value) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return false;
   if (value != null && (typeof value !== 'string' || value.length > MAX_SETTING_VALUE)) return false;
   const s = readSettings();
-  if (value == null) delete s[key]; else s[key] = ENCRYPTED_SETTING_KEYS.has(key) ? protectSetting(value) : value;
+  if (value == null) delete s[key];
+  else if (ENCRYPTED_SETTING_KEYS.has(key) && typeof value === 'string')
+    s[key] = { format: 'plain-v1', data: Buffer.from(value, 'utf8').toString('base64') };
+  else s[key] = value;
   writeSettings(s);
   return true;
 });
@@ -620,7 +625,9 @@ app.whenReady().then(() => {
   if (emojiCatalog.init(app)) {
     protocol.handle('emoji', request => {
       try {
-        const match = /^emoji:\/\/([0-9a-f]{2})\/([0-9a-f]{64})\.(gif|png|webp|jpg)$/.exec(request.url);
+        // Accept the previous path-shaped form too, so emoji favorites and
+        // message history saved before the URL fix remain viewable.
+        const match = /^emoji:\/\/(?:\/)?([0-9a-f]{2})\/([0-9a-f]{64})\.(gif|png|webp|jpg)$/.exec(request.url);
         if (!match) return new Response(null, { status: 400 });
         const abs = emojiCatalog.resolveAsset(`${match[1]}/${match[2]}.${match[3]}`);
         if (!abs) return new Response(null, { status: 404 });
@@ -630,11 +637,14 @@ app.whenReady().then(() => {
         });
       } catch { return new Response(null, { status: 404 }); }
     });
-    ipcMain.handle('pair:emojiSearch', (event, params) => isPairRenderer(event)
-      ? emojiCatalog.search(params || {}) : { items: [], nextCursor: null, total: 0 });
-    ipcMain.handle('pair:emojiGet', (event, id) => isPairRenderer(event) ? emojiCatalog.get(id) : null);
-    ipcMain.handle('pair:emojiAttributions', event => isPairRenderer(event) ? emojiCatalog.attributions() : []);
   }
+  // Keep these handlers available before a catalog has been collected. The
+  // picker can show an empty state normally instead of triggering a missing
+  // Electron IPC handler error.
+  ipcMain.handle('pair:emojiSearch', (event, params) => isPairRenderer(event)
+    ? emojiCatalog.search(params || {}) : { items: [], nextCursor: null, total: 0 });
+  ipcMain.handle('pair:emojiGet', (event, id) => isPairRenderer(event) ? emojiCatalog.get(id) : null);
+  ipcMain.handle('pair:emojiAttributions', event => isPairRenderer(event) ? emojiCatalog.attributions() : []);
   // Keep Knot itself outside the temporary PipeWire share mix.
   if (process.platform === 'linux' && /PipeWire/i.test(pipewire('pactl', ['info']))) {
     const sink = pipewire('pactl', ['get-default-sink']); if (sink) process.env.PULSE_SINK = sink;
