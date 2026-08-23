@@ -414,8 +414,8 @@ function buildEmojiPicker(){
   const catPage=document.createElement('div');
   registerPage('🗂','Discover — Emoji.gg catalog',()=>{},{}); // placeholder replaced below
   const catalogEntry=pageRegistry[pageRegistry.length-1];
-  body.removeChild(catalogEntry.page);
-  catalogEntry.page=catPage;body.append(catPage);
+  pagesWrap.removeChild(catalogEntry.page);
+  catalogEntry.page=catPage;pagesWrap.append(catPage);
   catalogEntry.onShow=()=>{if(catalogAvailable&&!catalogGrid.querySelector('.catalog-tile'))runCatalogQuery()};
 
   let catalogCursor=null,catalogBusy=false,catalogToken=0,catalogQuery='';
@@ -565,15 +565,14 @@ function buildEmojiPicker(){
     renderRecentPage();
     catalogAvailable=await window.pairEmojiCatalog.available().catch(()=>false);
     if(!catalogAvailable){
-      tabs.removeChild(catalogEntry.tab);body.removeChild(catalogEntry.page);
+      tabs.removeChild(catalogEntry.tab);pagesWrap.removeChild(catalogEntry.page);
       const i=pageRegistry.indexOf(catalogEntry);if(i>-1)pageRegistry.splice(i,1);
       searchRow.style.display='none';
     }
     activatePage(pageRegistry[2]); // default: first unicode category
   })();
   return wrap;
-}
-function buildGifPicker(){
+}function buildGifPicker(){
   const wrap=document.createElement('div');wrap.className='gif-picker';wrap.classList.add('hidden');
   const tabs=document.createElement('div');tabs.className='gif-picker-tabs';
   const gifTab=document.createElement('button');gifTab.type='button';gifTab.className='gif-picker-tab active';gifTab.textContent='GIFs';
