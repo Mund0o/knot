@@ -26,7 +26,7 @@ const MIN_BYTES = 64;
 
 function parseArgs(argv) {
   const args = { target: Infinity, resume: false, dryRun: false, metadataOnly: false, animatedOnly: false,
-    concurrency: 4, delay: 300, output: path.resolve(__dirname, '..', '..', 'emoji-catalog'), limit: 0 };
+    concurrency: 4, delay: 300, output: path.resolve(__dirname, '..', '..', 'emoji-catalog'), limit: 0, staticCap: null };
   for (let i = 2; i < argv.length; i++) {
     const key = argv[i].replace(/^--/, '');
     const next = () => argv[++i];
@@ -36,6 +36,7 @@ function parseArgs(argv) {
       case 'dry-run': args.dryRun = true; break;
       case 'metadata-only': args.metadataOnly = true; break;
       case 'animated-only': args.animatedOnly = true; break;
+      case 'static-cap': args.staticCap = Math.max(0, parseInt(next(), 10)); break;
       case 'concurrency': args.concurrency = Math.min(8, Math.max(1, parseInt(next(), 10) || 4)); break;
       case 'delay': args.delay = Math.max(0, parseInt(next(), 10) || 300); break;
       case 'output': args.output = path.resolve(next()); break;
@@ -138,6 +139,13 @@ async function processOne(fetcher, url, args, db, counts) {
       counts.skippedLicense++;
       return { ok: false, skip: true };
     }
+    if (!animated && args.staticCap !== null && counts.staticAccepted >= args.staticCap) {
+      // Budget spent: erase the checkpoint so a future run treats this page as
+      // untouched instead of permanently skipping potentially wanted content.
+      db.prepare('DELETE FROM crawl_state WHERE url=?').run(url);
+      counts.cappedStatic++;
+      return { ok: true, capped: true };
+    }
     const hash = crypto.createHash('sha256').update(buffer).digest('hex');
     const dup = db.prepare('SELECT id FROM items WHERE asset_hash=?').get(hash);
     if (dup) {
@@ -193,7 +201,7 @@ async function main() {
   if (args.target !== Infinity) queue = queue.slice(0, Math.max(0, args.target));
   const total = queue.length;
 
-  const counts = { accepted: 0, duplicate: 0, skippedLicense: 0, failedTemporary: 0, failedPermanent: 0, metadata: 0, animated: 0 };
+  const counts = { accepted: 0, duplicate: 0, skippedLicense: 0, failedTemporary: 0, failedPermanent: 0, metadata: 0, animated: 0, staticAccepted: 0, cappedStatic: 0 };
   let processed = 0, blocked = false;
   const worker = async () => {
     while (!blocked && queue.length) {
@@ -201,6 +209,7 @@ async function main() {
       if (!url) return;
       const result = await processOne(fetcher, url, args, db, counts);
       processed++;
+      if (result.accepted && !result.animated) counts.staticAccepted++;
       if (result.accepted && result.animated) counts.animated++;
       else if (result.error && !result.error.permanent) counts.failedTemporary++;
       else if (result.error) counts.failedPermanent++;
@@ -209,7 +218,7 @@ async function main() {
       else if (result.duplicate) {} // already counted in processOne
       else if (result.ok) counts.accepted++;
       if (processed % 25 === 0 || processed === total)
-        process.stdout.write(`\rProcessed ${processed}/${total} · accepted ${counts.accepted + counts.metadata} · anim ${counts.animated} · dupe ${counts.duplicate} · licSkip ${counts.skippedLicense} · fail ${counts.failedTemporary + counts.failedPermanent}   `);
+        process.stdout.write(`\rProcessed ${processed}/${total} · accepted ${counts.accepted} (+${counts.staticAccepted} static / ${counts.animated} anim) · dupe ${counts.duplicate} · capped ${counts.cappedStatic} · fail ${counts.failedTemporary + counts.failedPermanent}   `);
       await new Promise(resolve => setTimeout(resolve, args.delay));
     }
   };

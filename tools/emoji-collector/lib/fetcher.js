@@ -18,7 +18,7 @@ function createFetcher({ userAgent, maxRetries = 4, timeoutMs = 30000 } = {}) {
       }
       try {
         const response = await fetch(url, {
-          headers: { 'User-Agent': userAgent, Accept: 'application/json,image/*;q=0.9,*/*;q=0.5', 'Accept-Encoding': 'gzip, br' },
+          headers: { 'User-Agent': userAgent, Accept: 'application/json,image/*;q=0.9,*/*;q=0.5', 'Accept-Encoding': 'gzip, br', Referer: 'https://emoji.gg/' },
           redirect: 'follow',
           signal: AbortSignal.timeout(timeoutMs),
         });
