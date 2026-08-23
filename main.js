@@ -506,17 +506,42 @@ function readSettings() {
 function writeSettings(obj) {
   try { fs.writeFileSync(sp(), JSON.stringify(obj), { encoding: 'utf8', mode: 0o600 }); fs.chmodSync(sp(), 0o600); } catch {}
 }
+// Secrets must survive binary updates and keyring availability flips. When the
+// OS cannot provide real encryption right now, store a portable plain-v1
+// envelope instead of ciphertext a later environment could never decrypt;
+// reads accept both formats and heal older entries opportunistically.
+const PLAIN_V1 = 'plain-v1';
 function protectSetting(value) {
   if (typeof value !== 'string') return value;
-  try { return { format: 'safeStorage-v1', data: safeStorage.encryptString(value).toString('base64') }; } catch { return value; }
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return { format: 'safeStorage-v1', data: safeStorage.encryptString(value).toString('base64') };
+    }
+  } catch {}
+  return { format: PLAIN_V1, data: Buffer.from(value, 'utf8').toString('base64') };
 }
 function revealSetting(value) {
-  if (!value || typeof value !== 'object' || value.format !== 'safeStorage-v1' || typeof value.data !== 'string') return value;
-  try { return safeStorage.decryptString(Buffer.from(value.data, 'base64')); } catch { return undefined; }
+  if (value == null) return undefined;
+  if (typeof value === 'string') return value; // legacy raw plaintext from very old builds
+  if (value.format === PLAIN_V1 && typeof value.data === 'string') {
+    try { return Buffer.from(value.data, 'base64').toString('utf8'); } catch { return undefined; }
+  }
+  if (value.format === 'safeStorage-v1' && typeof value.data === 'string') {
+    try { return safeStorage.decryptString(Buffer.from(value.data, 'base64')); } catch { return undefined; }
+  }
+  return undefined;
 }
 ipcMain.handle('pair:getSetting', (event, key) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return undefined;
-  const settings = readSettings(), stored = settings[key], value = revealSetting(stored);
+  const settings = readSettings(), stored = settings[key];
+  const value = revealSetting(stored);
+  // Heal format drift after a successful reveal (e.g. the keyring was
+  // unavailable when this value was last written): re-store it in the best
+  // form the current environment supports so reads never depend on luck.
+  if (value != null && ENCRYPTED_SETTING_KEYS.has(key)) {
+    const desired = protectSetting(value);
+    if (JSON.stringify(desired) !== JSON.stringify(stored)) { settings[key] = desired; writeSettings(settings); }
+  }
   // Transparently migrate sensitive values written by older Knot versions.
   if (ENCRYPTED_SETTING_KEYS.has(key) && typeof stored === 'string' && typeof value === 'string') { settings[key] = protectSetting(value); writeSettings(settings); }
   return value;

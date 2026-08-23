@@ -571,8 +571,12 @@ function buildEmojiPicker(){
     renderRecentPage();
     catalogAvailable=await window.pairEmojiCatalog.available().catch(()=>false);
     if(!catalogAvailable){
-      tabs.removeChild(catalogEntry.tab);pagesWrap.removeChild(catalogEntry.page);
-      const i=pageRegistry.indexOf(catalogEntry);if(i>-1)pageRegistry.splice(i,1);
+      pagesWrap.querySelectorAll('.emoji-page').forEach(p=>p.classList.add('hidden'));
+      tabs.querySelectorAll('.emoji-tab').forEach(t=>t.classList.remove('active'));
+      catalogEntry.page.classList.remove('hidden');catalogEntry.tab.classList.add('active');
+      const msg=document.createElement('p');msg.className='social-empty';msg.style.padding='30px 16px';
+      msg.textContent='The local emoji catalog is not installed on this device yet. Run npm run emoji:collect to build it — unicode categories and animated stickers still work.';
+      catalogEntry.page.append(msg);
       searchRow.style.display='none';
     }
     activatePage(pageRegistry[2]); // default: first unicode category
