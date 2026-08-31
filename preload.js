@@ -1,4 +1,34 @@
 const { contextBridge, ipcRenderer } = require('electron');
+// Sandboxed Electron preloads only expose a small allowlist of CommonJS
+// modules. Use Chromium's Web Crypto implementation so the bridge nonce stays
+// unpredictable without depending on Node's unavailable `crypto` module.
+const bridgeDocumentBytes = new Uint8Array(16);
+globalThis.crypto.getRandomValues(bridgeDocumentBytes);
+const bridgeDocumentId = Array.from(bridgeDocumentBytes, byte => byte.toString(16).padStart(2, '0')).join('');
+const MAX_FILE_SIZE = 200 * 1024 ** 3;
+const MAX_FILE_IPC_CHUNK = 8 * 1024 * 1024;
+const validTransferId = value => Number.isSafeInteger(value) && value > 0;
+const validFileSize = value => Number.isSafeInteger(value) && value >= 0 && value <= MAX_FILE_SIZE;
+const validDirectPort = value => Number.isInteger(value) && value >= 1024 && value <= 65535;
+const validDirectId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+const validDirectToken = value => typeof value === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(value);
+const validDirectHost = value => typeof value === 'string' && value.length >= 2 && value.length <= 64 && /^[0-9a-f:.]+$/i.test(value);
+const validBinaryChunk = value => {
+  try { return (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) && Number.isSafeInteger(value.byteLength) && value.byteLength > 0 && value.byteLength <= MAX_FILE_IPC_CHUNK; }
+  catch { return false; }
+};
+const validDirectKey = value => validBinaryChunk(value) && value.byteLength === 32;
+const directConnectOptions = value => {
+  const timeout = value && typeof value === 'object' && typeof value.timeout === 'number' && Number.isFinite(value.timeout)
+    ? Math.max(1000, Math.min(10000, Math.floor(value.timeout)))
+    : null;
+  return timeout === null ? {} : { timeout };
+};
+
+// Main records this unpredictable value as the one live preload document for
+// the BrowserWindow. A same-URL reload otherwise leaves async IPC unable to
+// distinguish the dead document from the new one.
+ipcRenderer.send('pair:bridgeReady', bridgeDocumentId);
 
 function turnServersFromEnvironment() {
   try {
@@ -24,28 +54,58 @@ function turnServersFromEnvironment() {
 // four methods are exposed, and each round-trips to main.js over IPC.
 contextBridge.exposeInMainWorld('pairSave', {
   // Pops a Save As dialog, opens the write stream. Resolves { ok, path } or { ok: false } on cancel.
-  start: name => ipcRenderer.invoke('pair:saveStart', name),
+  start: (id, name, size) => validTransferId(id) && typeof name === 'string' && name.length > 0 && name.length <= 255 && validFileSize(size)
+    ? ipcRenderer.invoke('pair:saveStart', bridgeDocumentId, id, name, size)
+    : Promise.resolve({ ok: false, error: 'Invalid file offer' }),
   // Writes one chunk; resolves only once the OS accepts it (or 'drain' fires).
-  write: buf => ipcRenderer.invoke('pair:saveWrite', buf),
+  write: (id, buf) => validTransferId(id) && validBinaryChunk(buf)
+    ? ipcRenderer.invoke('pair:saveWrite', bridgeDocumentId, id, buf)
+    : Promise.reject(new Error('Invalid file chunk')),
   // Flushes and closes the stream; resolves on 'finish'.
-  end: () => ipcRenderer.invoke('pair:saveEnd'),
+  end: (id, size) => validTransferId(id) && validFileSize(size)
+    ? ipcRenderer.invoke('pair:saveEnd', bridgeDocumentId, id, size)
+    : Promise.reject(new Error('Invalid file completion')),
   // Aborts and discards the current stream.
-  cancel: () => ipcRenderer.invoke('pair:saveCancel')
+  cancel: id => validTransferId(id) ? ipcRenderer.invoke('pair:saveCancel', bridgeDocumentId, id) : Promise.resolve(false)
 });
 
 // The native TCP file lane is deliberately narrow: the sandboxed renderer can
 // exchange authenticated encrypted frames, but cannot open arbitrary sockets.
 contextBridge.exposeInMainWorld('pairDirectFile', {
-  listen: port => ipcRenderer.invoke('pair:directFileListen', port),
-  register: (token, key) => ipcRenderer.invoke('pair:directFileRegister', token, key),
-  connect: (host, port, token, key, options) => ipcRenderer.invoke('pair:directFileConnect', host, port, token, key, options),
-  send: (id, data) => ipcRenderer.invoke('pair:directFileSend', id, data),
-  close: id => ipcRenderer.send('pair:directFileClose', id),
+  listen: port => validDirectPort(port)
+    ? ipcRenderer.invoke('pair:directFileListen', bridgeDocumentId, port)
+    : Promise.resolve({ ok: false, error: 'Choose a port from 1024 through 65535.' }),
+  register: (token, key) => validDirectToken(token) && validDirectKey(key)
+    ? ipcRenderer.invoke('pair:directFileRegister', bridgeDocumentId, token, key)
+    : Promise.resolve(false),
+  connect: (host, port, token, key, options) => validDirectHost(host) && validDirectPort(port) && validDirectToken(token) && validDirectKey(key)
+    ? ipcRenderer.invoke('pair:directFileConnect', bridgeDocumentId, host, port, token, key, directConnectOptions(options))
+    : Promise.reject(new Error('Invalid direct-file connection')),
+  send: (id, data) => validDirectId(id) && validBinaryChunk(data)
+    ? ipcRenderer.invoke('pair:directFileSend', bridgeDocumentId, id, data)
+    : Promise.reject(new Error('Invalid direct-file frame')),
+  close: id => validDirectId(id) ? (ipcRenderer.send('pair:directFileClose', bridgeDocumentId, id), true) : false,
+  reset: () => ipcRenderer.invoke('pair:directFileReset', bridgeDocumentId),
   // Release the receiver-side flow-control window once a frame has been
   // consumed, so a slow disk pauses the TCP lane instead of growing memory.
-  ack: (id, bytes) => ipcRenderer.send('pair:directFileAck', id, bytes),
-  onFrame: cb => { const listener = (_event, id, data) => cb?.(id, data); ipcRenderer.on('pair:directFileFrame', listener); return () => ipcRenderer.removeListener('pair:directFileFrame', listener); },
-  onClose: cb => { const listener = (_event, id) => cb?.(id); ipcRenderer.on('pair:directFileClose', listener); return () => ipcRenderer.removeListener('pair:directFileClose', listener); }
+  ack: (id, bytes) => validDirectId(id) && Number.isSafeInteger(bytes) && bytes > 0 && bytes <= MAX_FILE_IPC_CHUNK
+    ? (ipcRenderer.send('pair:directFileAck', bridgeDocumentId, id, bytes), true)
+    : false,
+  onOpen: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, documentId, id, token) => { if(documentId===bridgeDocumentId&&validDirectId(id)&&validDirectToken(token))cb(id,token) };
+    ipcRenderer.on('pair:directFileOpen', listener);return () => ipcRenderer.removeListener('pair:directFileOpen', listener);
+  },
+  onFrame: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, documentId, id, data) => { if(documentId===bridgeDocumentId&&validDirectId(id)&&validBinaryChunk(data))cb(id,data) };
+    ipcRenderer.on('pair:directFileFrame', listener);return () => ipcRenderer.removeListener('pair:directFileFrame', listener);
+  },
+  onClose: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, documentId, id) => { if(documentId===bridgeDocumentId&&validDirectId(id))cb(id) };
+    ipcRenderer.on('pair:directFileClose', listener);return () => ipcRenderer.removeListener('pair:directFileClose', listener);
+  }
 });
 
 // Settings persistence bridge for the sandboxed renderer. Falls through to
@@ -77,6 +137,10 @@ contextBridge.exposeInMainWorld('pairUpdates', {
 // Read-only environment info exposed to the sandboxed renderer.
 contextBridge.exposeInMainWorld('pairEnv', {
   platform: process.platform,
+  // main.js overwrites this environment value with app.getVersion() before
+  // constructing the sandboxed renderer. Requiring package.json from a
+  // sandboxed preload is not supported by Electron.
+  version: String(process.env.KNOT_APP_VERSION || ''),
   primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
   // Linux selection is handled by desktopCapturer inside the display-media
   // request so the PipeWire portal source is consumed before it can expire.
@@ -90,7 +154,13 @@ contextBridge.exposeInMainWorld('pairEnv', {
   stopLinuxShareAudio: () => ipcRenderer.send('pair:stopLinuxShareAudio'),
   onLinuxShareAudio: cb => {
     if (typeof cb !== 'function') return () => {};
-    const listener = (_event, samples) => cb(samples);
+    const listener = (_event, samples, metadata) => {
+      try { cb(samples, metadata || null); }
+      finally {
+        const sequence = Number(metadata?.sequence);
+        if (Number.isInteger(sequence) && sequence > 0) ipcRenderer.send('pair:linuxShareAudioAck', sequence);
+      }
+    };
     ipcRenderer.on('pair:linuxShareAudio', listener);
     return () => ipcRenderer.removeListener('pair:linuxShareAudio', listener);
   },
@@ -156,10 +226,10 @@ contextBridge.exposeInMainWorld('pairEmojiCatalog', {
 // Pull-based GPU AV1 bridge: renderer and data-channel backpressure naturally
 // pause reads instead of allowing encoded video to accumulate without bounds.
 contextBridge.exposeInMainWorld('pairNativeScreen', {
-  info: () => ipcRenderer.invoke('pair:nativeScreenInfo'),
-  start: options => ipcRenderer.invoke('pair:startNativeScreen', options),
-  read: id => ipcRenderer.invoke('pair:readNativeScreen', id),
-  stop: id => ipcRenderer.send('pair:stopNativeScreen', id),
+  info: () => ipcRenderer.invoke('pair:nativeScreenInfo', bridgeDocumentId),
+  start: options => ipcRenderer.invoke('pair:startNativeScreen', bridgeDocumentId, options),
+  read: id => ipcRenderer.invoke('pair:readNativeScreen', bridgeDocumentId, id),
+  stop: id => ipcRenderer.send('pair:stopNativeScreen', bridgeDocumentId, id),
   onError: cb => {
     if (typeof cb !== 'function') return () => {};
     const listener = (_event, message) => cb(String(message || 'Native screen capture failed'));

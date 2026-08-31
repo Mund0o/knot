@@ -1,19 +1,34 @@
 # Knot
 
 Knot is a small-group P2P communication app with saved friends, live presence,
-direct messages, and servers containing text and voice channels. It uses WebRTC
-data channels and media tracks for content transport. Direct messages also use
-Web Crypto ECDH + AES-GCM on top of WebRTC's DTLS encryption.
+direct and group DMs, and servers containing text and voice channels. It uses
+WebRTC data channels and media tracks for content transport. Direct and group
+messages use Web Crypto ECDH + AES-GCM on top of authenticated WSS transport;
+calls use WebRTC's DTLS-SRTP encryption.
 
 Cloudflare supplies an encrypted text mailbox, presence, and WebRTC setup.
 Opening a DM or text channel does not create a peer connection: text is
-encrypted on-device; offline DM ciphertext is held for up to 30 days in a
-bounded mailbox and deleted after the recipient decrypts and acknowledges it.
+encrypted on-device; offline direct- and group-DM ciphertext is held for up to
+30 days in a bounded mailbox and deleted separately for each recipient after
+their device decrypts and acknowledges it.
 Cloudflare never receives the message keys or readable text. Calls, screen shares, and files create direct WebRTC
 connections only when used. Screen shares appear beside their owners and open
 into a single focused viewer; use a stream's context menu to stop watching
 without making the stream undiscoverable. Fullscreen expands the selected share
 stage, not the entire Knot interface.
+
+## Group direct messages
+
+Choose **New group DM** from Direct Messages, or open a friend's DM and choose
+**Create group** to carry that friend into a new conversation. A group contains
+3–10 people. Existing members can add their own friends, and leaving transfers
+ownership when needed.
+
+Group text is end-to-end encrypted with an epoch-bound key that rotates after
+membership changes. Each recipient gets an independent opaque offline envelope.
+Group calls form an on-demand WebRTC mesh only among members currently joined to
+the group's voice room. If a two-person call is active while its DM is converted
+to a group, Knot moves both call participants into the new group call.
 
 ## Run as a PC app
 
@@ -72,9 +87,15 @@ not changed. Chromium shares prefer broadly hardware-accelerated codecs and
 retain retransmission/FEC support under a user-controlled bitrate ceiling.
 
 Native AV1 keeps 3840×2160 capture at 60 fps while targeting about 9.8 Mbps so
-fine motion has more detail. Its low-priority, unordered, one-retransmit
+fine motion has more detail. NVENC uses spatial adaptive quantization without
+lookahead so visible block edges receive better allocation without buffering
+future frames, while strict GOP rate control contains scene-change bursts.
+Native capture follows changing content instead of
+manufacturing duplicate frames when a heavy game misses a deadline, and emits
+each encoded frame as its own live WebM cluster instead of an eight-frame burst.
+Its low-priority, unordered, one-retransmit
 transport uses a 1 MiB segment-aware admission budget, drops stale deltas, and
-recovers at quarter-second keyframes. Mic audio remains high
+recovers at 150 ms keyframes. Mic audio remains high
 priority. Congestion stays on efficient AV1; only a decoder failure or
 incompatible client switches that viewer to a bandwidth-capped compatibility
 codec without changing the chosen resolution.
@@ -93,8 +114,9 @@ is disabled in this mode. On Linux systems with both integrated and discrete
 graphics, Knot excludes the integrated render node, pins Chromium and VA-API to
 the main discrete card, and uses NVENC on NVIDIA or VA-API on AMD for its native
 GPU-only AV1 screen route. The 4K60 route measures segment-arrival-to-presentation
-latency and enforces a 100 ms steady-state p95 target with sustained-failure
-hysteresis. If a Linux driver advertises AV1 decoding but rejects or silently
+latency, targets 100 ms on WebCodecs, and caps the MediaSource safety path at
+150 ms without faster-than-display playback. If a Linux driver advertises AV1
+decoding but rejects or silently
 stalls on the stream, Knot retries with CPU decode as the necessary compatibility
 fallback while capture and encode remain on the discrete GPU. Decoded frames feed
 a generated video track directly into Chromium's compositor instead of copying
@@ -161,9 +183,9 @@ stores authenticated device identity, friend relationships, presence, server
 membership, server pictures, and text/voice channel metadata. `PairRoom`
 coordinates ephemeral two-person WebRTC setup. The Worker rejects binary frames
 and handles only authenticated, opaque client-encrypted text and group-key
-envelopes. Direct-message ciphertext uses a bounded 256-message/8 MiB mailbox
-with a 30-day TTL and is removed after recipient acknowledgement; server text
-and group-key envelopes remain live-only. It never relays files, video, or screen
+envelopes. Direct- and group-DM ciphertext uses a bounded 256-message/8 MiB
+mailbox per recipient with a 30-day TTL and is removed after recipient
+acknowledgement; server text and group-key envelopes remain live-only. It never relays files, video, or screen
 shares. After three failed direct attempts, it can optionally issue short-lived
 Cloudflare TURN credentials for a deliberately low-bitrate audio-only call.
 
@@ -183,7 +205,7 @@ rendezvous room is created only for direct media/files.
 Server text uses the encrypted live relay, while voice channels form direct
 peer meshes among currently online members. Conversation history stays in each
 desktop app's local settings file; Cloudflare temporarily stores only unreadable
-offline DM ciphertext.
+offline direct- and group-DM ciphertext.
 Direct DMs also use this rule: text opens immediately without a WebRTC peer;
 the app tries direct P2P three times only after a call or file is requested.
 

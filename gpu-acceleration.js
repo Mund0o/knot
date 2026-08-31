@@ -25,7 +25,7 @@ function gpuAccelerationPolicy({ platform = process.platform, gpu = null, waylan
   const disableFeatures = [];
 
   if (platform === 'linux') {
-    if (!gpu || gpu.integrated) return null;
+    if (!gpu) return null;
     switches.set('hardware-video-device-path', gpu.renderNode);
     // Chromium's Linux encoder feature is opt-in. Decode is enabled in builds
     // with VA-API, but keeping it explicit prevents a field trial from moving a

@@ -121,12 +121,11 @@ assert(detail && detail.sourcePage && detail.originalUrl && typeof detail.attrib
 const attribution = catalog.attributions()[0];
 assert(attribution && /^emoji:\/\/[0-9a-f]{2}\/[0-9a-f]{64}\.(gif|png|webp|jpg)$/.test(attribution.url)
   && attribution.sourcePage && typeof attribution.attributionRequired === 'boolean', 'attribution payload is not renderable');
+const requiredAttributionCount = db.prepare('SELECT COUNT(*) c FROM items WHERE attribution_required=1').get().c;
+const attributions = catalog.attributions();
+assert.strictEqual(attributions.length, requiredAttributionCount, 'required creator credits were truncated');
+assert(attributions.every(item => item.attributionRequired && item.license === 'CC-BY-4.0'), 'attribution list includes an unrequired or unsupported license');
 assert(/^https:\/\//.test(res.items[0].fallbackUrl || ''), 'catalog item has no recipient fallback URL');
 console.log(`PASS catalog integrity: ${stats.total} items (${stats.animated} animated), licenses/attribution/dedupe clean`);
-
-// Favorites persistence format.
-const sampleFav = { id: '999999', name: 'roundtrip', url: 'emoji:///ab/' + 'a'.repeat(64) + '.gif', animated: false };
-JSON.parse(JSON.stringify(sampleFav));
-console.log('PASS favorites persistence shape serializable');
 
 console.log('ALL EMOJI-CATALOG CHECKS PASSED');

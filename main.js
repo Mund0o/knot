@@ -1,17 +1,30 @@
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, safeStorage, protocol } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
 const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
+const { SettingsStore } = require('./settings-store');
+const { FORMAT: LOCAL_SETTINGS_FORMAT, LocalSettingsCipher } = require('./settings-crypto');
+const { SaveStreamManager, safeSuggestedFileName } = require('./save-streams');
 const nodeNet = require('net');
 const crypto = require('crypto');
-const { execFile, execFileSync, spawn } = require('child_process');
+const { Worker } = require('worker_threads');
+const { execFile, spawn } = require('child_process');
 const APP_ICON = path.join(__dirname, 'build', 'icon.png');
+const PAIR_RENDERER_URL = pathToFileURL(path.join(__dirname, 'index.html')).href;
 const emojiCatalog = require('./emoji-catalog');
 
 app.setName('Knot');
+const singleInstance = app.requestSingleInstanceLock();
+if (!singleInstance) app.quit();
+app.on('second-instance', () => {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  if (mainWin.isMinimized()) mainWin.restore();
+  mainWin.show();mainWin.focus();
+});
 
 // The locally collected emoji catalog serves content-addressed, immutable
 // assets over its own scheme so sandboxed renderer pages can reference them
@@ -25,15 +38,42 @@ let pendingSource = null;
 let pendingSources = [];
 let activeShareSourceId = null;
 let linuxShareAudio = null;
+let linuxShareAudioStart = null, linuxShareAudioStopping = null, linuxShareAudioGeneration = 0;
+const LINUX_AUDIO_PACKET_BYTES = 48000 * .02 * 2 * 4;
+const LINUX_AUDIO_MAX_INFLIGHT = 3;
+const LINUX_AUDIO_MAX_BUFFER_BYTES = LINUX_AUDIO_PACKET_BYTES * 6;
 let nativeScreenService = null;
 let selectedPrimaryGpu = null;
+let emojiWorker = null, emojiWorkerSequence = 0;
+const emojiWorkerPending = new Map();
+function stopEmojiWorker(error = new Error('Emoji catalog worker stopped')) {
+  const worker = emojiWorker;emojiWorker = null;
+  for (const pending of emojiWorkerPending.values()) { clearTimeout(pending.timer);pending.reject(error); }
+  emojiWorkerPending.clear();
+  return worker?.terminate?.();
+}
+function startEmojiWorker(root) {
+  void stopEmojiWorker();
+  const worker = new Worker(path.join(__dirname, 'emoji-catalog-worker.js'), { workerData: { root } });emojiWorker = worker;
+  worker.on('message', message => {
+    const pending = emojiWorkerPending.get(Number(message?.id));if(!pending)return;emojiWorkerPending.delete(Number(message.id));clearTimeout(pending.timer);message.error?pending.reject(new Error(message.error)):pending.resolve(message.value);
+  });
+  worker.on('error', error => { if(emojiWorker===worker)void stopEmojiWorker(error); });
+  worker.on('exit', code => { if(emojiWorker===worker)void stopEmojiWorker(new Error(`Emoji catalog worker exited with code ${code}`)); });
+}
+function ensureEmojiWorker() { if (!emojiWorker && emojiCatalog.available()) startEmojiWorker(emojiCatalog.dir());return emojiWorker; }
+function emojiWorkerRequest(worker, method, args) {
+  const id=++emojiWorkerSequence;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{emojiWorkerPending.delete(id);reject(new Error('Emoji catalog request timed out'))},5000);emojiWorkerPending.set(id,{resolve,reject,timer});try{worker.postMessage({id,method,args})}catch(error){clearTimeout(timer);emojiWorkerPending.delete(id);reject(error)}});
+}
+function emojiWorkerCall(method, ...args) {
+  const worker=ensureEmojiWorker();if(!worker)return Promise.resolve().then(()=>emojiCatalog[method](...args));
+  return emojiWorkerRequest(worker,method,args).catch(error=>{console.warn('[emoji catalog] worker request failed:',error?.message||error);if(emojiWorker===worker)void stopEmojiWorker(error);const retry=ensureEmojiWorker();return retry&&retry!==worker?emojiWorkerRequest(retry,method,args):method==='search'?{items:[],nextCursor:null,total:0}:method==='attributions'?[]:null});
+}
 // NVIDIA Broadcast/NVBroadcast can expose a virtual audio/render surface that
 // contains a monitored microphone. It must stay out of both the window picker
 // and the Linux PipeWire share route, otherwise a local voice echo is possible.
 function isNvidiaBroadcastLabel(...values) { return values.some(value => /(?:nvidia[\s._-]*broadcast|nvbroadcast)/i.test(String(value || ''))); }
 function isExcludedShareSource(source) { return isNvidiaBroadcastLabel(source?.name); }
-function pipewire(command, args) { try { return execFileSync(command, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return ''; } }
-function pipewireOk(command, args) { try { execFileSync(command, args, { stdio: 'ignore' }); return true; } catch { return false; } }
 function pipewireAsync(command, args) { return new Promise(resolve => execFile(command, args, { encoding: 'utf8', timeout: 2500, maxBuffer: 4*1024*1024 }, (error, stdout) => resolve(error ? '' : String(stdout || '').trim()))); }
 function pipewireOkAsync(command, args) { return new Promise(resolve => execFile(command, args, { timeout: 2500 }, error => resolve(!error))); }
 function pairProcessTree(output) {
@@ -85,14 +125,60 @@ function scheduleLinuxDesktopAudioRoute(state, delay = 80) {
   }, routeDelay);
 }
 function startLinuxShareAudio(webContents) {
-  if (process.platform !== 'linux') return null;
-  if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source };
-  if (!/PipeWire/i.test(pipewire('pactl', ['info']))) return null;
-  const original = pipewire('pactl', ['get-default-sink']);
+  if (process.platform !== 'linux') return Promise.resolve(null);
+  // A rapid Stop -> Share must not create a second module-null-sink with the
+  // same process-scoped name while the previous route is still restoring and
+  // unloading. Retry only after that retirement has fully settled.
+  if (linuxShareAudioStopping) return linuxShareAudioStopping.then(()=>startLinuxShareAudio(webContents));
+  if (linuxShareAudio) return Promise.resolve({ label: linuxShareAudio.label, source: linuxShareAudio.source });
+  if (linuxShareAudioStart) return linuxShareAudioStart;
+  const generation=linuxShareAudioGeneration;
+  linuxShareAudioStart=startLinuxShareAudioInner(webContents,generation).finally(()=>{linuxShareAudioStart=null});
+  return linuxShareAudioStart;
+}
+function trimLinuxShareAudio(state, targetBytes = LINUX_AUDIO_MAX_BUFFER_BYTES) {
+  let discard = Math.max(0, state.pcmBytes - targetBytes);
+  while (discard > 0 && state.pcmChunks.length) {
+    const head = state.pcmChunks[0], take = Math.min(discard, head.byteLength);
+    if (take === head.byteLength) state.pcmChunks.shift();
+    else state.pcmChunks[0] = head.subarray(take);
+    state.pcmBytes -= take;discard -= take;
+  }
+}
+function flushLinuxShareAudio(state) {
+  if (linuxShareAudio !== state || !state.webContents || state.webContents.isDestroyed()) return;
+  const now = Date.now();
+  if (state.pcmInflight.size >= LINUX_AUDIO_MAX_INFLIGHT && state.pcmOldestInflightAt && now - state.pcmOldestInflightAt > 500) {
+    // The renderer may have crashed or stalled after accepting an IPC message.
+    // Drop stale accounting and audio, then probe it with current sound only.
+    state.pcmInflight.clear();state.pcmOldestInflightAt = 0;
+    trimLinuxShareAudio(state, LINUX_AUDIO_PACKET_BYTES * 4);
+  }
+  while (state.pcmInflight.size < LINUX_AUDIO_MAX_INFLIGHT && state.pcmBytes >= LINUX_AUDIO_PACKET_BYTES) {
+    const packet = Buffer.allocUnsafe(LINUX_AUDIO_PACKET_BYTES);let offset = 0;
+    while (offset < packet.byteLength) {
+      const head = state.pcmChunks[0], take = Math.min(head.byteLength, packet.byteLength - offset);
+      head.copy(packet, offset, 0, take);offset += take;state.pcmBytes -= take;
+      if (take === head.byteLength) state.pcmChunks.shift();
+      else state.pcmChunks[0] = head.subarray(take);
+    }
+    const sequence = state.pcmNextSequence++;
+    const samples = packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength);
+    try {
+      state.webContents.send('pair:linuxShareAudio', samples, { sequence, capturedAt: now });
+      state.pcmInflight.add(sequence);
+      if (!state.pcmOldestInflightAt) state.pcmOldestInflightAt = now;
+    } catch { break; }
+  }
+}
+async function startLinuxShareAudioInner(webContents,generation) {
+  if (!/PipeWire/i.test(await pipewireAsync('pactl', ['info']))||generation!==linuxShareAudioGeneration) return null;
+  const original = await pipewireAsync('pactl', ['get-default-sink']);
   if (!original) return null;
   const sink = `pair_share_${process.pid}`;
-  const module = pipewire('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Knot_Share_Audio']);
+  const module = await pipewireAsync('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Knot_Share_Audio']);
   if (!module) return null;
+  if(generation!==linuxShareAudioGeneration){await pipewireAsync('pactl',['unload-module',module]);return null}
   // Move selected desktop streams to the private share sink, then loop that
   // monitor back once to the normal speakers. The previous combine-sink design
   // fanned every stream into two sinks; PipeWire could exhaust its playback
@@ -111,7 +197,7 @@ function startLinuxShareAudio(webContents) {
   // Do not redirect real desktop audio until the new monitor and loopback have
   // settled. This costs only a fraction of a second of initial share audio and
   // prevents the full-volume startup burst reported on PipeWire systems.
-  const state = { original, sink, module, loop: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, watch: null, audits: [], routeTimer: null, loopTimer: null, routeRunning: false, routeAgain: false, routeReadyAt: Date.now() + 650, discardUntil: Date.now() + 250, pcmChunks: [], pcmBytes: 0 };
+  const state = { original, sink, module, loop: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, loopTimer: null, routeRunning: false, routeAgain: false, routeReadyAt: Date.now() + 650, discardUntil: Date.now() + 250, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1 };
   linuxShareAudio = state;
   const failCaptureRoute = message => {
     if (linuxShareAudio !== state) return;
@@ -126,11 +212,12 @@ function startLinuxShareAudio(webContents) {
   // buffer into the real output at full volume; created against a quiet,
   // running monitor it starts silently. Failure here ends the audio route so
   // desktop sound is never stranded in the private share sink.
-  state.loopTimer = setTimeout(() => {
+  state.loopTimer = setTimeout(async () => {
     state.loopTimer = null;
     if (linuxShareAudio !== state) return;
-    state.loop = pipewire('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${original}`, 'latency_msec=40']);
-    if (!state.loop) failCaptureRoute('Could not create the Knot Share Audio loopback');
+    const loop = await pipewireAsync('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${original}`, 'latency_msec=40']);
+    if(linuxShareAudio!==state){if(loop)await pipewireAsync('pactl',['unload-module',loop]);return}
+    state.loop=loop;if (!state.loop) failCaptureRoute('Could not create the Knot Share Audio loopback');
   }, 600);
   capture.stdout.on('data', chunk => {
     if (linuxShareAudio !== state || !webContents || webContents.isDestroyed()) return;
@@ -139,15 +226,11 @@ function startLinuxShareAudio(webContents) {
     // i.e. a full-scale blast for the peer. Drop this bounded startup window.
     if (Date.now() < state.discardUntil) return;
     state.pcmChunks.push(chunk);state.pcmBytes += chunk.byteLength;
-    // One 20 ms stereo float packet per IPC message matches Opus cadence and
-    // avoids flooding Electron's renderer/main bridge with tiny parec chunks.
-    const packetBytes = 48000*.02*2*4;
-    while (state.pcmBytes >= packetBytes) {
-      const packet = Buffer.allocUnsafe(packetBytes);let offset = 0;
-      while (offset < packetBytes) { const head=state.pcmChunks[0],take=Math.min(head.byteLength,packetBytes-offset);head.copy(packet,offset,0,take);offset+=take;state.pcmBytes-=take;if(take===head.byteLength)state.pcmChunks.shift();else state.pcmChunks[0]=head.subarray(take); }
-      const samples = packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength);
-      try { webContents.send('pair:linuxShareAudio', samples); } catch {}
-    }
+    trimLinuxShareAudio(state);
+    // One 20 ms stereo float packet per IPC message matches Opus cadence. A
+    // three-packet acknowledgement window keeps a stalled renderer from making
+    // Electron queue an unbounded amount of audio in its IPC transport.
+    flushLinuxShareAudio(state);
   });
   let captureError = '';
   capture.stderr.setEncoding('utf8');
@@ -173,33 +256,53 @@ function startLinuxShareAudio(webContents) {
   return { label: linuxShareAudio.label, source: linuxShareAudio.source };
 }
 function stopLinuxShareAudio() {
-  const state = linuxShareAudio; if (!state) return;
+  linuxShareAudioGeneration++;
+  if(linuxShareAudioStopping)return linuxShareAudioStopping;
+  const pendingStart=linuxShareAudioStart,state=linuxShareAudio;
   linuxShareAudio = null;
-  if (state.watch) try { state.watch.kill(); } catch {}
-  clearTimeout(state.routeTimer);
-  if (state.loopTimer) { clearTimeout(state.loopTimer); state.loopTimer = null; }
-  for (const audit of state.audits || []) clearTimeout(audit);
-  if (state.capture) try { state.capture.kill(); } catch {}
-  state.pcmChunks.length = 0;state.pcmBytes = 0;
-  for (const input of state.moved || []) pipewireOk('pactl', ['move-sink-input', input.id, input.sink]);
-  if (state.loop) pipewire('pactl', ['unload-module', state.loop]);
-  pipewire('pactl', ['unload-module', state.module]);
+  const stopping=(async()=>{
+    // If cancellation landed during capability/module discovery, wait until
+    // that startup has observed the generation change and removed any module
+    // it briefly created before allowing a replacement route.
+    if(pendingStart)try{await pendingStart}catch{}
+    if(!state)return;
+    if (state.watch) try { state.watch.kill(); } catch {}
+    clearTimeout(state.routeTimer);
+    if (state.loopTimer) { clearTimeout(state.loopTimer); state.loopTimer = null; }
+    for (const audit of state.audits || []) clearTimeout(audit);
+    if (state.capture) try { state.capture.kill(); } catch {}
+    state.pcmChunks.length = 0;state.pcmBytes = 0;state.pcmInflight.clear();state.pcmOldestInflightAt = 0;
+    await Promise.all((state.moved || []).map(input=>pipewireOkAsync('pactl', ['move-sink-input', input.id, input.sink])));
+    if (state.loop) await pipewireAsync('pactl', ['unload-module', state.loop]);
+    await pipewireAsync('pactl', ['unload-module', state.module]);
+  })().finally(()=>{if(linuxShareAudioStopping===stopping)linuxShareAudioStopping=null});
+  linuxShareAudioStopping=stopping;return stopping;
 }
 
 function isPairRenderer(event) {
-  return event.senderFrame?.url?.startsWith('file://') === true;
+  return event.sender === mainWin?.webContents && event.senderFrame === event.sender?.mainFrame && event.senderFrame?.url === PAIR_RENDERER_URL;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents', 'catalogFavorites']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
+const MAX_FILE_SIZE = 200 * 1024 ** 3;
 const DIRECT_FILE_DEFAULT_PORT = 8787;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
+const MAX_SHARE_SOURCES = 256;
+const MAX_EMOJI_ASSET_SIZE = 1024 * 1024;
 const DEEPFILTER_ASSETS = Object.freeze({
   wasm: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'pkg', 'df_bg.wasm'),
   model: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'models', 'DeepFilterNet3_onnx.tar.gz')
 });
 const MAX_DEEPFILTER_ASSET_SIZE = 20 * 1024 * 1024;
+function validBridgeDocumentId(value) { return typeof value === 'string' && /^[a-f0-9]{32}$/.test(value) ? value : ''; }
+function validIpcBinary(value, maxBytes = MAX_IPC_CHUNK) {
+  try {
+    const validType = Buffer.isBuffer(value) || value instanceof ArrayBuffer || ArrayBuffer.isView(value);
+    return validType && Number.isSafeInteger(value.byteLength) && value.byteLength > 0 && value.byteLength <= maxBytes;
+  } catch { return false; }
+}
 const SYSTEM_AVATAR_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
 function imageMime(buffer, extension = '') {
   if (SYSTEM_AVATAR_MIME[extension]) return SYSTEM_AVATAR_MIME[extension];
@@ -210,41 +313,37 @@ function imageMime(buffer, extension = '') {
   return null;
 }
 
-function safeFileName(value) {
-  const name = path.basename(String(value || 'incoming')).replace(/[\0<>:"/\\|?*]/g, '_').trim();
-  return (name || 'incoming').slice(0, 255);
-}
-
-function accountAvatarCandidates(dir, depth = 1) {
+async function accountAvatarCandidates(dir, depth = 1) {
   let entries = [];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
-  return entries.flatMap(entry => {
+  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return []; }
+  const candidates = await Promise.all(entries.map(async entry => {
     const file = path.join(dir, entry.name);
     if (entry.isDirectory() && depth > 0) return accountAvatarCandidates(file, depth - 1);
     if (!entry.isFile() || !SYSTEM_AVATAR_MIME[path.extname(entry.name).toLowerCase()]) return [];
     try {
-      const stat = fs.statSync(file);
+      const stat = await fs.promises.stat(file);
       return stat.size > 0 && stat.size <= MAX_SYSTEM_AVATAR_SIZE ? [{ file, stat }] : [];
     } catch { return []; }
-  });
+  }));
+  return candidates.flat();
 }
 
-function systemAccountAvatar() {
+async function systemAccountAvatar() {
   const home = app.getPath('home');
   const direct = process.platform === 'linux' ? [path.join(home, '.face'), path.join(home, '.face.icon')] : [];
   const directories = process.platform === 'win32'
     ? [path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'AccountPictures'), path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'Windows', 'AccountPictures')]
     : [];
   const candidates = [
-    ...direct.flatMap(file => {
-      try { const stat = fs.statSync(file); return stat.isFile() && stat.size > 0 && stat.size <= MAX_SYSTEM_AVATAR_SIZE ? [{ file, stat }] : []; } catch { return []; }
-    }),
-    ...directories.flatMap(dir => accountAvatarCandidates(dir))
+    ...(await Promise.all(direct.map(async file => {
+      try { const stat = await fs.promises.stat(file); return stat.isFile() && stat.size > 0 && stat.size <= MAX_SYSTEM_AVATAR_SIZE ? [{ file, stat }] : []; } catch { return []; }
+    }))).flat(),
+    ...(await Promise.all(directories.map(dir => accountAvatarCandidates(dir)))).flat()
   ].sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs || b.stat.size - a.stat.size);
   const selected = candidates[0];
   if (!selected) return null;
   try {
-    const bytes = fs.readFileSync(selected.file);
+    const bytes = await fs.promises.readFile(selected.file);
     const mime = imageMime(bytes, path.extname(selected.file).toLowerCase());
     return mime ? `data:${mime};base64,${bytes.toString('base64')}` : null;
   } catch { return null; }
@@ -252,16 +351,16 @@ function systemAccountAvatar() {
 
 ipcMain.handle('pair:getSources', async event => {
   if (!isPairRenderer(event)) return [];
-  pendingSources = (await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } })).filter(source => !isExcludedShareSource(source));
+  pendingSources = (await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } })).filter(source => !isExcludedShareSource(source)).slice(0,MAX_SHARE_SOURCES);
   return pendingSources.map(s => ({ id: s.id, name: s.name, type: s.id.startsWith('screen:') ? 'screen' : 'application', thumbnail: s.thumbnail.toDataURL(), display_id: s.display_id }));
 });
 ipcMain.handle('pair:getSystemAvatar', event => isPairRenderer(event) ? systemAccountAvatar() : null);
 // DeepFilterNet's model is shipped with Knot.  The renderer may request only
 // these two known files, never an arbitrary local path or a network URL.
-ipcMain.handle('pair:getDeepFilterAsset', (event, name) => {
+ipcMain.handle('pair:getDeepFilterAsset', async (event, name) => {
   if (!isPairRenderer(event) || !Object.hasOwn(DEEPFILTER_ASSETS, name)) return null;
   try {
-    const bytes = fs.readFileSync(DEEPFILTER_ASSETS[name]);
+    const bytes = await fs.promises.readFile(DEEPFILTER_ASSETS[name]);
     return bytes.length > 0 && bytes.length <= MAX_DEEPFILTER_ASSET_SIZE ? bytes : null;
   } catch { return null; }
 });
@@ -275,40 +374,48 @@ ipcMain.handle('pair:setPendingSource', (event, selection) => {
   return true;
 });
 ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio(event.sender) : null);
-ipcMain.on('pair:stopLinuxShareAudio', event => { if (isPairRenderer(event)) stopLinuxShareAudio(); });
-ipcMain.handle('pair:nativeScreenInfo', event => isPairRenderer(event) ? nativeScreenService?.info() || { supported: false } : { supported: false });
-ipcMain.handle('pair:startNativeScreen', (event, options) => {
-  if (!isPairRenderer(event) || !options || typeof options !== 'object') return null;
-  try { return nativeScreenService?.start(options) || { error: 'Native screen capture is unavailable' }; } catch (error) { return { error: error?.message || String(error) }; }
+ipcMain.on('pair:stopLinuxShareAudio', event => { if (isPairRenderer(event)) void stopLinuxShareAudio(); });
+ipcMain.on('pair:linuxShareAudioAck', (event, sequenceValue) => {
+  if (!isPairRenderer(event)) return;
+  const state = linuxShareAudio, sequence = Math.floor(Number(sequenceValue) || 0);
+  if (!state || state.webContents !== event.sender || !state.pcmInflight.delete(sequence)) return;
+  state.pcmOldestInflightAt = state.pcmInflight.size ? Date.now() : 0;
+  flushLinuxShareAudio(state);
 });
-ipcMain.handle('pair:readNativeScreen', (event, id) => isPairRenderer(event) && Number.isInteger(id) ? nativeScreenService?.read(id) || { active: false } : { active: false });
-ipcMain.on('pair:stopNativeScreen', (event, id) => { if (isPairRenderer(event)) nativeScreenService?.stop(Number.isInteger(id) ? id : 0); });
+ipcMain.handle('pair:nativeScreenInfo', (event, documentId) => bridgeRequestOwner(event,documentId) ? nativeScreenService?.infoAsync() || { supported: false } : { supported: false });
+ipcMain.handle('pair:startNativeScreen', (event, documentId, options) => {
+  const owner=bridgeRequestOwner(event,documentId);
+  if (!owner || !options || typeof options !== 'object') return null;
+  return nativeScreenService?.startAsync(options,()=>currentBridgeOwner(owner)).catch(error=>({error:error?.message||String(error)})) || { error: 'Native screen capture is unavailable' };
+});
+ipcMain.handle('pair:readNativeScreen', (event, documentId, id) => bridgeRequestOwner(event,documentId) && Number.isInteger(id) ? nativeScreenService?.read(id) || { active: false } : { active: false });
+ipcMain.on('pair:stopNativeScreen', (event, documentId, id) => { if (bridgeRequestOwner(event,documentId)) nativeScreenService?.stop(Number.isInteger(id) ? id : 0); });
 
 const fs = require('fs');
 // Electron only accepts this before its ready event. Read the tightly scoped
 // local setting early; toggling it in the UI takes effect on restart.
 let hardwareAccelerationEnabled = true;
 try {
-  const earlySettings = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8'));
+  const stableSettings=path.join(app.getPath('appData'),'Knot','settings.json'),legacySettings=path.join(app.getPath('userData'),'settings.json'),earlyFile=[stableSettings,stableSettings+'.bak',legacySettings].find(file=>fs.existsSync(file));
+  const earlySettings = earlyFile?JSON.parse(fs.readFileSync(earlyFile, 'utf8')):{};
   hardwareAccelerationEnabled = earlySettings.hardwareAcceleration !== 'off';
   if (!hardwareAccelerationEnabled) app.disableHardwareAcceleration();
 } catch {}
-// Apply the aggressive policy only when the setting is on. Linux first pins the
-// exact discrete render node; Windows/macOS ask the OS for its high-performance
-// adapter. The policy keeps driver safety workarounds but prevents silent
-// integrated-GPU or software-rasterizer fallback.
+// Apply the acceleration policy only when the setting is on. Linux prefers and
+// pins a discrete render node, while integrated-only machines retain their real
+// compositor/video GPU instead of being forced through CPU rendering.
 if (hardwareAccelerationEnabled) {
   const wayland = process.platform === 'linux' && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY);
   if (process.platform === 'linux') {
     const primaryGpu = linuxMainGpu();selectedPrimaryGpu=primaryGpu;
     if (applyLinuxMainGpuEnvironment(primaryGpu) && applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: primaryGpu, wayland })) {
-      console.log('[gpu] discrete-only full acceleration selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress);
+      console.log('[gpu] full acceleration selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress, primaryGpu.integrated?'integrated':'discrete');
     } else {
-      // Never let an integrated GPU become Knot's implicit fallback. Chromium's
-      // software renderer remains available only when acceleration is disabled.
+      // No usable DRM render node exists. Retain the explicit user-facing
+      // software fallback rather than letting Chromium choose unpredictably.
       app.disableHardwareAcceleration();
       process.env.KNOT_PRIMARY_GPU_VENDOR = '';
-      console.warn('[gpu] no discrete render node found; integrated GPU rejected, using CPU rendering');
+      console.warn('[gpu] no render node found; using CPU rendering');
     }
   } else {
     // Windows/macOS expose their high-performance adapter through Chromium's
@@ -318,161 +425,197 @@ if (hardwareAccelerationEnabled) {
   }
 }
 nativeScreenService = new NativeScreenService({
-  primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
+  // gpu-screen-recorder's encode-once path remains discrete-only. Integrated
+  // GPUs still accelerate Chromium's standard WebRTC screen path above.
+  primaryGpuVendor: selectedPrimaryGpu?.integrated ? '' : process.env.KNOT_PRIMARY_GPU_VENDOR || '',
   primaryGpuCard: selectedPrimaryGpu?.card || '',
-  onError: message => mainWin?.webContents.send('pair:nativeScreenError', String(message || 'Native screen capture failed'))
+  onError: message => {if(mainWin&&!mainWin.isDestroyed())try{mainWin.webContents.send('pair:nativeScreenError', String(message || 'Native screen capture failed'))}catch{}}
 });
 // Knot is serverless by default. `server.js` remains available through
 // `npm run signal` for people who deliberately operate their own signaling
 // service, but the desktop app must not silently start a localhost server.
 
-// --- Incoming-file disk streaming (single active write stream) ---
+// --- Incoming-file disk streaming (isolated per transfer) ---
 // The renderer is sandboxed, so all fs access happens here. `write` resolves
 // only when the OS accepts the chunk or 'drain' fires — that backpressure
 // flows back through the renderer and WebRTC to the sender.
-let writeStream = null;
-let writeFailed = null;
-
-let closePromise = null;
-function closeStream() {
-  if (closePromise) return closePromise;
-  if (!writeStream) return Promise.resolve();
-  const s = writeStream;
-  writeStream = null;
-  closePromise = new Promise(resolve => {
-    const done = () => { closePromise = null; resolve(); };
-    s.once('close', done);
-    s.once('error', done);
-    s.destroy();
-    setTimeout(done, 5000);
-  });
-  return closePromise;
+const WRITE_HIGH_WATER = 64 * 1024 * 1024;
+const MAX_ACTIVE_SAVE_STREAMS = 16;
+const saveStreams = new SaveStreamManager({ maxActive: MAX_ACTIVE_SAVE_STREAMS, highWater: WRITE_HIGH_WATER });
+const pendingSaveDialogs = new Map();
+const cancelledSaveDialogs = new Set();
+const saveOwners = new Map();
+let activeBridgeOwner = null;
+function sameBridgeOwner(left,right){return !!left&&!!right&&left.senderId===right.senderId&&left.document===right.document}
+function bridgeOwnerCandidate(event,documentId){const document=validBridgeDocumentId(documentId);return document&&isPairRenderer(event)?{senderId:event.sender.id,document}:null}
+function currentBridgeOwner(owner){return sameBridgeOwner(owner,activeBridgeOwner)&&mainWin&&!mainWin.isDestroyed()&&mainWin.webContents.id===owner.senderId&&mainWin.webContents.mainFrame?.url===PAIR_RENDERER_URL}
+function bridgeRequestOwner(event,documentId){const owner=bridgeOwnerCandidate(event,documentId);return owner&&currentBridgeOwner(owner)?owner:null}
+function invalidateBridgeOwner(webContents=null){if(activeBridgeOwner&&(!webContents||webContents.id===activeBridgeOwner.senderId))activeBridgeOwner=null}
+ipcMain.on('pair:bridgeReady',(event,documentId)=>{
+  const owner=bridgeOwnerCandidate(event,documentId);if(!owner)return;
+  const replaced=activeBridgeOwner&&!sameBridgeOwner(owner,activeBridgeOwner);activeBridgeOwner=owner;
+  // did-start-navigation normally starts this cleanup first. Repeating it here
+  // closes the narrow race where a new preload starts after an unusual renderer
+  // replacement that did not emit a usable navigation event.
+  if(replaced){
+    pendingSource=null;pendingSources=[];
+    void nativeScreenService?.stopAsync?.().catch(error=>console.error('[runtime] bridge screen cleanup failed:',error?.message||error));
+    void stopLinuxShareAudio().catch(error=>console.error('[runtime] bridge share-audio cleanup failed:',error?.message||error));
+    stopNativeCapture();
+    void closeDirectFileRuntime().catch(()=>{});void closeAllSaveStreams().catch(()=>{});
+  }
+});
+function validSaveId(value) { return Number.isSafeInteger(value) && value > 0 ? value : 0; }
+function saveRequestOwner(event, documentId) { return bridgeRequestOwner(event,documentId); }
+function saveOwnerKey(owner,id){return owner?`${owner.senderId}:${owner.document}:${id}`:''}
+function ownsSave(event,documentId,id){const owner=saveRequestOwner(event,documentId),record=saveOwners.get(id);return owner&&record&&record.senderId===owner.senderId&&record.document===owner.document?record:null}
+async function closeAllSaveStreams() {
+  for (const [id, owner] of pendingSaveDialogs) cancelledSaveDialogs.add(saveOwnerKey(owner,id));
+  await saveStreams.closeAll();
+  saveOwners.clear();
+  if (!pendingSaveDialogs.size) cancelledSaveDialogs.clear();
 }
 
-ipcMain.handle('pair:saveStart', async (event, name) => {
-  if (!isPairRenderer(event)) return { ok: false };
-  await closeStream();
-  writeFailed = null;
-  const result = await dialog.showSaveDialog({
-    title: 'Save incoming file',
-    defaultPath: safeFileName(name),
-    buttonLabel: 'Save'
-  });
-  if (result.canceled || !result.filePath) return { ok: false };
-  // A cancel may have arrived while the dialog was open (closeStream already ran
-  // and nulled writeStream). If a stream was opened in the meantime by another
-  // call, don't clobber it; if not, opening here is safe. Re-check to avoid
-  // leaving an orphaned, never-closed write stream on disk.
-  if (writeStream) {
-    try { writeStream.destroy(); } catch {}
-    writeStream = null;
+ipcMain.handle('pair:saveStart', async (event, documentId, idValue, name, sizeValue) => {
+  const owner=saveRequestOwner(event,documentId),id=validSaveId(idValue),size=Number(sizeValue);
+  if(!owner||!id||typeof name!=='string'||!name.length||name.length>255||!Number.isSafeInteger(size)||size<0||size>MAX_FILE_SIZE||saveStreams.has(id)||saveOwners.has(id)||pendingSaveDialogs.has(id)||saveStreams.size+pendingSaveDialogs.size>=MAX_ACTIVE_SAVE_STREAMS)return{ok:false,error:'Invalid or duplicate save request'};
+  pendingSaveDialogs.set(id,owner);const cancellationKey=saveOwnerKey(owner,id);let result=null,dialogError=null;
+  try {
+    const options={ title: 'Save incoming file', defaultPath: safeSuggestedFileName(name), buttonLabel: 'Save' };
+    result=mainWin&&!mainWin.isDestroyed()?await dialog.showSaveDialog(mainWin,options):await dialog.showSaveDialog(options);
+  } catch (error) {
+    dialogError=error;
+  } finally {
+    pendingSaveDialogs.delete(id);
   }
-  writeStream = fs.createWriteStream(result.filePath);
-  writeStream.on('error', err => { writeFailed = err; });
+  const cancelled=cancelledSaveDialogs.delete(cancellationKey);if(!pendingSaveDialogs.size&&cancelledSaveDialogs.size)cancelledSaveDialogs.clear();
+  if(dialogError)return{ok:false,error:'Could not open the Save dialog'};
+  if(cancelled||event.sender.isDestroyed()||!currentBridgeOwner(owner)||result?.canceled||!result?.filePath)return{ok:false};
+  try {
+    await saveStreams.open(id,result.filePath,{expectedSize:size});
+    if(!currentBridgeOwner(owner)){await saveStreams.cancel(id);return{ok:false};}
+    saveOwners.set(id,{...owner,size});
+  }
+  catch(error){return{ok:false,error:error?.message||'Could not open the save destination'};}
   return { ok: true, path: result.filePath };
 });
 
-// How much decrypted data we'll buffer in the Node stream before pausing the
-// renderer. Large enough that the network never stalls waiting on a slow disk,
-// small enough to bound memory for very large files.
-const WRITE_HIGH_WATER = 256 * 1024 * 1024;
-
-ipcMain.handle('pair:saveWrite', async (event, buf) => {
-  if (!isPairRenderer(event) || !buf || buf.byteLength > MAX_IPC_CHUNK) throw new Error('invalid file chunk');
-  if (!writeStream) throw new Error('no open stream');
-  if (writeFailed) throw writeFailed;
-  // Write without awaiting each drain. Node's Writable buffers internally; we
-  // only back-pressure the renderer when our own buffer exceeds WRITE_HIGH_WATER
-  // (i.e. the disk genuinely can't keep up). This removes the per-chunk IPC
-  // round-trip latency that otherwise caps receive throughput.
-  const ok = writeStream.write(Buffer.from(buf));
-  if (!ok && writeStream.writableLength > WRITE_HIGH_WATER) {
-    await new Promise((resolve, reject) => {
-      const s = writeStream;
-      let settled = false;
-      const cleanup = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(wt);
-        try { s.removeListener('drain', onDrain); } catch {}
-        try { s.removeListener('error', onErr); } catch {}
-        try { s.removeListener('close', onClose); } catch {}
-      };
-      const onDrain = () => { cleanup(); resolve(); };
-      const onErr = err => { cleanup(); reject(err); };
-      const onClose = () => { cleanup(); resolve(); };
-      const wt = setTimeout(() => { cleanup(); resolve(); }, 30000);
-      s.once('drain', onDrain);
-      s.once('error', onErr);
-      s.once('close', onClose);
-    });
-  }
-  return true;
+ipcMain.handle('pair:saveWrite', async (event, documentId, idValue, buf) => {
+  const id=validSaveId(idValue);if(!id||!ownsSave(event,documentId,id)||!validIpcBinary(buf))throw new Error('invalid file chunk');
+  return saveStreams.write(id,buf);
 });
 
-ipcMain.handle('pair:saveEnd', event => {
-  if (!isPairRenderer(event)) return Promise.resolve(false);
-  return new Promise((resolve, reject) => {
-  if (!writeStream) return resolve(false);
-  const s = writeStream;
-  writeStream = null;
-  const to = setTimeout(() => { s.destroy(); resolve(false); }, 10000);
-  s.once('finish', () => { clearTimeout(to); resolve(true); });
-  s.once('error', err => { clearTimeout(to); reject(err); });
-  s.end();
-  });
+ipcMain.handle('pair:saveEnd', async (event, documentId, idValue, sizeValue) => {
+  const id=validSaveId(idValue),owner=id?ownsSave(event,documentId,id):null,size=Number(sizeValue);if(!owner||!Number.isSafeInteger(size)||size!==owner.size)return false;
+  try{return await saveStreams.finish(id)}finally{saveOwners.delete(id)}
 });
 
-ipcMain.handle('pair:saveCancel', event => isPairRenderer(event) ? closeStream().then(() => true) : false);
+ipcMain.handle('pair:saveCancel', async (event,documentId,idValue) => {
+  const owner=saveRequestOwner(event,documentId),id=validSaveId(idValue);if(!owner||!id)return false;
+  const pending=pendingSaveDialogs.get(id);if(pending&&pending.senderId===owner.senderId&&pending.document===owner.document){cancelledSaveDialogs.add(saveOwnerKey(owner,id));return true}
+  if(!ownsSave(event,documentId,id))return false;try{return await saveStreams.cancel(id)}finally{saveOwners.delete(id)}
+});
 
 // Optional native TCP lane for large P2P files. The renderer can register only
 // one-time credentials generated from an already authenticated paired session;
 // this listener never accepts arbitrary unauthenticated traffic.
 let directFileHost = null, directFilePort = 0;
+let directFileHostEpoch = 0;
+let directFileHostTask = Promise.resolve();
+let directFileRuntimeOwner = null;
 const directFilePeers = new Map();
+let pendingDirectFileConnects = 0;
+const MAX_DIRECT_FILE_PEERS = 8;
+const MAX_PENDING_DIRECT_FILE_CONNECTS = 4;
 function validDirectPort(value) { const port = Number(value); return Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : 0; }
-function directKey(value) { try { const key = Buffer.from(value); return key.length === 32 ? key : null; } catch { return null; } }
-function closeDirectPeer(id) { const peer = directFilePeers.get(id); directFilePeers.delete(id); try { peer?.close(); } catch {} }
-function attachDirectPeer(owner, peer) {
-  const id = crypto.randomBytes(16).toString('hex'); directFilePeers.set(id, peer);
-  peer.onFrame = frame => { if (!owner.isDestroyed()) owner.send('pair:directFileFrame', id, frame); };
-  peer.onClose = () => { directFilePeers.delete(id); if (!owner.isDestroyed()) owner.send('pair:directFileClose', id); };
+function directKey(value) { try { if(!validIpcBinary(value,32)||value.byteLength!==32)return null;const view=value instanceof ArrayBuffer?new Uint8Array(value):new Uint8Array(value.buffer,value.byteOffset,value.byteLength);return Buffer.from(view); } catch { return null; } }
+function directRequestOwner(event,documentId){return bridgeRequestOwner(event,documentId)}
+function sameDirectOwner(left,right){return sameBridgeOwner(left,right)}
+function closeDirectPeer(id,owner=null) { const record=directFilePeers.get(id);if(!record||owner&&!sameDirectOwner(owner,record.owner))return false;directFilePeers.delete(id);try{record.peer.close()}catch{}return true }
+function attachDirectPeer(webContents, owner, peer, context={}) {
+  if(!currentBridgeOwner(owner)||webContents.isDestroyed()||webContents.id!==owner.senderId||directFilePeers.size>=MAX_DIRECT_FILE_PEERS){try{peer.close()}catch{}throw new Error('direct-file document changed or peer limit reached')}
+  const id = crypto.randomBytes(16).toString('hex'),record={peer,owner};directFilePeers.set(id,record);
+  peer.onFrame = frame => { if (!webContents.isDestroyed()&&currentBridgeOwner(owner)&&directFilePeers.get(id)===record) webContents.send('pair:directFileFrame',owner.document,id,frame); };
+  peer.onClose = () => { const attached=directFilePeers.get(id)===record;if(attached)directFilePeers.delete(id);if(attached&&!webContents.isDestroyed()&&currentBridgeOwner(owner)) webContents.send('pair:directFileClose',owner.document,id); };
+  try {
+    if(!currentBridgeOwner(owner)||webContents.isDestroyed())throw new Error('direct-file document changed');
+    webContents.send('pair:directFileOpen',owner.document,id,typeof context.token==='string'?context.token:'');
+  } catch(error) {
+    if(directFilePeers.get(id)===record)directFilePeers.delete(id);
+    try{peer.close()}catch{}
+    throw error;
+  }
   return id;
 }
 async function ensureDirectFileHost(port) {
-  if (directFileHost && directFilePort === port) return;
-  if (directFileHost) { directFileHost.close(); directFileHost = null; directFilePort = 0; }
-  const host = new DirectFileHost(port); await host.listen(); directFileHost = host; directFilePort = port;
+  const epoch = directFileHostEpoch;
+  const operation = directFileHostTask.then(async () => {
+    if (epoch !== directFileHostEpoch) throw new Error('direct-file listener was stopped');
+    if (directFileHost && directFilePort === port) return;
+    if (directFileHost) { directFileHost.close(); directFileHost = null; directFilePort = 0; }
+    const host = new DirectFileHost(port);
+    try {
+      await host.listen();
+      if (epoch !== directFileHostEpoch) throw new Error('direct-file listener was stopped');
+      directFileHost = host;directFilePort = port;
+    } catch (error) {
+      host.close();
+      throw error;
+    }
+  });
+  directFileHostTask = operation.catch(() => {});
+  return operation;
 }
-ipcMain.handle('pair:directFileListen', async (event, portValue) => {
-  if (!isPairRenderer(event)) return { ok: false, error: 'unauthorized' };
+async function closeDirectFileRuntime() {
+  directFileHostEpoch++;
+  for (const id of [...directFilePeers.keys()]) closeDirectPeer(id);
+  directFileRuntimeOwner=null;
+  const operation=directFileHostTask.then(()=>{directFileHost?.close();directFileHost=null;directFilePort=0});
+  directFileHostTask=operation.catch(()=>{});return operation;
+}
+ipcMain.handle('pair:directFileListen', async (event, documentId, portValue) => {
+  const owner=directRequestOwner(event,documentId);if (!owner) return { ok: false, error: 'unauthorized' };
   const port = validDirectPort(portValue); if (!port) return { ok: false, error: 'Choose a port from 1024 through 65535.' };
-  try { await ensureDirectFileHost(port); return { ok: true, port }; } catch (error) { return { ok: false, error: error?.message || 'Could not listen on that TCP port.' }; }
+  try {
+    if(directFileRuntimeOwner&&!sameDirectOwner(owner,directFileRuntimeOwner))await closeDirectFileRuntime();
+    if(!currentBridgeOwner(owner))throw new Error('direct-file document changed');
+    directFileRuntimeOwner=owner;await ensureDirectFileHost(port);
+    if(!currentBridgeOwner(owner)||!sameDirectOwner(owner,directFileRuntimeOwner)){if(sameDirectOwner(owner,directFileRuntimeOwner))await closeDirectFileRuntime();throw new Error('direct-file document changed')}
+    return { ok: true, port };
+  } catch (error) { return { ok: false, error: error?.message || 'Could not listen on that TCP port.' }; }
 });
-ipcMain.handle('pair:directFileRegister', async (event, token, keyValue) => {
-  if (!isPairRenderer(event) || typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) return false;
-  const key = directKey(keyValue); if (!key || !directFileHost) return false;
-  directFileHost.register(token, key, peer => attachDirectPeer(event.sender, peer)); return true;
+ipcMain.handle('pair:directFileRegister', async (event, documentId, token, keyValue) => {
+  const owner=directRequestOwner(event,documentId);if (!owner||!sameDirectOwner(owner,directFileRuntimeOwner)||typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) return false;
+  const key = directKey(keyValue); if (!key) return false;if(!directFileHost){key.fill(0);return false}
+  try{directFileHost.register(token,key,(peer,hello)=>{if(!currentBridgeOwner(owner)||!sameDirectOwner(owner,directFileRuntimeOwner)){peer.close();return}attachDirectPeer(event.sender,owner,peer,hello)});return true}finally{key.fill(0)}
 });
-ipcMain.handle('pair:directFileConnect', async (event, host, portValue, token, keyValue, options) => {
-  if (!isPairRenderer(event) || typeof host !== 'string' || !nodeNet.isIP(host) || typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw new Error('invalid direct-file connection');
-  const port = validDirectPort(portValue), key = directKey(keyValue); if (!port || !key) throw new Error('invalid direct-file credentials');
+ipcMain.handle('pair:directFileConnect', async (event, documentId, host, portValue, token, keyValue, options) => {
+  const owner=directRequestOwner(event,documentId);if (!owner||typeof host !== 'string' || !nodeNet.isIP(host) || typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw new Error('invalid direct-file connection');
+  const port = validDirectPort(portValue), key = directKey(keyValue); if (!port || !key){if(key)key.fill(0);throw new Error('invalid direct-file credentials')}
+  if(directFilePeers.size+pendingDirectFileConnects>=MAX_DIRECT_FILE_PEERS||pendingDirectFileConnects>=MAX_PENDING_DIRECT_FILE_CONNECTS){key.fill(0);throw new Error('too many direct-file connections')}
   const requestedTimeout = Number(options?.timeout);
   const connectOptions = Number.isFinite(requestedTimeout) ? { timeout: Math.max(1000, Math.min(10000, Math.floor(requestedTimeout))) } : {};
-  const peer = await connectDirectFile(host, port, token, key, connectOptions); return attachDirectPeer(event.sender, peer);
+  const epoch=directFileHostEpoch;let peer;pendingDirectFileConnects++;
+  try{peer=await connectDirectFile(host,port,token,key,connectOptions)}finally{pendingDirectFileConnects--;key.fill(0)}
+  if(epoch!==directFileHostEpoch||!currentBridgeOwner(owner)){peer.close();throw new Error('direct-file document changed')}
+  return attachDirectPeer(event.sender,owner,peer,{token});
 });
-ipcMain.handle('pair:directFileSend', async (event, id, data) => {
-  if (!isPairRenderer(event) || typeof id !== 'string' || !data || data.byteLength > MAX_IPC_CHUNK) throw new Error('invalid direct-file frame');
-  const peer = directFilePeers.get(id); if (!peer) throw new Error('direct-file connection is closed'); await peer.sendAsync(data); return true;
+ipcMain.handle('pair:directFileSend', async (event, documentId, id, data) => {
+  const owner=directRequestOwner(event,documentId),record=directFilePeers.get(id);if (!owner||typeof id !== 'string'||!sameDirectOwner(owner,record?.owner)||!validIpcBinary(data)) throw new Error('invalid direct-file frame');
+  // Buffer.from(DataView) produces an empty buffer on Node. Normalize every
+  // IPC binary shape to its explicit byte range before the native lane copies
+  // it, otherwise a valid DataView frame is rejected as zero length.
+  const bytes=data instanceof ArrayBuffer?new Uint8Array(data):new Uint8Array(data.buffer,data.byteOffset,data.byteLength);
+  await record.peer.sendAsync(bytes); return true;
 });
-ipcMain.on('pair:directFileClose', (event, id) => { if (!isPairRenderer(event)) return; if (typeof id === 'string') closeDirectPeer(id); });
+ipcMain.on('pair:directFileClose', (event, documentId, id) => {const owner=directRequestOwner(event,documentId);if(owner&&typeof id==='string')closeDirectPeer(id,owner)});
+ipcMain.handle('pair:directFileReset', async(event,documentId)=>{const owner=directRequestOwner(event,documentId);if(!owner)return false;if(directFileRuntimeOwner&&!sameDirectOwner(owner,directFileRuntimeOwner)&&![...directFilePeers.values()].some(record=>sameDirectOwner(owner,record.owner)))return false;await closeDirectFileRuntime();return true});
 // Renderer acknowledgement of consumed file frames. This bounds the IPC queue
 // between the TCP lane and slow disk writes instead of letting pending frames
 // grow without limit during very large transfers.
-ipcMain.on('pair:directFileAck', (event, id, bytes) => {
-  if (!isPairRenderer(event) || typeof id !== 'string') return;
-  const peer = directFilePeers.get(id); const count = Math.max(0, Math.min(Number(bytes) || 0, 1024 * 1024 * 1024));
-  if (peer && count) peer.credit(count);
+ipcMain.on('pair:directFileAck', (event, documentId, id, bytes) => {
+  const owner=directRequestOwner(event,documentId),record=directFilePeers.get(id),count=Number(bytes);if(!owner||!sameDirectOwner(owner,record?.owner)||!Number.isSafeInteger(count)||count<1||count>MAX_IPC_CHUNK)return;
+  record.peer.credit(count);
 });
 
 // --- Settings persistence (sandboxed renderer can't rely on localStorage) ---
@@ -500,29 +643,18 @@ function sp() {
   }
   return _sp;
 }
-function readSettings() {
-  try { return JSON.parse(fs.readFileSync(sp(), 'utf8')); } catch { return {}; }
-}
-function writeSettings(obj) {
-  try { fs.writeFileSync(sp(), JSON.stringify(obj), { encoding: 'utf8', mode: 0o600 }); fs.chmodSync(sp(), 0o600); } catch {}
-}
-// Secrets must survive binary updates and keyring availability flips. When the
-// OS cannot provide real encryption right now, store a portable plain-v1
-// envelope instead of ciphertext a later environment could never decrypt;
-// reads accept both formats and heal older entries opportunistically.
+const settingsStore = new SettingsStore(sp);
+const settingsCipher = new LocalSettingsCipher(() => path.join(path.dirname(sp()), 'settings.key'), { vault: safeStorage });
+// The AES key is wrapped by Electron safeStorage when the OS vault is available.
+// Existing raw 32-byte keys migrate in place after their first successful read;
+// systems without vault support retain the mode-0600 compatibility fallback.
 const PLAIN_V1 = 'plain-v1';
-function protectSetting(value) {
-  if (typeof value !== 'string') return value;
-  try {
-    if (safeStorage.isEncryptionAvailable()) {
-      return { format: 'safeStorage-v1', data: safeStorage.encryptString(value).toString('base64') };
-    }
-  } catch {}
-  return { format: PLAIN_V1, data: Buffer.from(value, 'utf8').toString('base64') };
-}
-function revealSetting(value) {
+async function revealSetting(value) {
   if (value == null) return undefined;
   if (typeof value === 'string') return value; // legacy raw plaintext from very old builds
+  if (value.format === LOCAL_SETTINGS_FORMAT) {
+    try { return await settingsCipher.reveal(value); } catch { return undefined; }
+  }
   if (value.format === PLAIN_V1 && typeof value.data === 'string') {
     try { return Buffer.from(value.data, 'base64').toString('utf8'); } catch { return undefined; }
   }
@@ -531,33 +663,23 @@ function revealSetting(value) {
   }
   return undefined;
 }
-ipcMain.handle('pair:getSetting', (event, key) => {
+ipcMain.handle('pair:getSetting', async (event, key) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return undefined;
-  const settings = readSettings(), stored = settings[key];
-  const value = revealSetting(stored);
-  // Heal format drift after a successful reveal (e.g. the keyring was
-  // unavailable when this value was last written): re-store it in the best
-  // form the current environment supports so reads never depend on luck.
-  if (value != null && ENCRYPTED_SETTING_KEYS.has(key)) {
-    // Store portably, never re-encrypt: an encrypted envelope only readable in
-    // some launch contexts is what logged people out after every update.
-    const desired = { format: 'plain-v1', data: Buffer.from(value, 'utf8').toString('base64') };
-    if (JSON.stringify(desired) !== JSON.stringify(stored)) { settings[key] = desired; writeSettings(settings); }
+  const stored = await settingsStore.get(key);
+  const value = await revealSetting(stored);
+  if (value != null && ENCRYPTED_SETTING_KEYS.has(key) && stored?.format !== LOCAL_SETTINGS_FORMAT) {
+    try { await settingsStore.set(key, await settingsCipher.protect(value)); } catch {}
   }
-  // Transparently migrate sensitive values written by older Knot versions.
-  if (ENCRYPTED_SETTING_KEYS.has(key) && typeof stored === 'string' && typeof value === 'string') { settings[key] = protectSetting(value); writeSettings(settings); }
   return value;
 });
-ipcMain.handle('pair:setSetting', (event, key, value) => {
+ipcMain.handle('pair:setSetting', async (event, key, value) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return false;
   if (value != null && (typeof value !== 'string' || value.length > MAX_SETTING_VALUE)) return false;
-  const s = readSettings();
-  if (value == null) delete s[key];
-  else if (ENCRYPTED_SETTING_KEYS.has(key) && typeof value === 'string')
-    s[key] = { format: 'plain-v1', data: Buffer.from(value, 'utf8').toString('base64') };
-  else s[key] = value;
-  writeSettings(s);
-  return true;
+  let stored = value;
+  if (value != null && ENCRYPTED_SETTING_KEYS.has(key)) {
+    try { stored = await settingsCipher.protect(value); } catch { return false; }
+  }
+  return settingsStore.set(key, stored);
 });
 
 // Updates are checked by the main process on launch. The renderer can only
@@ -566,11 +688,21 @@ ipcMain.handle('pair:setSetting', (event, key, value) => {
 const { startAutoUpdater, getUpdateStatus, installAvailableUpdate } = require('./updater');
 ipcMain.handle('pair:getUpdateStatus', event => isPairRenderer(event) ? getUpdateStatus() : { state: 'idle' });
 ipcMain.handle('pair:acceptUpdate', event => isPairRenderer(event) ? installAvailableUpdate() : false);
-ipcMain.on('pair:relaunch', event => { if (isPairRenderer(event)) { app.relaunch(); app.exit(0); } });
+let runtimeCleanupPromise=null,relaunching=false;
+async function cleanupRuntime(){
+  if(runtimeCleanupPromise)return runtimeCleanupPromise;
+  runtimeCleanupPromise=(async()=>{await nativeScreenService?.stopAsync?.();await stopLinuxShareAudio();await closeDirectFileRuntime();await closeAllSaveStreams();await settingsStore.flush();await stopEmojiWorker();stopNativeCapture()})().finally(()=>{runtimeCleanupPromise=null});
+  return runtimeCleanupPromise;
+}
+ipcMain.on('pair:relaunch', event => { if(!isPairRenderer(event)||relaunching)return;relaunching=true;void cleanupRuntime().finally(()=>{app.relaunch();app.exit(0)}) });
 // The update feed is never accepted from renderer or signaling input.
 
 function createWindow() {
+  ensureEmojiWorker();
   const windowTitle = `Knot ${app.getVersion()} — private P2P chat`;
+  // A sandboxed preload cannot require package.json. Supply the trusted app
+  // version through the renderer's inherited environment before it starts.
+  process.env.KNOT_APP_VERSION = app.getVersion();
   mainWin = new BrowserWindow({
     width: 1180,
     height: 820,
@@ -596,9 +728,24 @@ function createWindow() {
   // The document's <title> is updated after load on Linux and would otherwise
   // replace the versioned native title bar text.
   mainWin.on('page-title-updated', event => { event.preventDefault(); mainWin?.setTitle(windowTitle); });
-  mainWin.webContents.on('did-finish-load', () => mainWin?.setTitle(windowTitle));
+  mainWin.webContents.on('did-finish-load', () => { mainWin?.setTitle(windowTitle);ensureEmojiWorker(); });
+  mainWin.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if(!isInPlace&&isMainFrame){
+      invalidateBridgeOwner(mainWin?.webContents);pendingSource=null;pendingSources=[];
+      // A reload destroys the renderer-side pumps without necessarily killing
+      // the renderer process. Tear down every capture owned by that document so
+      // the replacement page cannot inherit an orphaned recorder/audio route or
+      // receive "already active" when it starts a new share.
+      void nativeScreenService?.stopAsync?.().catch(error=>console.error('[runtime] navigation screen cleanup failed:',error?.message||error));
+      void stopLinuxShareAudio().catch(error=>console.error('[runtime] navigation share-audio cleanup failed:',error?.message||error));
+      stopNativeCapture();
+      void closeDirectFileRuntime().catch(()=>{});void closeAllSaveStreams().catch(()=>{});
+    }
+  });
   mainWin.webContents.on('render-process-gone', (_event, details) => {
     console.error('[runtime] renderer process gone:', details?.reason || 'unknown', details?.exitCode ?? '');
+    invalidateBridgeOwner(mainWin?.webContents);
+    void cleanupRuntime().catch(error => console.error('[runtime] renderer-crash cleanup failed:', error?.message || error));
   });
   mainWin.webContents.on('unresponsive', () => console.error('[runtime] renderer became unresponsive'));
   mainWin.setMenuBarVisibility(false);
@@ -606,7 +753,7 @@ function createWindow() {
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     try {
       const parsed = new URL(url);
-      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') shell.openExternal(parsed.href);
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') void shell.openExternal(parsed.href).catch(()=>{});
     } catch {}
     return { action: 'deny' };
   });
@@ -619,11 +766,12 @@ app.on('child-process-gone', (_event, details) => {
   if(type.toLowerCase()==='gpu'&&mainWin&&!mainWin.isDestroyed())try{mainWin.webContents.send('pair:gpuProcessGone',{reason:String(details?.reason||'unknown'),exitCode:Number(details?.exitCode)||0})}catch{}
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Emoji.gg catalog: indexed local search + content-addressed asset serving.
   // A missing/unbuilt catalog degrades to empty results with zero startup cost.
   if (emojiCatalog.init(app)) {
-    protocol.handle('emoji', request => {
+    startEmojiWorker(emojiCatalog.dir());
+    protocol.handle('emoji', async request => {
       try {
         // Accept the previous path-shaped form too, so emoji favorites and
         // message history saved before the URL fix remain viewable.
@@ -631,8 +779,9 @@ app.whenReady().then(() => {
         if (!match) return new Response(null, { status: 400 });
         const abs = emojiCatalog.resolveAsset(`${match[1]}/${match[2]}.${match[3]}`);
         if (!abs) return new Response(null, { status: 404 });
+        const stat=await fs.promises.stat(abs);if(!stat.isFile()||stat.size<=0||stat.size>MAX_EMOJI_ASSET_SIZE)return new Response(null,{status:404});
         const mime = { gif: 'image/gif', png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg' }[match[3]];
-        return new Response(fs.readFileSync(abs), {
+        return new Response(await fs.promises.readFile(abs), {
           headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=31536000, immutable' },
         });
       } catch { return new Response(null, { status: 404 }); }
@@ -642,22 +791,28 @@ app.whenReady().then(() => {
   // picker can show an empty state normally instead of triggering a missing
   // Electron IPC handler error.
   ipcMain.handle('pair:emojiSearch', (event, params) => isPairRenderer(event)
-    ? emojiCatalog.search(params || {}) : { items: [], nextCursor: null, total: 0 });
-  ipcMain.handle('pair:emojiGet', (event, id) => isPairRenderer(event) ? emojiCatalog.get(id) : null);
-  ipcMain.handle('pair:emojiAttributions', event => isPairRenderer(event) ? emojiCatalog.attributions() : []);
+    ? emojiWorkerCall('search', params || {}) : { items: [], nextCursor: null, total: 0 });
+  ipcMain.handle('pair:emojiGet', (event, id) => isPairRenderer(event) ? emojiWorkerCall('get', id) : null);
+  ipcMain.handle('pair:emojiAttributions', event => isPairRenderer(event) ? emojiWorkerCall('attributions') : []);
   // Keep Knot itself outside the temporary PipeWire share mix.
-  if (process.platform === 'linux' && /PipeWire/i.test(pipewire('pactl', ['info']))) {
-    const sink = pipewire('pactl', ['get-default-sink']); if (sink) process.env.PULSE_SINK = sink;
+  if (process.platform === 'linux' && /PipeWire/i.test(await pipewireAsync('pactl', ['info']))) {
+    const sink = await pipewireAsync('pactl', ['get-default-sink']); if (sink) process.env.PULSE_SINK = sink;
   }
   installLinuxLauncher();
   Menu.setApplicationMenu(null);
   // Needed for the browser File System Access API used to stream large downloads.
-  const pairRendererPermission = (webContents, permission) =>
-    webContents === mainWin?.webContents && (permission === 'media' || permission === 'speaker-selection');
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(pairRendererPermission(webContents, permission));
+  const pairRendererPermission = (webContents, permission, details={}) => {
+    if(webContents!==mainWin?.webContents||webContents?.mainFrame?.url!==PAIR_RENDERER_URL||details.isMainFrame===false)return false;
+    if(details.requestingUrl&&details.requestingUrl!==PAIR_RENDERER_URL)return false;
+    if(permission==='speaker-selection')return true;
+    if(permission!=='media')return false;
+    if(Array.isArray(details.mediaTypes)&&details.mediaTypes.some(type=>type!=='audio'))return false;
+    return details.mediaType!=='video';
+  };
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback,details) => {
+    callback(pairRendererPermission(webContents, permission,details));
   });
-  session.defaultSession.setPermissionCheckHandler((webContents, permission) => pairRendererPermission(webContents, permission));
+  session.defaultSession.setPermissionCheckHandler((webContents, permission,_origin,details) => pairRendererPermission(webContents, permission,details));
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
   // System audio is deliberately not granted here. Chromium "loopback" captures
@@ -666,6 +821,7 @@ app.whenReady().then(() => {
   // native process-loopback addon / PipeWire share sink instead.
   session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
     try {
+      if(request.frame!==mainWin?.webContents?.mainFrame||request.frame?.url!==PAIR_RENDERER_URL)return callback({video:undefined});
       let src;
       if (process.platform === 'linux') {
         // On Wayland, getSources() owns the xdg-desktop-portal session. Fetch
@@ -710,19 +866,14 @@ app.whenReady().then(() => {
     }
   }, { useSystemPicker: false });
   createWindow();
-  startAutoUpdater();
+  startAutoUpdater({beforeExit:cleanupRuntime});
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on('window-all-closed', async () => {
-  nativeScreenService?.stop();
-  stopLinuxShareAudio();
-  for (const id of directFilePeers.keys()) closeDirectPeer(id);
-  directFileHost?.close(); directFileHost = null;
-  await closeStream();
-  stopNativeCapture();
+  await cleanupRuntime();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -836,10 +987,9 @@ function enqueueNativeAudioIpc(webContents, value, framesValue, capturedAtValue 
 function loadNativeCapture(win) {
   if (nativeCapture) return nativeCapture;
   const paths = [
-    ...(process.resourcesPath ? [path.join(process.resourcesPath, 'app.asar.unpacked', 'addon', 'build', 'Release', 'pair-capture')] : []),
-    path.join(__dirname, 'addon', 'build', 'Release', 'pair-capture'),
-    path.join(__dirname, '..', 'addon', 'build', 'Release', 'pair-capture'),
-    path.join(process.cwd(), 'addon', 'build', 'Release', 'pair-capture'),
+    ...(process.resourcesPath ? [path.join(process.resourcesPath, 'app.asar.unpacked', 'addon', 'build', 'Release', 'pair-capture.node')] : []),
+    path.join(__dirname, 'addon', 'build', 'Release', 'pair-capture.node'),
+    path.join(__dirname, '..', 'addon', 'build', 'Release', 'pair-capture.node'),
   ];
   let lastErr = '';
   for (const addonPath of paths) {
@@ -885,7 +1035,7 @@ function startNativeCapture(win) {
         const capturedAt = Number(capturedAtValue);
         if (Number.isFinite(capturedAt) && Date.now() - capturedAt > 250) return;
         cbCount++;
-        if (cbCount%50===0) console.log('native capture: data cb #'+cbCount+' frames='+frames);
+        if (process.env.KNOT_CAPTURE_DEBUG==='1'&&cbCount%50===0) console.log('native capture: data cb #'+cbCount+' frames='+frames);
         enqueueNativeAudioIpc(win, buf, frames, capturedAt);
       },
       (errMsg) => {

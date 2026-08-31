@@ -1,10 +1,11 @@
 {
-  "version": "1.1.87",
-  "notes": "Emoji.gg Discover catalog with searchable static and animated emoji\nEmoji favorites and recents now persist\nEmoji attachments render reliably and include a recipient fallback\nScraper is resumable and handles rate limits safely",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.87/pair-p2p-1.1.87.tar.gz",
-  "linuxSha256": "1ed613fc1006380504cdf33df81416f8a905295c674f8c5af7879226e8219082",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.87/Knot-1.1.87.AppImage",
-  "linuxAppImageSha256": "a72a7507c81c74488326d743b18f5b17df88599f05717ecb0c3c69a48b0be76a",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.87/Knot.Setup.1.1.87.exe",
-  "winSha256": "f2843b4dded04d8cce116161fc1f136d94ff89ae1e6ff461e196f469012ba78f"
+  "version": "1.1.88",
+  "notes": "Restores account display names, profile photos, and photo framing after sign-in.\nAdds encrypted group DMs, member invites, and group voice/screen calls.\nKeeps Emoji.gg picks attached in the composer until you send, without Emoji.gg favorites or hover cards.\nHardens large file transfers, cancellation, resume, flow control, and direct-path authentication.\nImproves 4K60 screen-share cadence, detail recovery, audio isolation, and latency under load.\nRefines navigation, call controls, unread states, accessibility, and profile UI.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.88/pair-p2p-1.1.88.tar.gz",
+  "linuxSha256": "8875ac695b928d77b281ef16155f0a77572b6c84da78c1fdf827180be4c433ec",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.88/Knot-1.1.88.AppImage",
+  "linuxAppImageSha256": "d5a4d0c922466b384a11960faf92eca6afe570941aef07f5cafb90212648a614",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.88/Knot.Setup.1.1.88.exe",
+  "winSha256": "086ed4df670c94e3d068af87a381e09f27ae4bfb21d83986d60e494244843052",
+  "signature": "gol80+YE9ws4buSZzKyUInjBRqhqT1EChwsYUFppbsnRxO0kz+6vgtpJMkhUyK3BXunXO69V+dm4NdIxJQ6gBg=="
 }

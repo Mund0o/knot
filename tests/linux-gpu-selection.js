@@ -55,6 +55,7 @@ try {
     KNOT_PRIMARY_GPU_VENDOR: '0x10de',
     KNOT_PRIMARY_GPU_RENDER_NODE: path.join(dev, 'renderD128'),
     KNOT_PRIMARY_GPU_PCI: '0000:01:00.0',
+    KNOT_PRIMARY_GPU_INTEGRATED: '0',
     __NV_PRIME_RENDER_OFFLOAD: '1',
     __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
     __VK_LAYER_NV_optimus: 'NVIDIA_only',
@@ -67,14 +68,17 @@ try {
     DRI_PRIME: 'pci-0000_07_00_0!',
     KNOT_PRIMARY_GPU_VENDOR: '0x1002',
     KNOT_PRIMARY_GPU_RENDER_NODE: path.join(dev, 'renderD132'),
-    KNOT_PRIMARY_GPU_PCI: '0000:07:00.0'
+    KNOT_PRIMARY_GPU_PCI: '0000:07:00.0',
+    KNOT_PRIMARY_GPU_INTEGRATED: '0'
   });
 
   const integratedOnly = path.join(root, 'integrated-only');
   const integratedRenderNode = path.join(integratedOnly, 'renderD129');
   fs.mkdirSync(integratedRenderNode, { recursive: true });
   fs.symlinkSync(path.join(devices, 'intel'), path.join(integratedRenderNode, 'device'), 'dir');
-  assert.strictEqual(linuxMainGpu({ platform: 'linux', sysfsRoot: integratedOnly, devRoot: dev }), null);
+  const integratedSelected=linuxMainGpu({ platform: 'linux', sysfsRoot: integratedOnly, devRoot: dev });
+  assert.strictEqual(integratedSelected?.integrated, true);
+  const integratedEnv={};assert.strictEqual(applyLinuxMainGpuEnvironment(integratedSelected,integratedEnv),true);assert.strictEqual(integratedEnv.KNOT_PRIMARY_GPU_INTEGRATED,'1');
 
   const sleepingAmdOnly = path.join(root, 'sleeping-amd-only');
   for (const name of ['card5', 'renderD133']) {
@@ -83,8 +87,8 @@ try {
     fs.symlinkSync(path.join(devices, 'amd-sleeping-discrete'), path.join(node, 'device'), 'dir');
   }
   assert.strictEqual(linuxMainGpu({ platform: 'linux', sysfsRoot: sleepingAmdOnly, devRoot: dev })?.pciAddress, '0000:08:00.0');
-  assert.strictEqual(applyLinuxMainGpuEnvironment(candidates.find(item => item.integrated), {}), false);
-  console.log('PASS Linux main GPU selection excludes integrated graphics');
+  assert.strictEqual(applyLinuxMainGpuEnvironment(candidates.find(item => item.integrated), {}), true);
+  console.log('PASS Linux GPU selection prefers discrete and accelerates integrated-only systems');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

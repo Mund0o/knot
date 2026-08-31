@@ -13,7 +13,7 @@
     while (length <= 8 && !(first & mask)) { mask >>= 1;length++; }
     if (length > 8 || offset+length > bytes.length) return null;
     let value = keepMarker ? first : first & (mask-1);
-    for (let index=1;index<length;index++) value = value*256+bytes[offset+index];
+    for (let index=1;index<length;index++){value=value*256+bytes[offset+index];if(!Number.isSafeInteger(value))return null}
     return { length, value };
   }
 
@@ -39,7 +39,7 @@
   }
 
   function unsigned(bytes, start, end) {
-    let value = 0;for (let offset=start;offset<end;offset++) value=value*256+bytes[offset];return value;
+    let value = 0;for (let offset=start;offset<end;offset++){value=value*256+bytes[offset];if(!Number.isSafeInteger(value))return 0}return value;
   }
 
   function blockFrame(bytes, start, end, clusterTimeMs, durationUs, forceKey = false) {

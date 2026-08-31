@@ -38,12 +38,13 @@ function linuxGpuCandidates(sysfsRoot = '/sys/class/drm', devRoot = '/dev/dri') 
 
 function linuxMainGpu(options = {}) {
   if ((options.platform || process.platform) !== 'linux') return null;
-  const candidates = linuxGpuCandidates(options.sysfsRoot, options.devRoot).filter(candidate => !candidate.integrated);
+  const candidates = linuxGpuCandidates(options.sysfsRoot, options.devRoot);
   if (!candidates.length) return null;
-  // Integrated devices are deliberately ineligible. boot_vga identifies the
-  // user's primary display card; a connected output is the next-best signal
-  // on systems whose firmware does not expose boot_vga.
+  // Prefer a discrete adapter when present, but an integrated-only machine must
+  // still use its real compositor/video GPU. Falling all the way back to CPU
+  // raster and software video on those systems is slower and less efficient.
   return candidates.sort((a, b) =>
+    Number(a.integrated) - Number(b.integrated) ||
     Number(b.bootVga) - Number(a.bootVga) ||
     Number(b.connected) - Number(a.connected) ||
     Math.max(b.pcieLinkWidth, b.pcieMaxLinkWidth) - Math.max(a.pcieLinkWidth, a.pcieMaxLinkWidth) ||
@@ -57,12 +58,13 @@ function primePciSelector(pciAddress) {
 }
 
 function applyLinuxMainGpuEnvironment(gpu, env = process.env) {
-  if (!gpu || gpu.integrated) return false;
+  if (!gpu) return false;
   const selector = primePciSelector(gpu.pciAddress);
   if (selector) env.DRI_PRIME = selector;
   env.KNOT_PRIMARY_GPU_VENDOR = gpu.vendor || '';
   env.KNOT_PRIMARY_GPU_RENDER_NODE = gpu.renderNode || '';
   env.KNOT_PRIMARY_GPU_PCI = gpu.pciAddress || '';
+  env.KNOT_PRIMARY_GPU_INTEGRATED = gpu.integrated ? '1' : '0';
   if (gpu.vendor === '0x10de') {
     // NVIDIA's GLVND/PRIME controls cover EGL/GLX and hide non-NVIDIA Vulkan
     // devices. DRI_PRIME supplies the exact PCI device for Mesa consumers.

@@ -3,7 +3,32 @@
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#if __has_include(<audioclientactivationparams.h>)
 #include <audioclientactivationparams.h>
+#else
+// MinGW's SDK can lag the process-loopback declarations even though the ABI is
+// part of supported Windows 10/11. Keep the official layout locally so release
+// cross-builds and current MSVC builds produce the same activation blob.
+typedef enum AUDIOCLIENT_ACTIVATION_TYPE {
+  AUDIOCLIENT_ACTIVATION_TYPE_DEFAULT,
+  AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
+} AUDIOCLIENT_ACTIVATION_TYPE;
+typedef enum PROCESS_LOOPBACK_MODE {
+  PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+  PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE
+} PROCESS_LOOPBACK_MODE;
+typedef struct AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+  DWORD TargetProcessId;
+  PROCESS_LOOPBACK_MODE ProcessLoopbackMode;
+} AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS;
+typedef struct AUDIOCLIENT_ACTIVATION_PARAMS {
+  AUDIOCLIENT_ACTIVATION_TYPE ActivationType;
+  union { AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS ProcessLoopbackParams; };
+} AUDIOCLIENT_ACTIVATION_PARAMS;
+#ifndef VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK
+#define VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK L"VAD\\Process_Loopback"
+#endif
+#endif
 #include <propvarutil.h>
 #include <thread>
 #include <atomic>
@@ -18,21 +43,24 @@
 // its manifest hashes the current source, so an older addon cannot silently be
 // copied into a new installer.
 static constexpr char kCaptureAbi[] = "knot-screen-audio-v4";
+static constexpr DWORD kActivationTimeoutMs = 5000;
+static constexpr DWORD kCaptureStopTimeoutMs = 1500;
+static constexpr DWORD kCaptureCancelTimeoutMs = 500;
 
 // Windows process loopback lets us capture the system mix while excluding
 // Knot's process tree. This is the same class of capture Discord uses to keep
 // its own voice playback out of a stream. It needs Windows 10 build 20348+.
-struct ActivationState {
-  HANDLE event=nullptr;
-  HRESULT result=E_FAIL;
-  IAudioClient* client=nullptr;
-};
-
 class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler, public IAgileObject {
   std::atomic<ULONG> refs{1};
-  ActivationState* state;
+  HANDLE eventHandle=nullptr;
+  HRESULT result=E_FAIL;
+  IAudioClient* client=nullptr;
 public:
-  explicit ActivationHandler(ActivationState* s):state(s){}
+  ActivationHandler(){eventHandle=CreateEvent(nullptr,FALSE,FALSE,nullptr);}
+  ~ActivationHandler(){if(eventHandle)CloseHandle(eventHandle);if(client)client->Release();}
+  HANDLE event()const{return eventHandle;}
+  HRESULT activationResult()const{return result;}
+  IAudioClient* takeClient(){auto* value=client;client=nullptr;return value;}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
     if(!out)return E_POINTER;
     *out=nullptr;
@@ -46,10 +74,10 @@ public:
   HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation) override {
     HRESULT activation=E_FAIL;IUnknown* unknown=nullptr;
     HRESULT hr=operation?operation->GetActivateResult(&activation,&unknown):E_POINTER;
-    if(SUCCEEDED(hr)&&SUCCEEDED(activation)&&unknown) hr=unknown->QueryInterface(__uuidof(IAudioClient),(void**)&state->client);
+    if(SUCCEEDED(hr)&&SUCCEEDED(activation)&&unknown) hr=unknown->QueryInterface(__uuidof(IAudioClient),(void**)&client);
     if(unknown)unknown->Release();
-    state->result=FAILED(hr)?hr:activation;
-    SetEvent(state->event);
+    result=FAILED(hr)?hr:activation;
+    if(eventHandle)SetEvent(eventHandle);
     return S_OK;
   }
 };
@@ -66,7 +94,6 @@ public:
   UINT32 bufFrames=0;
   HANDLE captureEvent=nullptr;
   bool comInitialized=false;
-  bool processIsolated=true;
   std::thread captureThread;
   Napi::ThreadSafeFunction dataCb,errCb;
 
@@ -95,7 +122,21 @@ public:
 
   void stop(){
     runningFlag.store(false);
-    if(captureThread.joinable())captureThread.join();
+    if(captureEvent)SetEvent(captureEvent);
+    if(captureThread.joinable()){
+      HANDLE threadHandle=(HANDLE)captureThread.native_handle();
+      DWORD wait=WaitForSingleObject(threadHandle,kCaptureStopTimeoutMs);
+      if(wait==WAIT_TIMEOUT){
+        CancelSynchronousIo(threadHandle);
+        if(captureEvent)SetEvent(captureEvent);
+        wait=WaitForSingleObject(threadHandle,kCaptureCancelTimeoutMs);
+      }
+      // WASAPI calls should have returned after the event/cancellation above.
+      // As a last-resort shutdown guard, terminate only this capture worker so
+      // Electron's main thread can never hang forever during app/share teardown.
+      if(wait==WAIT_TIMEOUT){TerminateThread(threadHandle,ERROR_OPERATION_ABORTED);WaitForSingleObject(threadHandle,kCaptureCancelTimeoutMs);}
+      captureThread.join();
+    }
     if(dataCb){dataCb.Release();dataCb=nullptr;}
     if(errCb){errCb.Release();errCb=nullptr;}
     cleanup();
@@ -108,8 +149,8 @@ public:
     o.Set("channels",Napi::Number::New(env,(double)mixFormat->nChannels));
     o.Set("bitsPerSample",Napi::Number::New(env,(double)mixFormat->wBitsPerSample));
     o.Set("sampleType",mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT?Napi::String::New(env,"float"):Napi::String::New(env,"pcm"));
-    o.Set("isolated",Napi::Boolean::New(env,processIsolated));
-    o.Set("mode",Napi::String::New(env,processIsolated?"process-loopback":"system-loopback"));
+    o.Set("isolated",Napi::Boolean::New(env,true));
+    o.Set("mode",Napi::String::New(env,"process-loopback"));
     return o;
   }
 
@@ -119,22 +160,18 @@ private:
     if(SUCCEEDED(hr))comInitialized=true;
     else if(hr!=RPC_E_CHANGED_MODE)return hr;
 
-    processIsolated=true;
-
     // A window/application share captures its owning process and descendants,
     // matching Discord's application-audio model. A full-display share captures
     // every render stream except Knot and its descendants, so voice playback can
     // never be sent back to the person watching.
-    ActivationState state;
-    state.event=CreateEvent(nullptr,FALSE,FALSE,nullptr);
-    if(!state.event)return HRESULT_FROM_WIN32(GetLastError());
     AUDIOCLIENT_ACTIVATION_PARAMS params={};
     params.ActivationType=AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
     params.ProcessLoopbackParams.TargetProcessId=targetPid?targetPid:GetCurrentProcessId();
     params.ProcessLoopbackParams.ProcessLoopbackMode=includeTarget?PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE:PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
     PROPVARIANT prop={};
     prop.vt=VT_BLOB;prop.blob.cbSize=sizeof(params);prop.blob.pBlobData=(BYTE*)&params;
-    auto* handler=new ActivationHandler(&state);
+    auto* handler=new ActivationHandler();
+    if(!handler->event()){handler->Release();return HRESULT_FROM_WIN32(GetLastError());}
     // Resolve dynamically: older SDK link libraries do not always export this
     // newer API even though supported Windows releases do. That lets one addon
     // run on both current and older Windows without a loader failure.
@@ -143,23 +180,17 @@ private:
     IActivateAudioInterfaceAsyncOperation* operation=nullptr;
     hr=activate?activate(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,__uuidof(IAudioClient),&prop,handler,&operation):HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
     if(FAILED(hr)){
-      if(audioApi)FreeLibrary(audioApi);handler->Release();CloseHandle(state.event);
-      // Process-loopback arrived in Windows 10 build 20348. Older supported
-      // Windows 10 installations reject its virtual endpoint entirely. Fall
-      // back to the default render endpoint so a share still has sound rather
-      // than silently attaching an always-empty WebRTC track.
-      processIsolated=false;
-      return initSystemLoopback();
+      if(audioApi)FreeLibrary(audioApi);handler->Release();
+      return hr;
     }
-    WaitForSingleObject(state.event,INFINITE);
+    const DWORD activationWait=WaitForSingleObject(handler->event(),kActivationTimeoutMs);
     if(operation)operation->Release();
     if(audioApi)FreeLibrary(audioApi);
-    handler->Release();CloseHandle(state.event);
-    if(FAILED(state.result)){
-      processIsolated=false;
-      return initSystemLoopback();
-    }
-    audioClient=state.client;
+    if(activationWait!=WAIT_OBJECT_0){handler->Release();return activationWait==WAIT_TIMEOUT?HRESULT_FROM_WIN32(ERROR_TIMEOUT):HRESULT_FROM_WIN32(GetLastError());}
+    hr=handler->activationResult();
+    if(SUCCEEDED(hr))audioClient=handler->takeClient();
+    handler->Release();
+    if(FAILED(hr)||!audioClient)return FAILED(hr)?hr:E_FAIL;
 
     // Request a predictable PCM format. Windows converts the process mix for
     // us, which keeps the Node bridge's real-time samples simple and stable.
@@ -182,32 +213,6 @@ private:
     // Start synchronously so an unavailable/invalid loopback endpoint makes the
     // start IPC fail immediately. Reporting only the initialized format while a
     // worker later fails to start produced a misleading silent "live" track.
-    return audioClient->Start();
-  }
-
-  HRESULT initSystemLoopback(){
-    HRESULT hr=CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,__uuidof(IMMDeviceEnumerator),(void**)&enumerator);
-    if(FAILED(hr))return hr;
-    hr=enumerator->GetDefaultAudioEndpoint(eRender,eConsole,&device);
-    if(FAILED(hr))return hr;
-    hr=device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,(void**)&audioClient);
-    if(FAILED(hr))return hr;
-    auto* requested=(WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
-    if(!requested)return E_OUTOFMEMORY;
-    ZeroMemory(requested,sizeof(WAVEFORMATEX));
-    requested->wFormatTag=WAVE_FORMAT_PCM;requested->nChannels=2;requested->nSamplesPerSec=48000;requested->wBitsPerSample=16;
-    requested->nBlockAlign=requested->nChannels*requested->wBitsPerSample/8;requested->nAvgBytesPerSec=requested->nSamplesPerSec*requested->nBlockAlign;
-    mixFormat=requested;
-    hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,0,0,mixFormat,nullptr);
-    if(FAILED(hr))return hr;
-    hr=audioClient->GetBufferSize(&bufFrames);
-    if(FAILED(hr))return hr;
-    captureEvent=CreateEvent(nullptr,FALSE,FALSE,nullptr);
-    if(!captureEvent)return HRESULT_FROM_WIN32(GetLastError());
-    hr=audioClient->SetEventHandle(captureEvent);
-    if(FAILED(hr))return hr;
-    hr=audioClient->GetService(__uuidof(IAudioCaptureClient),(void**)&captureClient);
-    if(FAILED(hr))return hr;
     return audioClient->Start();
   }
 

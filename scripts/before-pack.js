@@ -5,17 +5,17 @@ const { verifyWindowsAudioAddon } = require('./windows-audio-addon-guard');
 module.exports = async context => {
   if (context.electronPlatformName !== 'win32') {
     // Still stage on non-win dev builds so `npm run dist` stays consistent.
-    stageEmojiCatalog(context.packager.projectDir);
+    await stageEmojiCatalog(context.packager.projectDir);
     return;
   }
   verifyWindowsAudioAddon(context.packager.projectDir);
-  stageEmojiCatalog(context.packager.projectDir);
+  await stageEmojiCatalog(context.packager.projectDir);
 };
 
 // Copy the collected emoji catalog (db + assets + manifest) into a staging
 // directory referenced by build.extraResources, so packaged apps ship the
 // catalog without pulling crawler logs or WAL sidecars into installers.
-function stageEmojiCatalog(projectDir) {
+async function stageEmojiCatalog(projectDir) {
   const srcCatalog = path.join(projectDir, 'emoji-catalog');
   const stage = path.join(projectDir, 'dist-emoji-catalog');
   fs.rmSync(stage, { recursive: true, force: true });
@@ -36,16 +36,33 @@ function stageEmojiCatalog(projectDir) {
     fs.rmSync(tmp, { recursive: true, force: true });
     if (!fs.existsSync(dbSrc)) throw new Error('catalog snapshot did not contain manifest/catalog.db');
   }
-  fs.copyFileSync(dbSrc, dbDst);
-  try { // fold any write-ahead log into the staged copy
-    const { DatabaseSync } = require('node:sqlite');
-    const sdb = new DatabaseSync(dbDst);
-    sdb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    sdb.close();
-    for (const side of ['-wal', '-shm']) fs.rmSync(dbDst + side, { force: true });
-  } catch {}
+  // Take a SQLite-level snapshot so committed rows that still live in the
+  // source WAL cannot be omitted by a plain file copy. Convert the snapshot to
+  // DELETE journaling: AppImages and normal application resource directories
+  // are read-only, while a WAL database tries to create `-shm`/`-wal` files
+  // even when opened with readOnly:true.
+  const { DatabaseSync, backup } = require('node:sqlite');
+  const sourceDb = new DatabaseSync(dbSrc, { readOnly: true });
+  try {
+    await backup(sourceDb, dbDst);
+  } finally {
+    sourceDb.close();
+  }
+  const stagedDb = new DatabaseSync(dbDst);
+  try {
+    stagedDb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    const result = stagedDb.prepare('PRAGMA journal_mode=DELETE').get();
+    if (String(result?.journal_mode || '').toLowerCase() !== 'delete') {
+      throw new Error('could not convert the packaged emoji catalog to read-only-safe journaling');
+    }
+  } finally {
+    stagedDb.close();
+  }
+  for (const side of ['-wal', '-shm', '-journal']) fs.rmSync(dbDst + side, { force: true });
   const originals = path.join(srcCatalog, 'originals');
   if (fs.existsSync(originals)) fs.cpSync(originals, path.join(stage, 'originals'), { recursive: true });
   const mj = path.join(srcCatalog, 'manifest', 'manifest.json');
   if (fs.existsSync(mj)) fs.copyFileSync(mj, path.join(stage, 'manifest', 'manifest.json'));
 }
+
+module.exports.stageEmojiCatalog = stageEmojiCatalog;

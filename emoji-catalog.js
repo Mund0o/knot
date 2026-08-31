@@ -27,18 +27,18 @@ const SYNONYMS = {
 let db = null;
 let activeRoots = [];
 
-function normalizeName(name) { return String(name || '').toLowerCase().replace(/[_\-+.]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+function normalizeName(name) { return String(name || '').toLowerCase().replace(/[_\-+.]+/g, ' ').replace(/[^\p{L}\p{N}\s]+/gu,' ').replace(/\s+/g, ' ').trim(); }
 
 function available() { return !!db; }
 
 // Open whichever catalog database is most recently updated so an installed
 // app automatically follows a collection still running in the dev tree.
 function init(app) {
-  const dirs = candidateDirs(app).filter(dir => fs.existsSync(path.join(dir, 'manifest', 'catalog.db')));
-  if (!dirs.length) { db = null; activeRoots = []; return false; }
-  dirs.sort((a, b) => fs.statSync(path.join(b, 'manifest', 'catalog.db')).mtimeMs - fs.statSync(path.join(a, 'manifest', 'catalog.db')).mtimeMs);
-  try { db = new DatabaseSync(path.join(dirs[0], 'manifest', 'catalog.db')); } catch (error) { console.warn('[emoji catalog] unavailable:', error.message); db = null; return false; }
-  activeRoots = dirs;
+  const dirs = candidateDirs(app).flatMap(dir=>{const file=path.join(dir,'manifest','catalog.db');try{const stat=fs.statSync(file);return stat.isFile()?[{dir,mtime:stat.mtimeMs}]:[]}catch{return[]}});
+  if (!dirs.length) { try{db?.close?.()}catch{}db = null; activeRoots = []; return false; }
+  dirs.sort((a,b)=>b.mtime-a.mtime);
+  try { db?.close?.();db = new DatabaseSync(path.join(dirs[0].dir, 'manifest', 'catalog.db'),{readOnly:true}); } catch (error) { console.warn('[emoji catalog] unavailable:', error.message); db = null; return false; }
+  activeRoots = dirs.map(entry=>entry.dir);
   return true;
 }
 
@@ -106,31 +106,41 @@ function editDistanceWithin(a, b, cap) {
 function search({ q = '', type = 'all', cursor = 0, limit = 60 } = {}) {
   if (!db) return { items: [], nextCursor: null, total: 0 };
   limit = Math.max(1, Math.min(200, limit | 0));
-  cursor = Math.max(0, parseInt(cursor, 10) || 0);
+  cursor = Math.max(0,Math.min(1000000,parseInt(cursor, 10) || 0));
   type = type === 'animated' || type === 'static' ? type : 'all';
-  const normQuery = normalizeName(q);
-  const tokens = Array.from(new Set(normQuery.split(' ').filter(Boolean).flatMap(token => [token, ...(SYNONYMS[token] || [])])));
+  const normQuery = normalizeName(q).slice(0,80);
+  const tokens = Array.from(new Set(normQuery.split(' ').filter(Boolean).slice(0,12).flatMap(token => [token.slice(0,32), ...(SYNONYMS[token] || [])])));
+  if (!tokens.length) {
+    const filtered = type !== 'all', animated = type === 'animated' ? 1 : 0;
+    const total = filtered
+      ? db.prepare('SELECT COUNT(*) total FROM items WHERE animated=?').get(animated).total
+      : db.prepare('SELECT COUNT(*) total FROM items').get().total;
+    const rows = filtered
+      ? db.prepare('SELECT * FROM items WHERE animated=? ORDER BY faves DESC, id ASC LIMIT ? OFFSET ?').all(animated, limit, cursor)
+      : db.prepare('SELECT * FROM items ORDER BY faves DESC, id ASC LIMIT ? OFFSET ?').all(limit, cursor);
+    return { items: rows.map(toPublicItem), nextCursor: cursor + limit < total ? cursor + limit : null, total };
+  }
   let rows;
-  if (tokens.length) {
-    const matchClause = tokens.map(t => `"${t.replace(/["*]/g, '')}"*`).join(' OR ');
-    rows = db.prepare(`SELECT i.*, bm25(emoji_fts) AS bm FROM emoji_fts f JOIN items i ON i.id=f.rowid WHERE emoji_fts MATCH ? LIMIT 400`).all(matchClause);
-    // Typo tolerance: when strict matching is thin, accept near-misses within
-    // an edit-distance budget against every name word (bounded early-exit).
-    const FUZZY_CAP = normQuery.length >= 7 ? 2 : 1;
-    if (rows.length < limit && normQuery.length >= 4) {
-      const have = new Set(rows.map(r => r.id));
-      for (const row of db.prepare('SELECT * FROM items').all()) {
-        if (have.has(row.id)) continue;
-        const words = row.normalized_name.split(' ');
-        const matched = words.some(word => tokens.some(token => token.length >= 4 && editDistanceWithin(word, token, FUZZY_CAP)))
-          || tokens.some(token => token.length >= 5 && editDistanceWithin(row.normalized_name.replace(/ /g, ''), token, FUZZY_CAP))
-          || tokens.some(token => token.length >= 6 && row.normalized_name.includes(token.slice(0, Math.max(4, token.length - 2))));
-        if (!matched) continue;
-        rows.push(row); have.add(row.id);
-      }
+  const matchClause = tokens.map(t => `"${t.replace(/["*]/g, '')}"*`).join(' OR ');
+  rows = db.prepare(`SELECT i.*, bm25(emoji_fts) AS bm FROM emoji_fts f JOIN items i ON i.id=f.rowid WHERE emoji_fts MATCH ? LIMIT 400`).all(matchClause);
+  // Typo tolerance: when strict matching is thin, accept near-misses within
+  // an edit-distance budget against every name word (bounded early-exit).
+  const FUZZY_CAP = normQuery.length >= 7 ? 2 : 1;
+  if (rows.length < limit && normQuery.length >= 4) {
+    const have = new Set(rows.map(r => r.id));
+    const fragments=new Set();
+    for(const token of tokens.filter(value=>value.length>=4)){const size=token.length>=5?3:2,max=Math.max(0,token.length-size);for(const offset of [0,Math.floor(max/2),max])fragments.add(token.slice(offset,offset+size))}
+    const probes=[...fragments].slice(0,24),where=probes.length?probes.map(()=>"instr(normalized_name,?)>0").join(' OR '):'1=1';
+    const candidates=db.prepare(`SELECT * FROM items WHERE ${where} ORDER BY faves DESC,id ASC LIMIT 6000`).all(...probes);
+    for (const row of candidates) {
+      if (have.has(row.id)) continue;
+      const words = row.normalized_name.split(' ');
+      const matched = words.some(word => tokens.some(token => token.length >= 4 && editDistanceWithin(word, token, FUZZY_CAP)))
+        || tokens.some(token => token.length >= 5 && editDistanceWithin(row.normalized_name.replace(/ /g, ''), token, FUZZY_CAP))
+        || tokens.some(token => token.length >= 6 && row.normalized_name.includes(token.slice(0, Math.max(4, token.length - 2))));
+      if (!matched) continue;
+      rows.push(row); have.add(row.id);
     }
-  } else {
-    rows = db.prepare(`SELECT *, 0 AS bm FROM items ORDER BY faves DESC, id ASC`).all();
   }
   if (type !== 'all') rows = rows.filter(row => type === 'animated' ? row.animated === 1 : row.animated === 0);
   const ranked = rows
@@ -153,7 +163,7 @@ function toPublicItem(row) {
     // source after a load failure.
     fallbackUrl: row.original_url,
     license: row.license, author: row.author || '', category: row.category,
-    sourcePage: row.source_page, faves: row.faves || 0,
+    sourcePage: row.source_page,
   };
 }
 
@@ -169,7 +179,10 @@ function get(externalId) {
 
 function attributions() {
   if (!db) return [];
-  return db.prepare(`SELECT * FROM items ORDER BY license ASC, normalized_name ASC LIMIT 2000`).all()
+  // Return every legally required credit. Ordering the entire catalog and then
+  // truncating it hid all CC-BY rows whenever Basic-license rows filled the
+  // first page, which made the in-app attribution screen incomplete.
+  return db.prepare(`SELECT * FROM items WHERE attribution_required=1 ORDER BY normalized_name ASC, id ASC`).all()
     .map(row => ({ ...toPublicItem(row), attributionRequired: !!row.attribution_required }));
 }
 

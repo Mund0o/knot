@@ -17,24 +17,27 @@ async function main() {
   process.env.KNOT_NATIVE_SCREEN_TEST = '1';
   const errors = [],service = new NativeScreenService({ primaryGpuVendor: gpu.vendor, primaryGpuCard: gpu.card, onError: error => errors.push(error) });
   const session = service.start({ codec: 'av1', fps: 60, width: 3840, height: 2160, bitrateKbps: 56000, captureSource: monitor });
-  const chunks = [],startupDeadline = Date.now()+10000;let clusters=0,captureStartedAt=0,terminalError='';
+  const chunks = [],clusterArrivals=[],startupDeadline = Date.now()+10000;let clusters=0,sourceFrames=0,multiFrameClusters=0,captureStartedAt=0,terminalError='';
   while (Date.now()<startupDeadline && (!captureStartedAt || Date.now()-captureStartedAt<4000)) {
     const item = await service.read(session.id, 2000);
     if (item.data) {
       chunks.push(Buffer.from(item.data));
-      if (item.kind === 'cluster') { clusters++;if (!captureStartedAt) captureStartedAt=Date.now(); }
+      if (item.kind === 'cluster') { const now=Date.now(),frames=Math.max(0,Number(item.frameCount)||0);clusters++;sourceFrames+=frames;if(frames!==1)multiFrameClusters++;clusterArrivals.push(now);if (!captureStartedAt) captureStartedAt=now; }
     } else if (!item.active) { terminalError=item.error || '';break; }
   }
   service.stop(session.id);
   assert(captureStartedAt, `received no WebM clusters: ${terminalError || errors.join('; ')}`);
   assert(clusters >= 30, `only received ${clusters} complete WebM clusters in the capture window`);
+  assert.strictEqual(multiFrameClusters,0,`${multiFrameClusters} WebM clusters batched multiple 60-fps frames before transport`);
+  const arrivalDeltas=clusterArrivals.slice(1).map((value,index)=>value-clusterArrivals[index]).sort((a,b)=>a-b),arrivalP95=arrivalDeltas[Math.min(arrivalDeltas.length-1,Math.ceil(arrivalDeltas.length*.95)-1)]||0;
+  assert(arrivalP95<=40,`live WebM cluster delivery p95 reached ${arrivalP95}ms instead of frame cadence`);
   const file = path.join(os.tmpdir(), `knot-native-${process.pid}.webm`);fs.writeFileSync(file, Buffer.concat(chunks));
   try {
     const probe = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-count_packets', '-show_entries', 'stream=codec_name,width,height,r_frame_rate,nb_read_packets', '-of', 'json', file], { encoding: 'utf8', timeout: 12000 }));
     const stream = probe.streams?.[0];assert.deepStrictEqual({ codec: stream?.codec_name, width: stream?.width, height: stream?.height, fps: stream?.r_frame_rate }, { codec: 'av1', width: 3840, height: 2160, fps: '60/1' });
     assert(Number(stream.nb_read_packets) >= 120, `only encoded ${stream.nb_read_packets || 0} video packets in the capture window`);
     assert.strictEqual(errors.length, 0, errors.join('; '));
-    console.log(`PASS live ${info.encoder} AV1 ${stream.width}x${stream.height} ${stream.r_frame_rate}, ${stream.nb_read_packets} packets across ${clusters} complete clusters`);
+    console.log(`PASS live ${info.encoder} AV1 ${stream.width}x${stream.height} ${stream.r_frame_rate}, ${stream.nb_read_packets} packets across ${clusters} one-frame clusters (${sourceFrames} source frames, ${arrivalP95}ms arrival p95)`);
   } finally {
     if (process.env.KNOT_KEEP_NATIVE_CAPTURE === '1') console.log(`CAPTURE ${file}`);
     else try { fs.unlinkSync(file); } catch {}

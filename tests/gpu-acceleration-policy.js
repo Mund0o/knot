@@ -22,7 +22,8 @@ assert(!amdLinux.enableFeatures.includes('VaapiOnNvidiaGPUs'));
 for (const name of ['AcceleratedVideoDecoder', 'AcceleratedVideoEncoder', 'AcceleratedVideoDecodeLinuxGL', 'AcceleratedVideoDecodeLinuxZeroCopyGL']) {
   assert(amdLinux.enableFeatures.includes(name), `AMD policy missing ${name}`);
 }
-assert.strictEqual(gpuAccelerationPolicy({ platform: 'linux', gpu: { integrated: true } }), null);
+const integratedLinux=gpuAccelerationPolicy({platform:'linux',gpu:{vendor:'0x8086',renderNode:'/dev/dri/renderD129',integrated:true},wayland:true});
+assert(integratedLinux);assert.strictEqual(integratedLinux.switches.get('hardware-video-device-path'),'/dev/dri/renderD129');assert(integratedLinux.enableFeatures.includes('AcceleratedVideoDecoder'));
 
 const windows = gpuAccelerationPolicy({ platform: 'win32' });
 assert(windows.switches.has('force-high-performance-gpu'));

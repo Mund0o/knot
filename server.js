@@ -3,8 +3,15 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const {
+  DEFAULT_JOIN_WINDOW_MS,
+  RoomJoinLimiter,
+  signalingJoinAddress,
+  validSignalingRoom,
+} = require('./signaling-policy');
 
-const port = Number(process.env.PORT || 8787);
+const requestedPort = Number(process.env.PORT || 8787);
+const port = Number.isInteger(requestedPort)&&requestedPort>=1&&requestedPort<=65535?requestedPort:8787;
 const rooms = new Map();
 
 // --- HTTP static server (update feed) ----------------------------------------
@@ -21,18 +28,6 @@ function safeDownloadUrl(value) {
     return '';
   }
 }
-// Pick the right installer for the visitor's OS from the latest.json manifest,
-// based on the User-Agent string. Used by /download (redirect) and the landing
-// page so users never have to pick Windows vs Linux manually.
-function platformForRequest(req) {
-  const ua = (req.headers['user-agent'] || '').toLowerCase();
-  if (/windows nt/.test(ua)) return 'win';
-  if (/android/.test(ua)) return 'win'; // no mobile build; fall back to Windows installer
-  if (/linux|x11/.test(ua)) return 'linux';
-  if (/macintosh|mac os x|darwin/.test(ua)) return 'linux'; // no macOS build; fall back to Linux tarball
-  return 'win';
-}
-
 // Read the current update manifest (latest.json) if present.
 function readManifest() {
   try {
@@ -46,7 +41,7 @@ function readManifest() {
 // OS (best guess from User-Agent); the page also re-checks client-side via
 // navigator.platform so the right button is pre-selected even on ambiguous UAs.
 function buildLandingPage(manifest) {
-  const version = manifest && manifest.version ? manifest.version : '—';
+  const version = escapeHtml(manifest && manifest.version ? manifest.version : '—');
   const notes = manifest && manifest.notes ? manifest.notes : '';
   const winUrl = safeDownloadUrl(manifest && manifest.winUrl);
   const linuxUrl = safeDownloadUrl(manifest && manifest.linuxUrl);
@@ -88,12 +83,19 @@ function buildLandingPage(manifest) {
       var win = document.getElementById('win');
       var linux = document.getElementById('linux');
       var other = document.getElementById('other');
+      function showAlternate(prefix, link, label) {
+        var anchor = document.createElement('a');
+        anchor.href = link.getAttribute('href') || '#';
+        anchor.setAttribute('download', '');
+        anchor.textContent = label;
+        other.replaceChildren(document.createTextNode(prefix), anchor, document.createTextNode('.'));
+      }
       if (isLinux) {
         win.hidden = true;
-        other.innerHTML = 'Not on Linux? <a href="' + (win.getAttribute('href')||'#') + '" download>Get Windows instead</a>.';
+        showAlternate('Not on Linux? ', win, 'Get Windows instead');
       } else {
         linux.hidden = true;
-        other.innerHTML = 'Not on Windows? <a href="' + (linux.getAttribute('href')||'#') + '" download>Get Linux instead</a>.';
+        showAlternate('Not on Windows? ', linux, 'Get Linux instead');
       }
     })();
   </script>
@@ -110,14 +112,17 @@ function requestHandler(req, res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'");
+    if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { 'Content-Type': 'text/plain', Allow: 'GET, HEAD' });res.end('Method not allowed');return; }
+    const head=req.method==='HEAD';
     const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
     if (urlPath === '/' || urlPath === '/index.html') {
       const manifest = readManifest();
       // Human-facing landing page: lists both installers and auto-highlights the
       // one matching the visitor's OS (the page also re-checks client-side).
       const page = buildLandingPage(manifest);
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(page);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(head?'':page);
       return;
     }
     if (urlPath === '/download') {
@@ -141,14 +146,18 @@ function requestHandler(req, res) {
     // "…/public_notes"). Require a path separator after the resolved base.
     const base = path.resolve(PUBLIC_DIR);
     const resolved = path.resolve(file);
-    if (resolved !== base && !resolved.startsWith(base + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    let stat,realBase,realFile;try{stat=fs.statSync(file);realBase=fs.realpathSync(PUBLIC_DIR);realFile=fs.realpathSync(file)}catch{}
+    if ((resolved !== base && !resolved.startsWith(base + path.sep)) || !stat || !stat.isFile() || (realFile!==realBase&&!realFile?.startsWith(realBase+path.sep))) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('Not found');
       return;
     }
-    const ext = path.extname(file).toLowerCase();
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': fs.statSync(file).size });
-    const rs=fs.createReadStream(file);rs.on('error',()=>{try{res.end()}catch{}});res.on('close',()=>rs.destroy());rs.pipe(res);
+    const ext = path.extname(file).toLowerCase(),headers={ 'Content-Type': MIME[ext] || 'application/octet-stream', 'Accept-Ranges': 'bytes', 'Cache-Control': urlPath==='/latest.json'?'no-store':'public, max-age=3600' };
+    let start=0,end=Math.max(0,stat.size-1),status=200;const range=String(req.headers.range||'');
+    if(range){const match=/^bytes=(\d*)-(\d*)$/.exec(range);if(!match||(!match[1]&&!match[2])){res.writeHead(416,{...headers,'Content-Range':`bytes */${stat.size}`});res.end();return}if(match[1]){start=Number(match[1]);end=match[2]?Number(match[2]):end}else{const suffix=Number(match[2]);start=Math.max(0,stat.size-suffix)}if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<0||start>=stat.size||end<start){res.writeHead(416,{...headers,'Content-Range':`bytes */${stat.size}`});res.end();return}end=Math.min(end,stat.size-1);status=206;headers['Content-Range']=`bytes ${start}-${end}/${stat.size}`}
+    headers['Content-Length']=stat.size?end-start+1:0;res.writeHead(status,headers);
+    if(head){res.end();return}
+    const rs=fs.createReadStream(file,stat.size?{start,end}:undefined);rs.on('error',()=>{try{res.end()}catch{}});res.on('close',()=>rs.destroy());rs.pipe(res);
   } catch (e) {
     res.writeHead(500, { 'Content-Type': 'text/plain' });
     res.end('Error');
@@ -166,20 +175,20 @@ const httpServer = tlsEnabled
 
 // The relay only carries setup/control data and bounded file frames. TLS belongs
 // at a reverse proxy; Knot clients require wss:// for non-local signaling.
-const wss = new WebSocket.Server({ server: httpServer, host: '0.0.0.0', maxPayload: 2 * 1024 * 1024, perMessageDeflate: false });
+const wss = new WebSocket.Server({ server: httpServer, maxPayload: 2 * 1024 * 1024, perMessageDeflate: false });
 const MAX_ROOM_PEERS = 2;
-const MAX_SOCKET_BYTES_PER_SECOND = 512 * 1024 * 1024;
-
-function validRoom(value) {
-  const parts = String(value).split(':');
-  const [base, suffix] = parts;
-  return parts.length <= 2 && /^[A-Z0-9_-]{16,64}$/.test(base) && (suffix === undefined || suffix.toLowerCase() === 'stream');
-}
+const MAX_SOCKET_BYTES_PER_SECOND = 128 * 1024 * 1024;
+const MAX_SOCKET_MESSAGES_PER_SECOND = 240;
+const MAX_LIVE_CLIENTS = 4096;
+const RELAY_BUFFER_HIGH = 16 * 1024 * 1024;
+const RELAY_BUFFER_LOW = 4 * 1024 * 1024;
+const roomJoinLimiter = new RoomJoinLimiter();
 function withinRate(socket, bytes) {
   const now = Date.now();
-  if (!socket._rateAt || now - socket._rateAt >= 1000) { socket._rateAt = now; socket._rateBytes = 0; }
+  if (!socket._rateAt || now - socket._rateAt >= 1000) { socket._rateAt = now; socket._rateBytes = 0;socket._rateMessages=0; }
   socket._rateBytes = (socket._rateBytes || 0) + bytes;
-  return socket._rateBytes <= MAX_SOCKET_BYTES_PER_SECOND;
+  socket._rateMessages = (socket._rateMessages || 0) + 1;
+  return socket._rateBytes <= MAX_SOCKET_BYTES_PER_SECOND&&socket._rateMessages<=MAX_SOCKET_MESSAGES_PER_SECOND;
 }
 
 function leave(socket) {
@@ -189,6 +198,18 @@ function leave(socket) {
   if (remaining.length) rooms.set(socket.room, remaining);
   else rooms.delete(socket.room);
   socket.room = null;
+  if(socket._relayPauseTimer){clearInterval(socket._relayPauseTimer);socket._relayPauseTimer=null}
+  try{socket._socket?.resume()}catch{}
+}
+
+function relaySend(source,peer,data,isBinary=false){
+  try{
+    peer.send(data,{binary:isBinary},error=>{if(error)try{peer.terminate()}catch{}});
+    if(peer.bufferedAmount<=RELAY_BUFFER_HIGH||source._relayPauseTimer)return true;
+    try{source._socket?.pause()}catch{}
+    source._relayPauseTimer=setInterval(()=>{if(peer.readyState!==WebSocket.OPEN||peer.bufferedAmount<=RELAY_BUFFER_LOW){clearInterval(source._relayPauseTimer);source._relayPauseTimer=null;try{source._socket?.resume()}catch{}}},25);source._relayPauseTimer.unref?.();
+    return true;
+  }catch{try{peer.terminate()}catch{};return false}
 }
 
 // Sweep rooms that have only a non-open socket left (covers the rare case where
@@ -201,26 +222,31 @@ setInterval(() => {
     else rooms.delete(name);
   }
 }, 60000).unref();
+setInterval(() => roomJoinLimiter.sweep(), DEFAULT_JOIN_WINDOW_MS).unref();
 
-wss.on('connection', socket => {
+wss.on('connection', (socket, request) => {
+  if(wss.clients.size>MAX_LIVE_CLIENTS){try{socket.close(1013,'server busy')}catch{};return}
+  socket._joinAddress = signalingJoinAddress(socket, request);
+  socket._alive=true;socket.on('pong',()=>{socket._alive=true});
   socket.on('message', (raw, isBinary) => {
     if (!withinRate(socket, raw.length || 0)) { try { socket.close(1008, 'rate limit'); } catch {} return; }
     // Binary frames are file-stream chunks; relay them verbatim to the peer.
     if (isBinary) {
       if (!socket.room || !socket.room.toLowerCase().endsWith(':stream')) return;
       for (const peer of rooms.get(socket.room) || []) {
-        if (peer !== socket && peer.readyState === WebSocket.OPEN) peer.send(raw);
+        if (peer !== socket && peer.readyState === WebSocket.OPEN) relaySend(socket,peer,raw,true);
       }
       return;
     }
     let message;
     try { message = JSON.parse(raw.toString()); } catch { return; }
     if (message.type === 'join' && typeof message.room === 'string') {
+      if (!roomJoinLimiter.allow(socket)) { try { socket.close(1008, 'join rate limit'); } catch {} return; }
       leave(socket);
       const room = message.room.trim().toUpperCase();
-      if (!validRoom(room)) { socket.send(JSON.stringify({ type: 'error', message: 'Room code must be 16–64 letters, numbers, _ or -.' })); return; }
-      const peers = rooms.get(room) || [];
-      if (peers.length >= MAX_ROOM_PEERS) { socket.send(JSON.stringify({ type: 'full' })); return; }
+      if (!validSignalingRoom(room)) { socket.send(JSON.stringify({ type: 'error', message: 'Signaling sessions require a private 24–64 character capability.' })); return; }
+      const peers = (rooms.get(room) || []).filter(peer=>peer.readyState===WebSocket.OPEN);
+      if (peers.length >= MAX_ROOM_PEERS) { try{socket.send(JSON.stringify({ type: 'full' }),()=>socket.close(1008,'room full'))}catch{try{socket.close(1008,'room full')}catch{}}return; }
       socket.room = room;
       peers.push(socket);
       rooms.set(room, peers);
@@ -231,13 +257,18 @@ wss.on('connection', socket => {
     if (socket.room && message.type === 'signal') {
       // Relay signaling + any other JSON control messages to the peer.
       for (const peer of rooms.get(socket.room) || []) {
-        if (peer !== socket && peer.readyState === WebSocket.OPEN) peer.send(JSON.stringify(message));
+        if (peer !== socket && peer.readyState === WebSocket.OPEN) relaySend(socket,peer,JSON.stringify(message),false);
       }
     }
   });
   socket.on('close', () => leave(socket));
   socket.on('error', () => leave(socket));
 });
+
+// WebSocket readyState can remain OPEN for a severed Wi-Fi/TCP path until the
+// operating system times it out. Ping once per 30 seconds so abandoned rooms
+// and their buffers are reclaimed promptly.
+setInterval(()=>{for(const socket of wss.clients){if(socket._alive===false){leave(socket);try{socket.terminate()}catch{};continue}socket._alive=false;try{socket.ping()}catch{leave(socket);try{socket.terminate()}catch{}}}},30000).unref();
 
 httpServer.on('error', err => {
   if (err.code === 'EADDRINUSE') {
@@ -253,7 +284,9 @@ httpServer.on('error', err => {
 // Non-TLS signaling is intentionally loopback-only. Remote peers must use TLS
 // (or a TLS reverse proxy), which keeps room codes and signaling metadata off a
 // local network observer.
-const bindHost = process.env.PAIR_BIND || (tlsEnabled ? '0.0.0.0' : '127.0.0.1');
+const requestedBind=String(process.env.PAIR_BIND||''),loopback=/^(?:localhost|127(?:\.\d{1,3}){3}|::1)$/i.test(requestedBind);
+const bindHost = !tlsEnabled&&requestedBind&&!loopback?'127.0.0.1':requestedBind||(tlsEnabled?'0.0.0.0':'127.0.0.1');
+if(!tlsEnabled&&requestedBind&&!loopback)console.warn('PAIR_BIND requested a non-loopback address without TLS; Knot is binding to 127.0.0.1 instead.');
 httpServer.listen(port, bindHost, () => {
   console.log(`Knot server listening on ${tlsEnabled ? 'https' : 'http'}://${bindHost}:${port} (signaling + update feed)`);
 });

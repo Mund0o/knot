@@ -78,9 +78,12 @@ try {
   const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   assert(mainSource.includes('NATIVE_AUDIO_MAX_INFLIGHT = 3') && mainSource.includes("ipcMain.on('pair:cleanAudioAck'"), 'native audio IPC is not acknowledgement-bounded');
   assert(mainSource.includes("'module-loopback'") && mainSource.includes('source=${sink}.monitor') && !mainSource.includes("'module-combine-sink'"), 'Linux desktop audio regressed to the PipeWire fan-out route that can starve capture under load');
-  assert(addonSource.includes('return initSystemLoopback();') && addonSource.includes('"system-loopback"'), 'Windows 10 fallback capture is missing');
+  assert(!addonSource.includes('initSystemLoopback') && !addonSource.includes('"system-loopback"'), 'Windows capture can still fall back to unsafe whole-system loopback');
+  assert(!addonSource.includes('WaitForSingleObject(state.event,INFINITE)') && addonSource.includes('kActivationTimeoutMs') && addonSource.includes('ERROR_TIMEOUT'), 'Windows process-loopback activation is not timeout bounded');
+  assert(addonSource.includes('SetEvent(captureEvent)') && addonSource.includes('CancelSynchronousIo(threadHandle)') && addonSource.includes('TerminateThread(threadHandle,ERROR_OPERATION_ABORTED)'), 'Windows capture teardown can still block Electron indefinitely');
   assert(preloadSource.includes("ipcRenderer.send('pair:cleanAudioAck'"), 'renderer bridge does not release native audio IPC backpressure');
   assert(!rendererSource.includes('createScriptProcessor') && rendererSource.includes("new AudioWorkletNode(ctx,'knot-screen-audio'"), 'Windows capture regressed to renderer-thread audio processing');
+  assert(rendererSource.includes("fmt?.available!==false&&fmt?.isolated===true") && rendererSource.includes("captureFailure='isolated WASAPI process-loopback format unavailable'") && rendererSource.includes('captureFailure||!formatReady'), 'renderer can attach Windows desktop sound without a confirmed isolated route');
   assert(rendererSource.includes('screenShareOutputElements()') && rendererSource.includes('applyMediaElementOutput(nativeRemoteAudio)') && rendererSource.includes('state.screenAudio'), 'selected output does not cover native/server screen audio');
   assert(rendererSource.includes('isAdditionalScreenAudio') && rendererSource.includes('e.transceiver!==remoteVoiceTransceiver'), 'a late Windows computer-audio track can still be mistaken for muted call audio on Linux');
   console.log('PASS Windows audio addon guard and bounded screen-audio worklet');
