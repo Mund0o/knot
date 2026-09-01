@@ -1,11 +1,11 @@
 {
-  "version": "1.1.88",
-  "notes": "Restores account display names, profile photos, and photo framing after sign-in.\nAdds encrypted group DMs, member invites, and group voice/screen calls.\nKeeps Emoji.gg picks attached in the composer until you send, without Emoji.gg favorites or hover cards.\nHardens large file transfers, cancellation, resume, flow control, and direct-path authentication.\nImproves 4K60 screen-share cadence, detail recovery, audio isolation, and latency under load.\nRefines navigation, call controls, unread states, accessibility, and profile UI.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.88/pair-p2p-1.1.88.tar.gz",
-  "linuxSha256": "8875ac695b928d77b281ef16155f0a77572b6c84da78c1fdf827180be4c433ec",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.88/Knot-1.1.88.AppImage",
-  "linuxAppImageSha256": "d5a4d0c922466b384a11960faf92eca6afe570941aef07f5cafb90212648a614",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.88/Knot.Setup.1.1.88.exe",
-  "winSha256": "086ed4df670c94e3d068af87a381e09f27ae4bfb21d83986d60e494244843052",
-  "signature": "gol80+YE9ws4buSZzKyUInjBRqhqT1EChwsYUFppbsnRxO0kz+6vgtpJMkhUyK3BXunXO69V+dm4NdIxJQ6gBg=="
+  "version": "1.1.89",
+  "notes": "Group DMs and calls, restored account profiles, encrypted SQLite history, API-backed emoji search, safer file transfers, Directory V2, and smoother low-latency screen sharing.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.89/pair-p2p-1.1.89.tar.gz",
+  "linuxSha256": "e30274d7a84eaf794444aa0d28dc1955fb5e2f0600e0c1ba62211bfa4efa90a9",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.89/Knot-1.1.89.AppImage",
+  "linuxAppImageSha256": "25a5f0709b04c960d5241ab0384fb0109a012995cf359539b50d021b1265cfc0",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.89/Knot.Setup.1.1.89.exe",
+  "winSha256": "14fbbfa22249c4312fcae9037113d5c9d3e75a0052b50c3935f27147e3604669",
+  "signature": "OaQI7Mfgl8IU3v4Io49BFDUeLxioaLyrcjsXM6E0KNKVSUfEtxX7L0BMG1d4fSnHCKlqq/ZdxwwR/kWwbBFBDg=="
 }
