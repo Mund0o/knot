@@ -8,6 +8,8 @@ const { NativeScreenService } = require('./native-screen');
 const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
 const { SettingsStore } = require('./settings-store');
 const { FORMAT: LOCAL_SETTINGS_FORMAT, LocalSettingsCipher } = require('./settings-crypto');
+const { EncryptedHistoryStore, validScope: validHistoryScope, MAX_ENTRY_BYTES: MAX_HISTORY_ENTRY_BYTES } = require('./history-store');
+const { LocalMetricsStore } = require('./local-metrics');
 const { SaveStreamManager, safeSuggestedFileName } = require('./save-streams');
 const nodeNet = require('net');
 const crypto = require('crypto');
@@ -26,9 +28,9 @@ app.on('second-instance', () => {
   mainWin.show();mainWin.focus();
 });
 
-// The locally collected emoji catalog serves content-addressed, immutable
-// assets over its own scheme so sandboxed renderer pages can reference them
-// without touching raw filesystem paths.
+// API-fetched emoji assets use a private scheme so the sandboxed renderer never
+// receives filesystem paths. The handler below enforces the Emoji.gg CDN host,
+// validates image signatures, and owns the bounded on-demand cache.
 protocol.registerSchemesAsPrivileged([
   { scheme: 'emoji', privileges: { standard: false, secure: true, supportFetchAPI: true, stream: true } },
 ]);
@@ -44,7 +46,7 @@ const LINUX_AUDIO_MAX_INFLIGHT = 3;
 const LINUX_AUDIO_MAX_BUFFER_BYTES = LINUX_AUDIO_PACKET_BYTES * 6;
 let nativeScreenService = null;
 let selectedPrimaryGpu = null;
-let emojiWorker = null, emojiWorkerSequence = 0;
+let emojiWorker = null, emojiWorkerSequence = 0, emojiRefreshPromise = null;
 const emojiWorkerPending = new Map();
 function stopEmojiWorker(error = new Error('Emoji catalog worker stopped')) {
   const worker = emojiWorker;emojiWorker = null;
@@ -67,8 +69,13 @@ function emojiWorkerRequest(worker, method, args) {
 }
 function emojiWorkerCall(method, ...args) {
   const worker=ensureEmojiWorker();if(!worker)return Promise.resolve().then(()=>emojiCatalog[method](...args));
-  return emojiWorkerRequest(worker,method,args).catch(error=>{console.warn('[emoji catalog] worker request failed:',error?.message||error);if(emojiWorker===worker)void stopEmojiWorker(error);const retry=ensureEmojiWorker();return retry&&retry!==worker?emojiWorkerRequest(retry,method,args):method==='search'?{items:[],nextCursor:null,total:0}:method==='attributions'?[]:null});
+  return emojiWorkerRequest(worker,method,args).catch(error=>{console.warn('[emoji api] worker request failed:',error?.message||error);if(emojiWorker===worker)void stopEmojiWorker(error);const retry=ensureEmojiWorker();return retry&&retry!==worker?emojiWorkerRequest(retry,method,args):method==='search'?{items:[],nextCursor:null,total:0,stale:true}:method==='stats'?{total:0,animated:0,cacheBytes:0,cacheFiles:0,updatedAt:0,source:'api'}:null});
 }
+function refreshEmojiCatalog(force=false){
+  if(!emojiRefreshPromise)emojiRefreshPromise=emojiCatalog.refresh({force}).catch(error=>{console.warn('[emoji api] refresh failed:',error?.message||error);return emojiCatalog.stats()}).finally(()=>{emojiRefreshPromise=null});
+  return emojiRefreshPromise;
+}
+async function ensureEmojiCatalog(){const current=emojiCatalog.stats();if(!current.total)await refreshEmojiCatalog(true);else if(!current.updatedAt||Date.now()-current.updatedAt>6*60*60*1000)void refreshEmojiCatalog(false);return emojiCatalog.stats()}
 // NVIDIA Broadcast/NVBroadcast can expose a virtual audio/render surface that
 // contains a monitored microphone. It must stay out of both the window picker
 // and the Linux PipeWire share route, otherwise a local voice echo is possible.
@@ -282,7 +289,7 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.sender === mainWin?.webContents && event.senderFrame === event.sender?.mainFrame && event.senderFrame?.url === PAIR_RENDERER_URL;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'screenBitrate', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
@@ -290,7 +297,6 @@ const MAX_FILE_SIZE = 200 * 1024 ** 3;
 const DIRECT_FILE_DEFAULT_PORT = 8787;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
 const MAX_SHARE_SOURCES = 256;
-const MAX_EMOJI_ASSET_SIZE = 1024 * 1024;
 const DEEPFILTER_ASSETS = Object.freeze({
   wasm: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'pkg', 'df_bg.wasm'),
   model: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'models', 'DeepFilterNet3_onnx.tar.gz')
@@ -645,6 +651,8 @@ function sp() {
 }
 const settingsStore = new SettingsStore(sp);
 const settingsCipher = new LocalSettingsCipher(() => path.join(path.dirname(sp()), 'settings.key'), { vault: safeStorage });
+const historyStore = new EncryptedHistoryStore(() => path.join(path.dirname(sp()), 'history.db'), { keyProvider: () => settingsCipher.key() });
+const metricsStore = new LocalMetricsStore(() => path.join(path.dirname(sp()), 'metrics.db'));
 // The AES key is wrapped by Electron safeStorage when the OS vault is available.
 // Existing raw 32-byte keys migrate in place after their first successful read;
 // systems without vault support retain the mode-0600 compatibility fallback.
@@ -681,6 +689,17 @@ ipcMain.handle('pair:setSetting', async (event, key, value) => {
   }
   return settingsStore.set(key, stored);
 });
+ipcMain.on('pair:metricRecord',(event,name,value,tags)=>{if(isPairRenderer(event))metricsStore.record(name,value,tags)});
+ipcMain.handle('pair:metricSummary',(event,hours)=>isPairRenderer(event)?metricsStore.summary({hours}):{localOnly:true,hours:24,samples:0,metrics:{}});
+ipcMain.handle('pair:historyAppend',async(event,owner,conversation,entry)=>{
+  if(!isPairRenderer(event)||!validHistoryScope(owner,conversation))return{added:0};let size=Infinity;try{size=Buffer.byteLength(JSON.stringify(entry),'utf8')}catch{}if(size>MAX_HISTORY_ENTRY_BYTES)return{added:0};const started=performance.now();try{return await historyStore.append(owner,conversation,entry)}finally{metricsStore.record('history.append_ms',performance.now()-started)}
+});
+ipcMain.handle('pair:historyList',async(event,owner,conversation,options)=>{
+  if(!isPairRenderer(event)||!validHistoryScope(owner,conversation))return{items:[],nextBefore:null,hasOlder:false};const started=performance.now();try{return await historyStore.list(owner,conversation,options||{})}finally{metricsStore.record('history.read_ms',performance.now()-started)}
+});
+ipcMain.handle('pair:historyImport',async(event,owner,histories)=>{
+  if(!isPairRenderer(event)||!/^[a-f0-9]{32}$/.test(String(owner||'')))return false;let size=Infinity;try{size=Buffer.byteLength(JSON.stringify(histories),'utf8')}catch{}if(size>MAX_SETTING_VALUE)return false;return historyStore.importLegacy(owner,histories)
+});
 
 // Updates are checked by the main process on launch. The renderer can only
 // accept a manifest already verified by that process; it cannot influence the
@@ -691,7 +710,7 @@ ipcMain.handle('pair:acceptUpdate', event => isPairRenderer(event) ? installAvai
 let runtimeCleanupPromise=null,relaunching=false;
 async function cleanupRuntime(){
   if(runtimeCleanupPromise)return runtimeCleanupPromise;
-  runtimeCleanupPromise=(async()=>{await nativeScreenService?.stopAsync?.();await stopLinuxShareAudio();await closeDirectFileRuntime();await closeAllSaveStreams();await settingsStore.flush();await stopEmojiWorker();stopNativeCapture()})().finally(()=>{runtimeCleanupPromise=null});
+  runtimeCleanupPromise=(async()=>{await nativeScreenService?.stopAsync?.();await stopLinuxShareAudio();await closeDirectFileRuntime();await closeAllSaveStreams();await settingsStore.flush();historyStore.close();metricsStore.close();await stopEmojiWorker();emojiCatalog.close();stopNativeCapture()})().finally(()=>{runtimeCleanupPromise=null});
   return runtimeCleanupPromise;
 }
 ipcMain.on('pair:relaunch', event => { if(!isPairRenderer(event)||relaunching)return;relaunching=true;void cleanupRuntime().finally(()=>{app.relaunch();app.exit(0)}) });
@@ -767,33 +786,23 @@ app.on('child-process-gone', (_event, details) => {
 });
 
 app.whenReady().then(async () => {
-  // Emoji.gg catalog: indexed local search + content-addressed asset serving.
-  // A missing/unbuilt catalog degrades to empty results with zero startup cost.
-  if (emojiCatalog.init(app)) {
-    startEmojiWorker(emojiCatalog.dir());
-    protocol.handle('emoji', async request => {
-      try {
-        // Accept the previous path-shaped form too, so emoji favorites and
-        // message history saved before the URL fix remain viewable.
-        const match = /^emoji:\/\/(?:\/)?([0-9a-f]{2})\/([0-9a-f]{64})\.(gif|png|webp|jpg)$/.exec(request.url);
-        if (!match) return new Response(null, { status: 400 });
-        const abs = emojiCatalog.resolveAsset(`${match[1]}/${match[2]}.${match[3]}`);
-        if (!abs) return new Response(null, { status: 404 });
-        const stat=await fs.promises.stat(abs);if(!stat.isFile()||stat.size<=0||stat.size>MAX_EMOJI_ASSET_SIZE)return new Response(null,{status:404});
-        const mime = { gif: 'image/gif', png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg' }[match[3]];
-        return new Response(await fs.promises.readFile(abs), {
-          headers: { 'Content-Type': mime, 'Cache-Control': 'public, max-age=31536000, immutable' },
-        });
-      } catch { return new Response(null, { status: 404 }); }
-    });
-  }
-  // Keep these handlers available before a catalog has been collected. The
-  // picker can show an empty state normally instead of triggering a missing
-  // Electron IPC handler error.
-  ipcMain.handle('pair:emojiSearch', (event, params) => isPairRenderer(event)
-    ? emojiWorkerCall('search', params || {}) : { items: [], nextCursor: null, total: 0 });
-  ipcMain.handle('pair:emojiGet', (event, id) => isPairRenderer(event) ? emojiWorkerCall('get', id) : null);
-  ipcMain.handle('pair:emojiAttributions', event => isPairRenderer(event) ? emojiWorkerCall('attributions') : []);
+  metricsStore.record('app.main_ready_ms',process.uptime()*1000);
+  // Populate the local search index in the background. Existing cached metadata
+  // is available immediately; the built-in Unicode picker remains the offline
+  // seed when Emoji.gg cannot be reached.
+  if(emojiCatalog.init(app)){startEmojiWorker(emojiCatalog.dir());void refreshEmojiCatalog(false)}
+  protocol.handle('emoji', async request => {
+    try {
+      const asset=await emojiCatalog.assetForRequest(request.url);if(!asset)return new Response(null,{status:404});
+      return new Response(asset.buffer,{headers:{'Content-Type':asset.mime,'Cache-Control':'private, max-age=86400'}});
+    } catch { return new Response(null,{status:404}); }
+  });
+  ipcMain.handle('pair:emojiSearch', async (event, params) => {
+    if(!isPairRenderer(event))return {items:[],nextCursor:null,total:0,stale:true};
+    await ensureEmojiCatalog();return emojiWorkerCall('search',params||{});
+  });
+  ipcMain.handle('pair:emojiGet', async (event,id)=>{if(!isPairRenderer(event))return null;await ensureEmojiCatalog();return emojiWorkerCall('get',id)});
+  ipcMain.handle('pair:emojiStats', async event=>{if(!isPairRenderer(event))return {total:0,animated:0,cacheBytes:0,cacheFiles:0,updatedAt:0,source:'api'};await ensureEmojiCatalog();return emojiCatalog.stats()});
   // Keep Knot itself outside the temporary PipeWire share mix.
   if (process.platform === 'linux' && /PipeWire/i.test(await pipewireAsync('pactl', ['info']))) {
     const sink = await pipewireAsync('pactl', ['get-default-sink']); if (sink) process.env.PULSE_SINK = sink;

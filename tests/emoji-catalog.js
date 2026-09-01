@@ -1,131 +1,50 @@
+'use strict';
+
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { normalizeLicense, LICENSES, MIRRORABLE, attributionRequired } = require('../tools/emoji-collector/lib/licenses');
-const { sniff, isAnimated, dimensions } = require('../tools/emoji-collector/lib/images');
-
-// --- License policy -----------------------------------------------------------
-assert.strictEqual(normalizeLicense('2'), LICENSES.WTFPL);
-assert.strictEqual(normalizeLicense('wtfpl'), LICENSES.WTFPL);
-assert.strictEqual(normalizeLicense('1'), LICENSES.CC_BY_4_0);
-assert.strictEqual(normalizeLicense('CC BY 4.0'), LICENSES.CC_BY_4_0);
-assert.strictEqual(normalizeLicense('Basic'), LICENSES.BASIC);
-assert.strictEqual(normalizeLicense('Basic with credits'), LICENSES.BASIC);
-assert.strictEqual(normalizeLicense('0'), LICENSES.BASIC);
-assert.strictEqual(normalizeLicense(''), LICENSES.UNKNOWN);
-assert.strictEqual(normalizeLicense(null), LICENSES.UNKNOWN);
-assert.strictEqual(normalizeLicense('Streamer License'), LICENSES.STREAMER);
-assert.strictEqual(normalizeLicense('some random text'), LICENSES.UNKNOWN);
-
-for (const allowed of ['WTFPL', 'CC-BY-4.0', 'Basic']) assert(MIRRORABLE(allowed), allowed + ' must mirror');
-for (const rejected of [LICENSES.STREAMER, LICENSES.UNKNOWN]) assert(!MIRRORABLE(rejected), rejected + ' must NOT mirror');
-
-// Priority + attribution rules.
-assert(attributionRequired(LICENSES.CC_BY_4_0) === true);
-assert(attributionRequired(LICENSES.WTFPL) === false);
-assert(attributionRequired(LICENSES.BASIC) === false);
-console.log('PASS emoji license normalization and mirror policy');
-
-// --- Image sniffing / animation -------------------------------------------------
-function gifWithFrames(frameCount) {
-  const parts = [Buffer.from('GIF89a', 'ascii'), Buffer.from([0x01, 0x00, 0x01, 0x00, 0xF0, 0x00, 0x00])];
-  // global color table: packed bit7 set -> 2 colors * 3 bytes
-  parts.push(Buffer.alloc(6));
-  for (let f = 0; f < frameCount; f++) {
-    parts.push(Buffer.from([0x21, 0xF9, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00])); // GCE
-    parts.push(Buffer.from([0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00])); // descriptor + LZW data
-  }
-  parts.push(Buffer.from([0x3B]));
-  return Buffer.concat(parts);
-}
-assert.strictEqual(sniff(gifWithFrames(1)).mime, 'image/gif');
-assert.strictEqual(isAnimated(gifWithFrames(1), 'image/gif'), false, 'single-frame GIF misread as animated');
-assert.strictEqual(isAnimated(gifWithFrames(3), 'image/gif'), true, 'multi-frame GIF not detected');
-
-function pngChunk(type, data) {
-  return Buffer.concat([Buffer.from([0,0,0,data.length].length===4?[0,0,0,data.length]:[0]), Buffer.from(type,'ascii'), data, Buffer.alloc(4)]);
-}
-const ihdr = pngChunk('IHDR', Buffer.from([0,0,0,32, 0,0,0,32, 8,6,0,0,0]));
-const actl = pngChunk('acTL', Buffer.from([0,0,0,3, 0,0,0,0])); // 3 frames, infinite loops
-const idat = pngChunk('IDAT', Buffer.from([0x78,0x9c,0x63,0x60,0x60,0x60,0x00,0x00,0x00,0x04,0x00,0x01]));
-const png = Buffer.concat([Buffer.from('\x89PNG\r\n\x1a\n','binary'), ihdr, actl, idat]);
-assert.strictEqual(sniff(png).mime, 'image/png');
-assert.strictEqual(isAnimated(png, 'image/png'), true, 'APNG acTL not detected');
-
-const webp = Buffer.concat([Buffer.from('RIFF', 'ascii'), Buffer.from([36,0,0,0]), Buffer.from('WEBPVP8X', 'ascii'), Buffer.alloc(18)]);
-assert.strictEqual(isAnimated(webp, 'image/webp'), false);
-console.log('PASS image signature sniffing and animation detection (GIF/APNG/WebP)');
-
-const dims = dimensions(gifWithFrames(2), 'image/gif');
-assert.strictEqual(dims.width, 1); assert.strictEqual(dims.height, 1);
-const pngDims = dimensions(png, 'image/png');
-assert.strictEqual(pngDims.width, 32); assert.strictEqual(pngDims.height, 32);
-console.log('PASS dimension extraction from headers');
-
-// --- Catalog database + search (real collected catalog; read-only) ---------------
-const catalogDbPath = path.join(__dirname, '..', 'emoji-catalog', 'manifest', 'catalog.db');
-if (!fs.existsSync(catalogDbPath)) { console.log('SKIP catalog db checks (no catalog yet — run npm run emoji:collect)'); process.exit(0); }
 const catalog = require('../emoji-catalog');
-catalog.init();
-assert(catalog.available(), 'catalog present but unavailable');
-const { DatabaseSync } = require('node:sqlite');
-const db = new DatabaseSync(catalogDbPath, { readOnly: true });
 
-const stats = catalog.stats();
-assert(stats.total > 0, 'catalog empty');
-const res = catalog.search({ q: '' });
-assert(res.total === stats.total && res.items.length <= 60, 'pagination window broken');
-const page2 = catalog.search({ q: '', cursor: 60 });
-assert(page2.items.length > 0 && page2.items.every(i => !res.items.some(r => r.id === i.id)), 'cursor pagination overlaps');
+const PNG = Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]);
+const rows = [
+  {id:1,title:'party',slug:'1000_party',image:'https://cdn3.emoji.gg/emojis/1000_party.png',description:'celebrate happy',category:1,license:'0',faves:10,submitted_by:'A'},
+  {id:2,title:'party_dance',slug:'1001_party_dance',image:'https://cdn3.emoji.gg/emojis/1001_party_dance.gif',description:'dancing celebration',category:2,license:'0',faves:100,submitted_by:'B'},
+  {id:3,title:'laughing_cat',slug:'1002_laughing_cat',image:'https://cdn3.emoji.gg/emojis/1002_laughing_cat.png',description:'lol kitty',category:3,license:'0',faves:20,submitted_by:'C'},
+  {id:4,title:'smiling_face',slug:'1003_smiling_face',image:'https://cdn3.emoji.gg/emojis/1003_smiling_face.webp',description:'happy smile',category:4,license:'0',faves:0,submitted_by:'D'},
+  {id:5,title:'blocked_host',slug:'blocked',image:'https://example.com/emojis/no.png',description:'must be rejected',category:4,license:'0',faves:999,submitted_by:'E'},
+];
 
-// Ranking tiers: exact name beats prefix beats substring.
-const exact = catalog.search({ q: 'party' });
-if (exact.items.length > 1) {
-  const names = exact.items.map(i => i.name.toLowerCase());
-  if (names.includes('party')) assert.strictEqual(names[0], 'party', 'exact match not ranked first');
-}
-
-// Synonyms: 'lol' expands to laugh/laughing/lmao.
-const synonym = catalog.search({ q: 'lol' });
-const direct = catalog.search({ q: 'laugh' });
-assert(synonym.items.length > 0 && direct.items.length > 0, 'synonym or direct search empty');
-assert(synonym.items.some(i => direct.items.some(d => d.id === i.id)), 'lol did not surface laugh-tagged results');
-
-// Exact recall + typo tolerance, derived from rows that definitely exist now.
-const probeRow = db.prepare('SELECT normalized_name FROM items WHERE length(normalized_name)>=6 ORDER BY id DESC LIMIT 1').get();
-assert(probeRow, 'no catalog rows to probe');
-const exactProbe = catalog.search({ q: probeRow.normalized_name.split(' ')[0] });
-assert(exactProbe.total >= 1, 'exact word probe missed');
-const wholeName = catalog.search({ q: probeRow.normalized_name });
-assert(wholeName.items.some(i => i.normalized_name === undefined || i.name.toLowerCase().replace(/[_\-+.]+/g,' ').replace(/\s+/g,' ').trim() === probeRow.normalized_name), 'full-name search missed its own row');
-const word = probeRow.normalized_name.split(' ')[0];
-const typoQuery = word.length > 1 ? word.slice(0, -2) + word.slice(-1) + word.slice(-1) : word + word.slice(-1); // e.g. laugh -> lauggh
-const fuzzy = catalog.search({ q: typoQuery });
-if (!fuzzy.items.some(i => i.name.toLowerCase().includes(word))) {
-  // distance-1 miss is acceptable only if nothing matched at all AND word too short for cap
-  console.log('note: typo probe', typoQuery, 'returned', fuzzy.items.length, '(tolerance cap not reached)');
-} else {
-  console.log('typo probe', typoQuery, '-> recovered', word);
-}
-assert(fuzzy.total >= 0);
-
-// Every mirrored row carries a valid license + attribution metadata.
-const badLicense = db.prepare("SELECT COUNT(*) c FROM items WHERE license NOT IN ('WTFPL','CC-BY-4.0','Basic')").get().c;
-assert.strictEqual(badLicense, 0, 'non-mirrorable license stored');
-const missingAttribution = db.prepare("SELECT COUNT(*) c FROM items WHERE license='CC-BY-4.0' AND attribution_required=0").get().c;
-assert.strictEqual(missingAttribution, 0, 'CC BY rows missing attribution flag');
-const dupHashes = db.prepare('SELECT COUNT(*) c FROM (SELECT asset_hash FROM items GROUP BY asset_hash HAVING COUNT(*)>1)').get().c;
-assert.strictEqual(dupHashes, 0, 'duplicate assets stored');
-const detail = catalog.get(res.items[0].id);
-assert(detail && detail.sourcePage && detail.originalUrl && typeof detail.attributionRequired === 'boolean', 'detail payload incomplete');
-const attribution = catalog.attributions()[0];
-assert(attribution && /^emoji:\/\/[0-9a-f]{2}\/[0-9a-f]{64}\.(gif|png|webp|jpg)$/.test(attribution.url)
-  && attribution.sourcePage && typeof attribution.attributionRequired === 'boolean', 'attribution payload is not renderable');
-const requiredAttributionCount = db.prepare('SELECT COUNT(*) c FROM items WHERE attribution_required=1').get().c;
-const attributions = catalog.attributions();
-assert.strictEqual(attributions.length, requiredAttributionCount, 'required creator credits were truncated');
-assert(attributions.every(item => item.attributionRequired && item.license === 'CC-BY-4.0'), 'attribution list includes an unrequired or unsupported license');
-assert(/^https:\/\//.test(res.items[0].fallbackUrl || ''), 'catalog item has no recipient fallback URL');
-console.log(`PASS catalog integrity: ${stats.total} items (${stats.animated} animated), licenses/attribution/dedupe clean`);
-
-console.log('ALL EMOJI-CATALOG CHECKS PASSED');
+(async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'knot-emoji-api-')),originalFetch=global.fetch;
+  let metadataFetches=0,assetFetches=0;
+  global.fetch=async url=>{
+    if(String(url)==='https://emoji.gg/api'){metadataFetches++;return new Response(JSON.stringify(rows),{status:200,headers:{'content-type':'application/json'}})}
+    if(String(url)==='https://cdn3.emoji.gg/emojis/1000_party.png'){assetFetches++;return new Response(PNG,{status:200,headers:{'content-type':'image/png','content-length':String(PNG.length)}})}
+    throw new Error('unexpected fetch '+url);
+  };
+  try{
+    assert(catalog.init(null,{cacheRoot:root}));
+    const refreshed=await catalog.refresh({force:true});
+    assert.strictEqual(refreshed.total,4,'unsafe API rows were not rejected');
+    assert.strictEqual(metadataFetches,1);
+    assert.strictEqual(catalog.search({q:'party'}).items[0].name,'party','exact match lost to a popular prefix');
+    assert(catalog.search({q:'lol'}).items.some(item=>item.name==='laughing_cat'),'synonym search failed');
+    assert(catalog.search({q:'smilng'}).items.some(item=>item.name==='smiling_face'),'bounded typo search failed');
+    assert(catalog.search({type:'animated'}).items.every(item=>item.animated),'animated filter failed');
+    assert(catalog.search({type:'static'}).items.every(item=>!item.animated),'static filter failed');
+    const first=catalog.search({limit:2}),second=catalog.search({cursor:first.nextCursor,limit:2});
+    assert.strictEqual(first.items.length,2);assert(second.items.every(item=>!first.items.some(previous=>previous.id===item.id)),'pagination overlapped');
+    assert.strictEqual(catalog.safeImageUrl('https://example.com/emojis/x.png'),null,'arbitrary asset host accepted');
+    assert.strictEqual(catalog.safeImageUrl('http://cdn3.emoji.gg/emojis/x.png'),null,'insecure asset URL accepted');
+    const asset=await catalog.assetForRequest('emoji://api/1.png');
+    assert(asset?.buffer.equals(PNG)&&asset.mime==='image/png','on-demand asset validation failed');
+    const cached=await catalog.assetForRequest('emoji://api/1.png');
+    assert(cached?.cached&&assetFetches===1,'asset was not reused from bounded disk cache');
+    assert.strictEqual(await catalog.assetForRequest('emoji://api/1.gif'),null,'extension confusion accepted');
+    global.fetch=async()=>{throw new Error('offline')};
+    await assert.rejects(catalog.refresh({force:true}),/offline/);
+    assert(catalog.search({q:'party'}).items.length,'cached metadata disappeared after refresh failure');
+    console.log('PASS keyless Emoji.gg API index, local search, validation, offline metadata, and on-demand cache');
+  }finally{catalog.close();global.fetch=originalFetch;fs.rmSync(root,{recursive:true,force:true})}
+})().catch(error=>{console.error(error);process.exit(1)});

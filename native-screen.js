@@ -7,7 +7,7 @@ const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 // Always drain the recorder and discard stale GOP data instead of pausing its
 // stdout. Pausing back-pressures the capture/encoder pipeline and makes the
 // desktop and Knot compositor visibly stutter when a WAN peer cannot keep up.
-const MAX_QUEUE_BYTES = 1024 * 1024;
+const MAX_QUEUE_BYTES = 512 * 1024;
 const MAX_SEGMENT_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_READ_WAITERS = 4;
 const STOP_TERM_DELAY_MS = 1500;

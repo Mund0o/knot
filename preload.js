@@ -215,12 +215,26 @@ contextBridge.exposeInMainWorld('pairCapture', {
 });
 
 
-// Emoji.gg local catalog search (collected via npm run emoji:collect).
+// Keyless Emoji.gg API search backed by a bounded local metadata/image cache.
 contextBridge.exposeInMainWorld('pairEmojiCatalog', {
   available: () => ipcRenderer.invoke('pair:emojiSearch', {}).then(r => r.total > 0).catch(() => false),
   search: params => ipcRenderer.invoke('pair:emojiSearch', params),
   get: id => ipcRenderer.invoke('pair:emojiGet', id),
-  attributions: () => ipcRenderer.invoke('pair:emojiAttributions'),
+  stats: () => ipcRenderer.invoke('pair:emojiStats'),
+});
+
+// Numeric, allowlisted diagnostics are kept only in the local metrics database.
+contextBridge.exposeInMainWorld('pairMetrics', {
+  record: (name,value,tags={}) => { if(typeof name==='string'&&typeof value==='number'&&Number.isFinite(value))ipcRenderer.send('pair:metricRecord',name,value,tags) },
+  summary: hours => ipcRenderer.invoke('pair:metricSummary',hours),
+});
+
+const validHistoryOwner=value=>typeof value==='string'&&/^[a-f0-9]{32}$/.test(value);
+const validHistoryConversation=value=>typeof value==='string'&&/^(?:dm:[a-f0-9]{32}|(?:server|group):[a-f0-9]{32}:[a-f0-9]{32})$/.test(value);
+contextBridge.exposeInMainWorld('pairHistory',{
+  append:(owner,conversation,entry)=>validHistoryOwner(owner)&&validHistoryConversation(conversation)&&entry&&typeof entry==='object'?ipcRenderer.invoke('pair:historyAppend',owner,conversation,entry):Promise.resolve({added:0}),
+  list:(owner,conversation,options={})=>validHistoryOwner(owner)&&validHistoryConversation(conversation)?ipcRenderer.invoke('pair:historyList',owner,conversation,{before:Number.isSafeInteger(Number(options.before))&&Number(options.before)>0?Number(options.before):null,limit:Math.max(1,Math.min(200,Number(options.limit)||80))}):Promise.resolve({items:[],nextBefore:null,hasOlder:false}),
+  importLegacy:(owner,histories)=>validHistoryOwner(owner)&&histories&&typeof histories==='object'?ipcRenderer.invoke('pair:historyImport',owner,histories):Promise.resolve(false),
 });
 
 // Pull-based GPU AV1 bridge: renderer and data-channel backpressure naturally

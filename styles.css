@@ -248,10 +248,12 @@ label { display: block; margin: 0 0 6px; color: #b0b8c5; font-size: 10px; font-w
 .transfer-route-badge > small { color: var(--muted); font-size: 11px; line-height: 1.35; }
 .transfer-route-badge[data-lane="tcp"] { border-left-color: #59d69a; }
 .transfer-route-badge[data-lane="webrtc"] { border-left-color: #78aaff; }
+.transfer-route-badge[data-lane="relay"] { border-left-color: #c78cff; }
 .transfer-route-badge[data-lane="unavailable"] { border-left-color: #ffb865; }
 .transfer-route { display: inline-flex; width: fit-content; margin-top: 7px; padding: 3px 7px; border: 1px solid #586174; border-radius: 99px; color: #cfd6e2; font-size: 10px; font-weight: 800; letter-spacing: .25px; }
 .transfer-route[data-lane="tcp"] { border-color: rgba(89,214,154,.65); background: rgba(47,151,99,.16); color: #85e6b3; }
 .transfer-route[data-lane="webrtc"] { border-color: rgba(120,170,255,.65); background: rgba(76,119,205,.16); color: #9dc1ff; }
+.transfer-route[data-lane="relay"] { border-color: rgba(199,140,255,.65); background: rgba(133,76,205,.16); color: #d8b3ff; }
 .transfer-route[data-lane="waiting"] { color: var(--muted); }
 .transfer-top, .accept-top, .transfer-stats { display: flex; justify-content: space-between; gap: 10px; }
 .transfer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -790,3 +792,4 @@ body.group-dm-view #voicePanel{display:none!important}
   .group-dm-actions{margin-right:4px}.group-dm-actions button{width:34px;min-width:34px;padding:0;font-size:0}.group-dm-actions button::before{font-size:15px}.group-dm-actions #groupDmCall{display:grid;place-items:center}.group-dm-actions #groupDmCall svg{width:17px;height:17px}.group-dm-actions #groupDmCall span{display:none}.group-dm-actions #groupDmAddPeople::before{content:"+👥"}.group-dm-actions #groupDmLeave::before{content:"⎋"}
   .connection{display:inline-flex;max-width:116px;padding:5px 7px;overflow:hidden;border-radius:999px}.connection span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
+.local-diagnostics{display:grid;gap:9px;padding:14px;border:1px solid var(--stroke-quiet);border-radius:12px;background:var(--surface-raised)}.local-diagnostics p{margin:0;color:var(--muted);font-size:12px}.local-diagnostics button{justify-self:start}.local-diagnostics pre{max-height:180px;margin:0;padding:10px;overflow:auto;border-radius:9px;background:var(--field);color:var(--muted);font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap}

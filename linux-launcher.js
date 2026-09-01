@@ -19,7 +19,10 @@ function installLinuxLauncher() {
     const iconDirectory = path.join(dataHome, 'icons', 'hicolor', '256x256', 'apps');
     const iconFile = path.join(iconDirectory, 'knot.png');
     const executable = path.resolve(process.execPath);
-    const content = `[Desktop Entry]\nVersion=1.0\nType=Application\nName=Knot\nComment=Private peer-to-peer communication\nIcon=knot\nExec=${desktopExec(executable)}\nTryExec=${desktopExec(executable)}\nTerminal=false\nCategories=Network;Chat;\nStartupWMClass=com.pair.p2p\nStartupNotify=true\n`;
+    // Electron 42/43 can stall before `app.ready` on some current native
+    // Wayland compositor/driver pairs. XWayland keeps the UI reliable while
+    // Knot's Linux screen capture and AV1 encoding remain on the native GPU.
+    const content = `[Desktop Entry]\nVersion=1.0\nType=Application\nName=Knot\nComment=Private peer-to-peer communication\nIcon=knot\nExec=${desktopExec(executable)} --ozone-platform=x11\nTryExec=${desktopExec(executable)}\nTerminal=false\nCategories=Network;Chat;\nStartupWMClass=com.pair.p2p\nStartupNotify=true\n`;
     fs.mkdirSync(applications, { recursive: true, mode: 0o755 });
     fs.mkdirSync(iconDirectory, { recursive: true, mode: 0o755 });
     fs.copyFileSync(path.join(__dirname, 'build', 'icon.png'), iconFile);

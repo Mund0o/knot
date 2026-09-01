@@ -8,13 +8,15 @@ function fail(error) {
 
 app.whenReady().then(async () => {
   const window = new BrowserWindow({
-    show: false,
-    width: 900,
+    show: process.env.KNOT_ELECTRON_SMOKE_X11==='1',
+    opacity: process.env.KNOT_ELECTRON_SMOKE_X11==='1'?0:1,
+    skipTaskbar: process.env.KNOT_ELECTRON_SMOKE_X11==='1',
+    width: 620,
     height: 650,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      offscreen: true,
+      offscreen: process.env.KNOT_ELECTRON_SMOKE_X11!=='1',
     },
   });
 
@@ -66,7 +68,7 @@ app.whenReady().then(async () => {
       assert(button.getAttribute('aria-label')==='Start a call in Test crew','group call button has no clear accessible start label');
       window.resizeTo(620,650);
       await new Promise(resolve=>setTimeout(resolve,50));
-      assert(innerWidth<=670&&getComputedStyle(button).display==='grid','group call button is not preserved in the compact group-DM layout');
+      assert(innerWidth<=670&&getComputedStyle(button).display==='grid','group call button is not preserved in the compact group-DM layout (viewport '+innerWidth+', display '+getComputedStyle(button).display+')');
 
       const savedJoin=joinServerVoice;
       const savedStop=stopServerVoice;

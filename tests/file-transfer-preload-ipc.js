@@ -48,7 +48,16 @@ async function rejects(promise, pattern) {
   assert.deepStrictEqual(sent.shift(), ['pair:bridgeReady', documentId], 'preload did not register its document generation first');
   const direct = exposed.pairDirectFile;
   const save = exposed.pairSave;
-  assert(direct && save, 'file bridges were not exposed');
+  const history=exposed.pairHistory,metrics=exposed.pairMetrics;
+  assert(direct && save && history && metrics, 'file/history/metrics bridges were not exposed');
+
+  invoked.length=0;
+  assert.strictEqual((await history.append('../owner','dm:bad',{text:'secret'})).added,0,'invalid history scope reached IPC');
+  assert.strictEqual(invoked.length,0);
+  const owner='1'.repeat(32),peer='2'.repeat(32),conversation='dm:'+peer;
+  await history.append(owner,conversation,{text:'local encrypted entry'});assert.deepStrictEqual(invoked.shift().slice(0,3),['pair:historyAppend',owner,conversation]);
+  await history.list(owner,conversation,{before:-4,limit:9999,ignored:'private'});const historyList=invoked.shift();assert.deepStrictEqual(historyList.slice(0,3),['pair:historyList',owner,conversation]);assert.deepStrictEqual(Object.keys(historyList[3]),['before','limit']);assert.strictEqual(historyList[3].before,null);assert.strictEqual(historyList[3].limit,200);
+  const sentBeforeMetrics=sent.length;metrics.record('screen.rtt_ms',42,{codec:'av1'});metrics.record('screen.rtt_ms',NaN);assert.strictEqual(sent.length,sentBeforeMetrics+1);assert.deepStrictEqual(sent.at(-1),['pair:metricRecord','screen.rtt_ms',42,{codec:'av1'}]);
 
   assert.strictEqual((await direct.listen(80)).ok, false, 'privileged listener port reached IPC');
   assert.strictEqual(await direct.register('x'.repeat(32), new Uint8Array(31)), false, 'short key reached IPC');

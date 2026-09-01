@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.88",
+  "version": "1.1.89",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -10,25 +10,25 @@
   "homepage": "https://github.com/Mund0o/knot",
   "license": "MIT",
   "scripts": {
-    "start": "electron .",
+    "start": "node scripts/run-electron.js",
     "signal": "node server.js",
-    "emoji:collect": "node tools/emoji-collector/cli.js",
-    "emoji:verify": "node tools/emoji-collector/verify.js",
     "worker:dev": "wrangler dev",
     "worker:check": "wrangler deploy --dry-run",
-    "test:ui": "electron tests/ui-navigation-smoke.js && electron tests/group-dm-call-ui.js",
-    "test:direct-file": "node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/file-transfer-preload-ipc.js && node tests/file-transfer-main-ipc.js && electron tests/file-transfer-renderer.js",
-    "test:deepfilter": "electron tests/deepfilter-local-smoke.js",
-    "test:screen:h264": "electron tests/screen-quality-smoke.js --codec=H264",
-    "test:screen:av1": "electron tests/screen-quality-smoke.js --codec=AV1",
-    "test:screen:native": "electron tests/native-presentation-cadence.js && node tests/native-screen-live.js && electron tests/native-screen-transport.js",
-    "test:screen:full": "electron tests/full-app-screen-endurance.js",
+    "test:ui": "node tests/run-electron-smoke.js tests/ui-navigation-smoke.js && node tests/run-electron-smoke.js tests/group-dm-call-ui.js",
+    "test:direct-file": "node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/file-transfer-preload-ipc.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js",
+    "test:deepfilter": "node tests/run-electron-smoke.js tests/deepfilter-local-smoke.js",
+    "test:screen:h264": "node tests/run-electron-smoke.js tests/screen-quality-smoke.js --codec=H264",
+    "test:screen:av1": "node tests/run-electron-smoke.js tests/screen-quality-smoke.js --codec=AV1",
+    "test:screen:native": "node tests/run-electron-smoke.js tests/native-presentation-cadence.js && node tests/native-screen-live.js && node tests/run-electron-smoke.js tests/native-screen-transport.js",
+    "test:screen:full": "node tests/run-electron-smoke.js tests/full-app-screen-endurance.js",
     "test:screen": "node tests/run-screen-suite.js",
-    "test:windows-audio": "node tests/windows-audio-addon-guard.js && electron tests/windows-audio-renderer-smoke.js",
+    "test:windows-audio": "node tests/windows-audio-addon-guard.js && node tests/run-electron-smoke.js tests/windows-audio-renderer-smoke.js",
     "test:worker": "node tests/worker-offline-mailbox.js && wrangler deploy --dry-run",
-    "test:core": "node tests/settings-store.js && node tests/settings-crypto.js && node tests/save-streams.js && node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/file-transfer-preload-ipc.js && electron tests/preload-sandbox-smoke.js && node tests/file-transfer-main-ipc.js && electron tests/file-transfer-renderer.js && node tests/signaling-policy.js && node tests/updater-security.js && node tests/publish-update.js",
-    "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-service.js && electron tests/linux-gpu-runtime.js",
-    "test": "npm run test:core && npm run test:emoji && npm run test:worker && npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
+    "test:sfu": "node tests/realtime-sfu.js",
+    "test:network": "node tests/network-conditioned-benchmarks.js",
+    "test:core": "node tests/settings-store.js && node tests/settings-crypto.js && node tests/history-store.js && node tests/local-metrics.js && node tests/save-streams.js && node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/file-transfer-preload-ipc.js && node tests/run-electron-smoke.js tests/preload-sandbox-smoke.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js && node tests/signaling-policy.js && node tests/updater-security.js && node tests/publish-update.js && node tests/realtime-sfu.js",
+    "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-service.js && node tests/run-electron-smoke.js tests/linux-gpu-runtime.js",
+    "test": "npm run test:core && npm run test:emoji && npm run test:network && npm run test:worker && npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
     "test:emoji": "node tests/emoji-catalog.js && node tests/emoji-catalog-worker.js && node tests/emoji-packaging-readonly.js",
     "deploy": "wrangler deploy",
     "dist": "electron-builder --linux tar.gz AppImage",
@@ -51,12 +51,6 @@
     "ws": "^8.18.3"
   },
   "build": {
-    "extraResources": [
-      {
-        "from": "dist-emoji-catalog",
-        "to": "emoji-catalog"
-      }
-    ],
     "asar": true,
     "beforePack": "scripts/before-pack.js",
     "appId": "com.pair.p2p",
@@ -76,6 +70,10 @@
       "native-screen.js",
       "settings-store.js",
       "settings-crypto.js",
+      "history-store.js",
+      "local-metrics.js",
+      "network-benchmark.js",
+      "realtime-sfu.js",
       "save-streams.js",
       "preload.js",
       "screen-audio-worklet.js",
@@ -93,6 +91,9 @@
       ],
       "category": "Utility",
       "icon": "icon.png",
+      "executableArgs": [
+        "--ozone-platform=x11"
+      ],
       "syncDesktopName": true
     },
     "win": {

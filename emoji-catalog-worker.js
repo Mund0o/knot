@@ -1,10 +1,9 @@
 const { parentPort, workerData } = require('worker_threads');
 const emojiCatalog = require('./emoji-catalog');
 
-if (typeof workerData?.root === 'string' && workerData.root) process.env.KNOT_EMOJI_CATALOG = workerData.root;
-emojiCatalog.init({ isPackaged: false, getPath: () => '' });
+emojiCatalog.init(null, { cacheRoot: workerData?.root, readOnly: true });
 
-const METHODS = new Set(['search', 'get', 'attributions', 'stats']);
+const METHODS = new Set(['search', 'get', 'stats']);
 parentPort.on('message', message => {
   const id = Number(message?.id), method = String(message?.method || '');
   if (!Number.isSafeInteger(id)) return;

@@ -6,13 +6,17 @@ WebRTC data channels and media tracks for content transport. Direct and group
 messages use Web Crypto ECDH + AES-GCM on top of authenticated WSS transport;
 calls use WebRTC's DTLS-SRTP encryption.
 
-Cloudflare supplies an encrypted text mailbox, presence, and WebRTC setup.
+The checked-in Cloudflare Free deployment supplies only the lightweight control
+plane: an encrypted text mailbox, presence, directory records, and WebRTC setup.
 Opening a DM or text channel does not create a peer connection: text is
 encrypted on-device; offline direct- and group-DM ciphertext is held for up to
 30 days in a bounded mailbox and deleted separately for each recipient after
 their device decrypts and acknowledges it.
-Cloudflare never receives the message keys or readable text. Calls, screen shares, and files create direct WebRTC
-connections only when used. Screen shares appear beside their owners and open
+Cloudflare never receives the message keys or readable text. Calls and screen
+shares create direct WebRTC connections only when used. Files prefer authenticated
+direct TCP and then direct WebRTC. The optional SFU and encrypted object-relay
+adapters are feature-flagged off in `wrangler.jsonc`; see
+[`docs/deployment-envelope.md`](docs/deployment-envelope.md). Screen shares appear beside their owners and open
 into a single focused viewer; use a stream's context menu to stop watching
 without making the stream undiscoverable. Fullscreen expands the selected share
 stage, not the entire Knot interface.
@@ -21,13 +25,15 @@ stage, not the entire Knot interface.
 
 Choose **New group DM** from Direct Messages, or open a friend's DM and choose
 **Create group** to carry that friend into a new conversation. A group contains
-3–10 people. Existing members can add their own friends, and leaving transfers
+3–20 people. Existing members can add their own friends, and leaving transfers
 ownership when needed.
 
 Group text is end-to-end encrypted with an epoch-bound key that rotates after
 membership changes. Each recipient gets an independent opaque offline envelope.
 Group calls form an on-demand WebRTC mesh only among members currently joined to
-the group's voice room. If a two-person call is active while its DM is converted
+the group's voice room. An explicitly configured audio-only SFU pilot can replace
+that mesh and automatically falls back to P2P if setup fails; it is disabled in
+the normal Free deployment. If a two-person call is active while its DM is converted
 to a group, Knot moves both call participants into the new group call.
 
 ## Run as a PC app
@@ -86,7 +92,7 @@ reported and stale frames may be discarded, but the selected dimensions are
 not changed. Chromium shares prefer broadly hardware-accelerated codecs and
 retain retransmission/FEC support under a user-controlled bitrate ceiling.
 
-Native AV1 keeps 3840×2160 capture at 60 fps while targeting about 9.8 Mbps so
+Native AV1 keeps 3840×2160 capture at 60 fps while targeting about 16 Mbps so
 fine motion has more detail. NVENC uses spatial adaptive quantization without
 lookahead so visible block edges receive better allocation without buffering
 future frames, while strict GOP rate control contains scene-change bursts.
@@ -178,15 +184,17 @@ direct connection; those require a TURN relay supplied by the people using it.
 
 ### Cloudflare Worker (recommended)
 
-The repository includes two SQLite-backed Durable Objects. `PairDirectory`
+The repository includes three SQLite-backed Durable Object classes. `PairDirectory`
 stores authenticated device identity, friend relationships, presence, server
-membership, server pictures, and text/voice channel metadata. `PairRoom`
+membership, content-addressed image references, and text/voice channel metadata.
+`PairDirectoryShardV2` holds versioned public directory records during a gradual
+dual-read/dual-write migration, and `PairRoom`
 coordinates ephemeral two-person WebRTC setup. The Worker rejects binary frames
 and handles only authenticated, opaque client-encrypted text and group-key
 envelopes. Direct- and group-DM ciphertext uses a bounded 256-message/8 MiB
 mailbox per recipient with a 30-day TTL and is removed after recipient
 acknowledgement; server text and group-key envelopes remain live-only. It never relays files, video, or screen
-shares. After three failed direct attempts, it can optionally issue short-lived
+shares. The normal deployment has no R2 binding and no managed SFU secrets. After three failed direct attempts, it can optionally issue short-lived
 Cloudflare TURN credentials for a deliberately low-bitrate audio-only call.
 
 Cloudflare's Git build command is:
@@ -204,7 +212,8 @@ encrypted text immediately, even while that friend is offline; a private
 rendezvous room is created only for direct media/files.
 Server text uses the encrypted live relay, while voice channels form direct
 peer meshes among currently online members. Conversation history stays in each
-desktop app's local settings file; Cloudflare temporarily stores only unreadable
+desktop app's encrypted local SQLite database; SQLite is built into the bundled
+Node/Electron runtime and needs no account, database server, or signup. Cloudflare temporarily stores only unreadable
 offline direct- and group-DM ciphertext.
 Direct DMs also use this rule: text opens immediately without a WebRTC peer;
 the app tries direct P2P three times only after a call or file is requested.
@@ -290,6 +299,20 @@ TURN only relays already-encrypted WebRTC bytes (DTLS-SRTP); it cannot read any 
 
 ## Large files
 
-Files are sliced into chunks, encrypted independently, and streamed with a 128 MB in-flight window plus concurrent encrypt/decrypt work so a single direct wired peer can keep a fast SCTP link saturated. The whole file is never loaded into memory during sending. Receiving very large files requires a Chromium browser with the File System Access API (or the Knot app's disk streaming); otherwise the fallback collects chunks in memory and is suitable only for smaller files. The 200 GiB limit is enforced on both send and receive.
+Files are sliced into independently authenticated chunks. WebRTC uses an adaptive
+8–48 MiB send window with a bounded 32 MiB encryption look-ahead; receiving is
+capped at 64 MiB per transfer and 96 MiB across active transfers before
+backpressure stops the sender. The native TCP lane adds mutual one-time-key
+authentication, replay-ordered AEAD frames, and a bounded 48 MiB renderer handoff.
+The whole file is never loaded into memory during a normal direct send or desktop
+receive. Receiving very large files requires a Chromium browser with the File
+System Access API or the Knot app's durable temporary-file/atomic-rename path;
+the in-memory browser fallback is limited to 64 MiB. The 200 GiB direct-transfer
+limit is enforced on both endpoints. The optional object relay is separately
+capped at 64 MiB, encrypts locally, uses direct exact-size presigned requests,
+and remains disabled unless the operator confirms automatic lifecycle deletion.
 
-This is an MVP, not a production security audit. Before relying on it for sensitive data, add authenticated device identity/fingerprint verification, replay protection, a robust signaling UX, TURN support, and audited cryptographic protocol implementations.
+Knot has automated adversarial tests for transfer framing, replay/reordering,
+IPC ownership, memory bounds, cancellation, durable saves, and update signatures.
+It is still not a third-party security audit; verify device identities out of
+band before treating a new friend/account as trusted, and keep the app updated.

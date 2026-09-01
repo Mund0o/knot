@@ -3,8 +3,15 @@
   "name": "pair",
   "main": "worker/index.js",
   "compatibility_date": "2026-08-08",
+  // The checked-in Free-plan deployment is control-plane only. Managed SFU
+  // media and object-relay storage remain explicit, locally configurable
+  // adapters and are never enabled by a normal `wrangler deploy`.
+  "vars": {
+    "GROUP_CALL_SFU_ENABLED": "false",
+    "ENCRYPTED_FILE_RELAY_ENABLED": "false"
+  },
   "observability": {
-    "enabled": true
+    "enabled": false
   },
   "durable_objects": {
     "bindings": [
@@ -15,6 +22,10 @@
       {
         "name": "PAIR_DIRECTORY",
         "class_name": "PairDirectory"
+      },
+      {
+        "name": "PAIR_DIRECTORY_V2",
+        "class_name": "PairDirectoryShardV2"
       }
     ]
   },
@@ -26,6 +37,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["PairDirectory"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["PairDirectoryShardV2"]
     }
   ]
 }

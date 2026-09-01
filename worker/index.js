@@ -20,10 +20,13 @@ const SIGNUP_GLOBAL_LIMIT_PER_HOUR = 512;
 const SIGNUP_SHARD_LIMIT_PER_HOUR = 30;
 const MAX_FRIENDS = 500;
 const MAX_SERVERS = 100;
-const MAX_SERVER_MEMBERS = 500;
+// This deployment is intentionally sized for one private community of roughly
+// twenty people. Keeping every shared roster and voice room at that bound makes
+// Free-plan storage, fan-out, and snapshot costs predictable.
+const MAX_SERVER_MEMBERS = 20;
 const MAX_GROUP_DMS = 100;
-const MAX_GROUP_DM_MEMBERS = 10;
-const MAX_VOICE_CHANNEL_MEMBERS = 16;
+const MAX_GROUP_DM_MEMBERS = 20;
+const MAX_VOICE_CHANNEL_MEMBERS = 20;
 const INVITE_REDEEM_WINDOW_MS = 60 * 1000;
 const INVITE_REDEEM_MAX_ATTEMPTS = 12;
 const INVITE_CREATE_WINDOW_MS = 60 * 1000;
@@ -33,6 +36,17 @@ const INVITE_SHARD_LIMIT_PER_MINUTE = 120;
 const MAX_SNAPSHOT_MEMBER_PROFILES = 4096;
 const STORAGE_READ_BATCH_SIZE = 32;
 const GROUP_KEY_REQUEST_TTL_MS = 2 * 60 * 1000;
+const DIRECTORY_PROTOCOL_V2 = 2;
+const MAX_MEDIA_BYTES = 384 * 1024;
+const MEDIA_CACHE_SECONDS = 365 * 24 * 60 * 60;
+const SFU_RECORD_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_SFU_TRACKS = 20;
+const FILE_RELAY_TTL_MS = 24 * 60 * 60 * 1000;
+const FILE_RELAY_URL_TTL_SECONDS = 15 * 60;
+const MAX_FILE_RELAY_PLAINTEXT_BYTES = 64 * 1024 * 1024;
+const FILE_RELAY_USER_WINDOW_MS = 24 * 60 * 60 * 1000;
+const FILE_RELAY_USER_MAX_OBJECTS = 64;
+const FILE_RELAY_USER_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
 function normalizeRoom(value) {
   const room = String(value || '').trim().toUpperCase();
@@ -59,6 +73,18 @@ function cleanImage(value) {
   return image.length <= 512 * 1024 && /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=]+$/i.test(image) ? image : '';
 }
 
+function cleanMediaRef(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const hash = String(value.hash || '').toLowerCase(), mime = String(value.mime || '').toLowerCase(), size = Number(value.size);
+  if (Number(value.v) !== 1 || !/^[a-f0-9]{64}$/.test(hash) || !/^image\/(?:png|jpeg|webp|gif)$/.test(mime)
+    || !Number.isInteger(size) || size < 1 || size > MAX_MEDIA_BYTES) return null;
+  return { v: 1, hash, mime, size };
+}
+
+function cleanStoredImage(value) {
+  return cleanMediaRef(value) || cleanImage(value);
+}
+
 function cleanFrame(value) {
   const number = (input, fallback, min, max) => {
     const parsed = Number(input);
@@ -74,13 +100,13 @@ function cleanAccountProfile(value, fallback = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return {
     name: cleanText(value.name, 32, cleanText(fallback.name, 32, 'Knot user')),
-    image: Object.prototype.hasOwnProperty.call(value, 'image') ? cleanImage(value.image) : cleanImage(fallback.image),
+    image: Object.prototype.hasOwnProperty.call(value, 'image') ? cleanStoredImage(value.image) : cleanStoredImage(fallback.image),
     frame: Object.prototype.hasOwnProperty.call(value, 'frame') ? cleanFrame(value.frame) : cleanFrame(fallback.frame),
   };
 }
 
 function accountProfileFromUser(user) {
-  return { name: cleanText(user?.name, 32, 'Knot user'), image: cleanImage(user?.image), frame: cleanFrame(user?.frame) };
+  return { name: cleanText(user?.name, 32, 'Knot user'), image: cleanStoredImage(user?.image), frame: cleanFrame(user?.frame) };
 }
 
 // When the photo is public, the client references the already-present public
@@ -89,7 +115,7 @@ function accountProfileFromUser(user) {
 function accountProfileFromWire(value, fallback = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const candidate = { ...value };
-  if (candidate.imageFromPublic === true) candidate.image = cleanImage(fallback.image);
+  if (candidate.imageFromPublic === true) candidate.image = cleanStoredImage(fallback.image);
   delete candidate.imageFromPublic;
   return cleanAccountProfile(candidate, fallback);
 }
@@ -111,6 +137,19 @@ function cleanCiphertext(value) {
   if (!/^[A-Za-z0-9_.-]{16,32}$/.test(iv) || !/^[A-Za-z0-9_.-]+$/.test(data) || data.length > MAX_RELAY_CIPHERTEXT_BYTES) return null;
   return { iv, data };
 }
+
+function cleanSessionDescription(value, expectedType = '') {
+  const type=value?.type==='offer'?'offer':value?.type==='answer'?'answer':'',sdp=typeof value?.sdp==='string'?value.sdp:'';
+  return type&&(!expectedType||type===expectedType)&&sdp.length>20&&sdp.length<=MAX_PEER_SDP_BYTES&&/^v=0(?:\r?\n|$)/.test(sdp)?{type,sdp}:null;
+}
+
+function cleanSfuOpaque(value,max=256) {
+  const text=String(value||'');return text&&text.length<=max&&/^[A-Za-z0-9_.:@/-]+$/.test(text)?text:'';
+}
+
+function rfc3986(value){return encodeURIComponent(String(value)).replace(/[!'()*]/g,character=>`%${character.charCodeAt(0).toString(16).toUpperCase()}`)}
+async function sha256Hex(value){const bytes=typeof value==='string'?new TextEncoder().encode(value):value,digest=await crypto.subtle.digest('SHA-256',bytes);return[...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('')}
+async function hmacSha256(key,value){const bytes=typeof key==='string'?new TextEncoder().encode(key):key,material=await crypto.subtle.importKey('raw',bytes,{name:'HMAC',hash:'SHA-256'},false,['sign']);return new Uint8Array(await crypto.subtle.sign('HMAC',material,new TextEncoder().encode(value)))}
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
@@ -158,6 +197,10 @@ export default {
     const upgrade = request.headers.get('Upgrade');
     if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
       if (request.method !== 'GET') return jsonResponse({ error: 'method not allowed' }, 405);
+      if (/^\/media\/[a-f0-9]{64}$/.test(url.pathname)) {
+        const id = env.PAIR_DIRECTORY.idFromName('pair-directory-v1');
+        return env.PAIR_DIRECTORY.get(id).fetch(request);
+      }
       return jsonResponse({ service: 'Knot control plane', status: 'ready', transport: 'websocket', encryptedDmMailbox: true });
     }
     if (url.pathname === '/directory') {
@@ -217,18 +260,210 @@ export class PairRoom {
   withinRate(socket, attachment, bytes) { const now = Date.now(); if (!attachment.rateAt || now - attachment.rateAt >= 1000) { attachment.rateAt = now; attachment.rateBytes = 0;attachment.rateMessages = 0; } attachment.rateBytes = (attachment.rateBytes || 0) + bytes;attachment.rateMessages = (attachment.rateMessages || 0) + 1; socket.serializeAttachment(attachment); if (attachment.rateBytes <= MAX_SOCKET_BYTES_PER_SECOND && attachment.rateMessages <= MAX_SOCKET_MESSAGES_PER_SECOND) return true; socket.close(1008, 'rate limit'); return false; }
 }
 
+// Directory V2 shards hold only public directory records. Authentication,
+// ciphertext mailboxes, and invite state remain in the established coordinator
+// during the gradual dual-read migration.
+export class PairDirectoryShardV2 {
+  constructor(state) { this.state = state; }
+
+  async fetch(request) {
+    const url=new URL(request.url),match=/^\/record\/(user|server|group)\/([a-f0-9]{32})$/.exec(url.pathname);
+    if(!match)return jsonResponse({error:'record not found'},404);const key=`record:${match[1]}:${match[2]}`;
+    if(request.method==='GET'){const record=await this.state.storage.get(key);return record?jsonResponse({version:2,record}):jsonResponse({error:'record not found'},404)}
+    if(request.method==='PUT'){const length=Number(request.headers.get('content-length')||0);if(length>1024*1024)return jsonResponse({error:'record too large'},413);let value;try{value=await request.json()}catch{return jsonResponse({error:'invalid record'},400)}if(!value||typeof value!=='object'||value.id!==match[2])return jsonResponse({error:'invalid record'},400);await this.state.storage.put(key,value);return jsonResponse({ok:true,version:2})}
+    if(request.method==='DELETE'){await this.state.storage.delete(key);return jsonResponse({ok:true,version:2})}
+    return jsonResponse({error:'method not allowed'},405);
+  }
+}
+
 export class PairDirectory {
   constructor(state, env) { this.state = state; this.env = env; }
 
   async fetch(request) {
+    const url = new URL(request.url);
+    if (request.method === 'GET' && /^\/media\/[a-f0-9]{64}$/.test(url.pathname)) return this.serveMedia(url.pathname.slice(7), request);
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return jsonResponse({ error: 'websocket upgrade required' }, 426);
     const pair = new WebSocketPair(), client = pair[0], server = pair[1];
     // Keep abuse budgets source-scoped without retaining a raw network address.
     // Cloudflare supplies this header; a random key is adequate for local dev.
     const address = request.headers.get('cf-connecting-ip') || '', securityKey = address ? await tokenHash(`knot-client-v1|${address}`) : randomHex(32);
-    server.serializeAttachment({ authed: false, userId: '', rateAt: Date.now(), rateBytes: 0, securityKey });
+    server.serializeAttachment({ authed: false, userId: '', directoryVersion: 1, rateAt: Date.now(), rateBytes: 0, securityKey });
     this.state.acceptWebSocket(server);
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async storeMedia(value) {
+    const existingRef = cleanMediaRef(value); if (existingRef) return existingRef;
+    const image = cleanImage(value); if (!image) return '';
+    const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([a-z0-9+/=]+)$/i.exec(image); if (!match) return '';
+    let binary; try { binary = atob(match[2]); } catch { return ''; }
+    if (!binary.length || binary.length > MAX_MEDIA_BYTES) return '';
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0)), digest = await crypto.subtle.digest('SHA-256', bytes);
+    const hash = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join(''), mime = match[1].toLowerCase(), ref = { v: 1, hash, mime, size: bytes.byteLength };
+    const key = `profiles/v1/${hash}`;
+    if (this.env?.PAIR_MEDIA?.put) {
+      const present = this.env.PAIR_MEDIA.head ? await this.env.PAIR_MEDIA.head(key) : null;
+      if (!present) await this.env.PAIR_MEDIA.put(key, bytes, { httpMetadata: { contentType: mime, cacheControl: `public, max-age=${MEDIA_CACHE_SECONDS}, immutable` }, customMetadata: { sha256: hash } });
+    } else if (!await this.state.storage.get(`media:${hash}`)) {
+      await this.state.storage.put(`media:${hash}`, { mime, bytes, size: bytes.byteLength, createdAt: Date.now() });
+    }
+    return ref;
+  }
+
+  async readMedia(refOrHash) {
+    const hash = typeof refOrHash === 'string' ? refOrHash : cleanMediaRef(refOrHash)?.hash;
+    if (!/^[a-f0-9]{64}$/.test(String(hash || ''))) return null;
+    const key = `profiles/v1/${hash}`;
+    if (this.env?.PAIR_MEDIA?.get) {
+      const object = await this.env.PAIR_MEDIA.get(key); if (!object) return null;
+      const bytes = new Uint8Array(await object.arrayBuffer()), mime = String(object.httpMetadata?.contentType || '');
+      if (!bytes.length || bytes.byteLength > MAX_MEDIA_BYTES || !/^image\/(?:png|jpeg|webp|gif)$/.test(mime)) return null;
+      return { mime, bytes };
+    }
+    const stored = await this.state.storage.get(`media:${hash}`), bytes = stored?.bytes instanceof Uint8Array ? stored.bytes : stored?.bytes ? new Uint8Array(stored.bytes) : null;
+    return bytes?.length && bytes.byteLength <= MAX_MEDIA_BYTES && /^image\/(?:png|jpeg|webp|gif)$/.test(String(stored?.mime || '')) ? { mime: stored.mime, bytes } : null;
+  }
+
+  async serveMedia(hash, request) {
+    const media = await this.readMedia(hash); if (!media) return jsonResponse({ error: 'media not found' }, 404);
+    const etag = `"${hash}"`, headers = new Headers({
+      'content-type': media.mime,
+      'content-length': String(media.bytes.byteLength),
+      'cache-control': `public, max-age=${MEDIA_CACHE_SECONDS}, immutable`,
+      'etag': etag,
+      'x-content-type-options': 'nosniff',
+      'cross-origin-resource-policy': 'cross-origin',
+      'access-control-allow-origin': '*'
+    });
+    if (request.headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers });
+    return new Response(media.bytes, { status: 200, headers });
+  }
+
+  async mediaDataUrl(value) {
+    const legacy = cleanImage(value); if (legacy) return legacy;
+    const ref = cleanMediaRef(value), media = ref ? await this.readMedia(ref) : null; if (!media) return '';
+    let binary = ''; for (let offset = 0; offset < media.bytes.length; offset += 0x8000) binary += String.fromCharCode(...media.bytes.subarray(offset, offset + 0x8000));
+    return `data:${media.mime};base64,${btoa(binary)}`;
+  }
+
+  async wireMedia(value, directoryVersion = 1) {
+    const ref = cleanMediaRef(value); if (directoryVersion >= DIRECTORY_PROTOCOL_V2) return ref || (value ? await this.storeMedia(value) : '');
+    return this.mediaDataUrl(value);
+  }
+
+  directoryUserRecord(user) {
+    if(!user||!normalizeId(user.id))return null;
+    return{id:user.id,name:cleanText(user.name,32,'Knot user'),username:normalizeUsername(user.username),image:cleanStoredImage(user.image),frame:cleanFrame(user.frame),deviceKey:cleanDeviceKey(user.deviceKey),friends:[...new Set((user.friends||[]).map(normalizeId).filter(Boolean))].slice(0,MAX_FRIENDS),servers:[...new Set((user.servers||[]).map(normalizeId).filter(Boolean))].slice(0,MAX_SERVERS),groupDms:[...new Set((user.groupDms||[]).map(normalizeId).filter(Boolean))].slice(0,MAX_GROUP_DMS)};
+  }
+
+  directoryEntityRecord(kind,entity) {
+    if(!entity||!normalizeId(entity.id)||!['server','group'].includes(kind))return null;
+    const copy=structuredClone(entity);copy.id=normalizeId(copy.id);copy.members=[...new Set((copy.members||[]).map(normalizeId).filter(Boolean))].slice(0,MAX_SERVER_MEMBERS);copy.channels=(copy.channels||[]).filter(channel=>normalizeId(channel?.id)&&['text','voice'].includes(channel.type)).slice(0,64).map(channel=>({id:normalizeId(channel.id),type:channel.type,name:cleanText(channel.name,48,channel.type==='voice'?'Voice':'chat')}));
+    if(kind==='server')copy.picture=cleanStoredImage(copy.picture);else delete copy.picture;return copy;
+  }
+
+  directoryShard(kind,id) {
+    if(!this.env?.PAIR_DIRECTORY_V2||!['user','server','group'].includes(kind)||!normalizeId(id))return null;
+    const shardId=this.env.PAIR_DIRECTORY_V2.idFromName(`directory-v2-${kind}-${id.slice(0,2)}`);return this.env.PAIR_DIRECTORY_V2.get(shardId);
+  }
+
+  async putDirectoryV2(kind,record) {
+    const id=normalizeId(record?.id),stub=this.directoryShard(kind,id);if(!stub)return false;
+    const response=await stub.fetch(`https://directory-v2.invalid/record/${kind}/${id}`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(record)});return response.ok;
+  }
+
+  async readDirectoryV2(kind,id,fallback=null) {
+    const normalized=normalizeId(id),stub=this.directoryShard(kind,normalized);if(!stub)return fallback;
+    try{const response=await stub.fetch(`https://directory-v2.invalid/record/${kind}/${normalized}`);if(response.ok){const value=await response.json();if(value?.record?.id===normalized)return value.record}}catch{}
+    if(fallback)await this.putDirectoryV2(kind,fallback);return fallback;
+  }
+
+  async dualWriteDirectoryUser(user) { const record=this.directoryUserRecord(user);return record?this.putDirectoryV2('user',record):false; }
+  async dualWriteDirectoryEntity(entity) { const kind=entity?.kind==='group-dm'?'group':'server',record=this.directoryEntityRecord(kind,entity);return record?this.putDirectoryV2(kind,record):false; }
+
+  async syncDirectoryV2ForUsers(userIds=[]) {
+    if(!this.env?.PAIR_DIRECTORY_V2)return;
+    const users=(await this.loadMany([...new Set(userIds.map(normalizeId).filter(Boolean))],id=>this.user(id))).filter(Boolean),entityKeys=new Map();
+    for(const user of users){for(const id of user.servers||[])entityKeys.set(`server:${id}`,['server',id]);for(const id of user.groupDms||[])entityKeys.set(`group:${id}`,['group',id])}
+    await Promise.all(users.map(user=>this.dualWriteDirectoryUser(user)));
+    const entities=(await this.loadMany([...entityKeys.values()],([kind,id])=>kind==='group'?this.groupDm(id):this.server(id))).filter(Boolean);await Promise.all(entities.map(entity=>this.dualWriteDirectoryEntity(entity)));
+  }
+
+  sfuConfiguration() {
+    if(String(this.env?.GROUP_CALL_SFU_ENABLED||'').toLowerCase()!=='true')return null;const appId=cleanSfuOpaque(this.env?.REALTIME_APP_ID,128),secret=String(this.env?.REALTIME_APP_SECRET||''),rawBase=String(this.env?.REALTIME_SFU_API_BASE||'https://rtc.live.cloudflare.com/v1/apps').replace(/\/$/,'');let base;
+    try{const url=new URL(rawBase),loopback=['localhost','127.0.0.1','[::1]','::1'].includes(url.hostname);if(url.protocol!=='https:'&&!(loopback&&url.protocol==='http:'))return null;base=url.href.replace(/\/$/,'')}catch{return null}
+    return appId&&secret.length>=16&&secret.length<=512?{appId,secret,base}:null;
+  }
+
+  fileRelayConfiguration(){
+    if(String(this.env?.ENCRYPTED_FILE_RELAY_ENABLED||'').toLowerCase()!=='true'||String(this.env?.FILE_RELAY_LIFECYCLE_CONFIRMED||'').toLowerCase()!=='true')return null;const accessKey=String(this.env?.FILE_RELAY_ACCESS_KEY_ID||''),secret=String(this.env?.FILE_RELAY_SECRET_ACCESS_KEY||''),bucket=String(this.env?.FILE_RELAY_BUCKET||''),region=cleanSfuOpaque(this.env?.FILE_RELAY_REGION||'auto',32);let endpoint=String(this.env?.FILE_RELAY_S3_ENDPOINT||'');if(!endpoint&&/^[a-f0-9]{32}$/.test(String(this.env?.R2_ACCOUNT_ID||'')))endpoint=`https://${this.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;try{const url=new URL(endpoint),loopback=['localhost','127.0.0.1','[::1]','::1'].includes(url.hostname);if(url.protocol!=='https:'&&!(loopback&&url.protocol==='http:'))return null;endpoint=url.href.replace(/\/$/,'')}catch{return null}return/^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/.test(accessKey)&&secret.length>=16&&secret.length<=512&&/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)&&region?{accessKey,secret,bucket,region,endpoint}:null
+  }
+
+  publicFeatures(){return{groupSfu:!!this.sfuConfiguration(),encryptedFileRelay:!!this.fileRelayConfiguration()}}
+
+  async presignFileRelay(method,objectKey,now=new Date(),{contentLength=null}={}){
+    const config=this.fileRelayConfiguration(),length=Number(contentLength);if(!config||!['GET','PUT','DELETE'].includes(method)||!/^knot-file-relay\/v1\/[a-f0-9]{32}$/.test(objectKey)||method==='PUT'&&(!Number.isSafeInteger(length)||length<16||length>MAX_FILE_RELAY_PLAINTEXT_BYTES+16))throw new Error('encrypted file relay is not configured');const base=new URL(config.endpoint),date=now.toISOString().replace(/[:-]|\.\d{3}/g,''),day=date.slice(0,8),scope=`${day}/${config.region}/s3/aws4_request`,segments=[...base.pathname.split('/').filter(Boolean),config.bucket,...objectKey.split('/')],canonicalUri='/'+segments.map(rfc3986).join('/'),signed=method==='PUT'?{'content-length':String(length),'content-type':'application/octet-stream',host:base.host}:{host:base.host},signedHeaders=Object.keys(signed).sort().join(';'),canonicalHeaders=Object.entries(signed).sort(([left],[right])=>left.localeCompare(right)).map(([key,value])=>`${key}:${value}\n`).join(''),params={'X-Amz-Algorithm':'AWS4-HMAC-SHA256','X-Amz-Credential':`${config.accessKey}/${scope}`,'X-Amz-Date':date,'X-Amz-Expires':String(FILE_RELAY_URL_TTL_SECONDS),'X-Amz-SignedHeaders':signedHeaders},canonicalQuery=Object.entries(params).sort(([left],[right])=>left.localeCompare(right)).map(([key,value])=>`${rfc3986(key)}=${rfc3986(value)}`).join('&');base.pathname=canonicalUri;base.search='';const canonicalRequest=[method,canonicalUri,canonicalQuery,canonicalHeaders,signedHeaders,'UNSIGNED-PAYLOAD'].join('\n'),stringToSign=['AWS4-HMAC-SHA256',date,scope,await sha256Hex(canonicalRequest)].join('\n'),dateKey=await hmacSha256(`AWS4${config.secret}`,day),regionKey=await hmacSha256(dateKey,config.region),serviceKey=await hmacSha256(regionKey,'s3'),signingKey=await hmacSha256(serviceKey,'aws4_request'),signature=[...await hmacSha256(signingKey,stringToSign)].map(byte=>byte.toString(16).padStart(2,'0')).join('');base.search=`${canonicalQuery}&X-Amz-Signature=${signature}`;return{url:base.href,expiresAt:now.getTime()+FILE_RELAY_URL_TTL_SECONDS*1000,...(method==='PUT'?{requiredHeaders:{'content-type':'application/octet-stream'},contentLength:length}:{})}
+  }
+
+  async pruneFileRelayMetadata(){const entries=await this.state.storage.list({prefix:'file-relay:',limit:128}),now=Date.now(),expired=[...entries].filter(([,record])=>Number(record?.expiresAt)<=now).map(([key])=>key);for(let offset=0;offset<expired.length;offset+=32)await this.state.storage.transaction(async transaction=>{for(const key of expired.slice(offset,offset+32))await transaction.delete(key)})}
+
+  async createFileRelay(socket,user,value){const requestId=normalizeId(value.requestId),peerId=normalizeId(value.peerId),size=Number(value.size);if(!requestId||!peerId||!(user.friends||[]).includes(peerId)||!Number.isSafeInteger(size)||size<0||size>MAX_FILE_RELAY_PLAINTEXT_BYTES)throw new Error('invalid encrypted file relay request');if(!this.fileRelayConfiguration())throw new Error('encrypted file relay is unavailable');await this.pruneFileRelayMetadata();const id=randomHex(),objectKey=`knot-file-relay/v1/${id}`,record={id,ownerId:user.id,recipientId:peerId,objectKey,size,cipherSize:size+16,expiresAt:Date.now()+FILE_RELAY_TTL_MS,notified:false},upload=await this.presignFileRelay('PUT',objectKey,new Date(),{contentLength:record.cipherSize}),budgetKey=`file-relay-budget:${user.id}`,now=Date.now();await this.state.storage.transaction(async transaction=>{const previous=await transaction.get(budgetKey),budget=previous&&now-Number(previous.startedAt)<FILE_RELAY_USER_WINDOW_MS?previous:{startedAt:now,objects:0,bytes:0};if(Number(budget.objects)>=FILE_RELAY_USER_MAX_OBJECTS||Number(budget.bytes)+size>FILE_RELAY_USER_MAX_BYTES)throw new Error('encrypted file relay daily limit reached');budget.objects=Number(budget.objects||0)+1;budget.bytes=Number(budget.bytes||0)+size;await transaction.put(budgetKey,budget);await transaction.put(`file-relay:${id}`,record)});this.safeSend(socket,JSON.stringify({type:'file-relay-response',action:'create',requestId,ok:true,id,uploadUrl:upload.url,uploadHeaders:upload.requiredHeaders,urlExpiresAt:upload.expiresAt,objectExpiresAt:record.expiresAt,maxPlaintextBytes:MAX_FILE_RELAY_PLAINTEXT_BYTES}))}
+
+  async notifyFileRelay(socket,user,value){
+    const requestId=normalizeId(value.requestId),id=normalizeId(value.id),cipher=cleanCiphertext(value.cipher),now=Date.now();if(!requestId||!id||!cipher)throw new Error('invalid encrypted file relay offer');let record,envelope,alreadyNotified=false;
+    // Commit the notified bit and the recipient mailbox envelope together. An
+    // abort racing this operation therefore either wins before both writes or
+    // loses after both writes; a crash cannot strand a notified object with no
+    // retriable offer in the recipient mailbox.
+    await this.state.storage.transaction(async transaction=>{
+      record=await transaction.get(`file-relay:${id}`);if(!record||record.ownerId!==user.id||record.expiresAt<=now)throw new Error('invalid encrypted file relay offer');
+      if(record.notified){alreadyNotified=true;return}
+      envelope={type:'file-relay-offer',from:user.id,id,cipher,queuedAt:now};const indexKey=`mail-id:${record.recipientId}:${id}`,existing=await transaction.get(indexKey);if(!existing){const key=`mail:${record.recipientId}:${String(now).padStart(13,'0')}:${id}`;await transaction.put(key,{...envelope,expiresAt:now+DM_MAILBOX_TTL_MS});await transaction.put(indexKey,key)}
+      record={...record,notified:true};await transaction.put(`file-relay:${id}`,record);
+    });
+    if(alreadyNotified){this.safeSend(socket,JSON.stringify({type:'file-relay-response',action:'notify',requestId,ok:true,queued:true,alreadyNotified:true}));return}
+    await this.pruneMailbox(record.recipientId);const delivered=this.sendUser(record.recipientId,envelope);this.safeSend(socket,JSON.stringify({type:'file-relay-response',action:'notify',requestId,ok:true,queued:!delivered}));
+  }
+
+  async downloadFileRelay(socket,user,value){const requestId=normalizeId(value.requestId),id=normalizeId(value.id),record=id?await this.state.storage.get(`file-relay:${id}`):null;if(!requestId||!record||record.recipientId!==user.id||!record.notified||record.expiresAt<=Date.now())throw new Error('encrypted file relay offer expired');const download=await this.presignFileRelay('GET',record.objectKey);this.safeSend(socket,JSON.stringify({type:'file-relay-response',action:'download',requestId,ok:true,id,downloadUrl:download.url,urlExpiresAt:download.expiresAt,cipherSize:record.cipherSize,objectExpiresAt:record.expiresAt}))}
+
+  async abandonFileRelay(socket,user,value){const requestId=normalizeId(value.requestId),id=normalizeId(value.id),record=id?await this.state.storage.get(`file-relay:${id}`):null;if(!requestId||!record||record.ownerId!==user.id||record.notified||record.expiresAt<=Date.now())throw new Error('encrypted file relay can no longer be aborted');const deletion=await this.presignFileRelay('DELETE',record.objectKey);await this.state.storage.transaction(async transaction=>{const current=await transaction.get(`file-relay:${id}`);if(!current||current.ownerId!==user.id||current.notified)throw new Error('encrypted file relay can no longer be aborted');await transaction.delete(`file-relay:${id}`)});this.safeSend(socket,JSON.stringify({type:'file-relay-response',action:'abort',requestId,ok:true,id,deleteUrl:deletion.url,urlExpiresAt:deletion.expiresAt}))}
+
+  async sfuApi(path,{method='POST',body=null}={}) {
+    const config=this.sfuConfiguration();if(!config)throw new Error('group-call SFU pilot is not configured');const response=await fetch(`${config.base}/${encodeURIComponent(config.appId)}${path}`,{method,headers:{authorization:`Bearer ${config.secret}`,...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})}),text=await response.text();if(text.length>1024*1024)throw new Error('SFU response was too large');let value={};try{value=text?JSON.parse(text):{}}catch{throw new Error('SFU returned an invalid response')}if(!response.ok||value?.errorCode)throw new Error(cleanText(value?.errorDescription||value?.message,160,'SFU request failed'));return value;
+  }
+
+  async requireSfuRoom(user,attachment,value) {
+    const groupId=normalizeId(value.groupId||value.entityId),channelId=normalizeId(value.channelId),group=await this.groupDm(groupId);this.requireGroupMember(group,user.id);const channel=group.channels.find(item=>item.id===channelId&&item.type==='voice');if(!channel)throw new Error('group call channel is missing');if(attachment.voiceScope!=='group-dm'||attachment.voiceServerId!==group.id||attachment.voiceChannelId!==channel.id)throw new Error('join the group call before using its SFU pilot');return{group,channel};
+  }
+
+  sfuPublisherKey(groupId,channelId,userId){return`sfu-publisher:${groupId}:${channelId}:${userId}`}
+
+  async sfuRoomTracks(group,channel) {
+    const entries=await this.state.storage.list({prefix:`sfu-publisher:${group.id}:${channel.id}:`}),now=Date.now(),active=new Set(this.liveAttachments().filter(item=>item.authed&&item.voiceScope==='group-dm'&&item.voiceServerId===group.id&&item.voiceChannelId===channel.id).map(item=>item.userId)),tracks=[];
+    for(const[key,record]of entries){if(!record||Number(record.expiresAt)<=now||!active.has(record.ownerId)){await this.state.storage.delete(key);continue}for(const track of record.tracks||[]){const sessionId=cleanSfuOpaque(track.sessionId,128),trackName=cleanSfuOpaque(track.trackName),kind=track.kind==='video'?'video':'audio';if(sessionId&&trackName&&normalizeId(record.ownerId))tracks.push({ownerId:record.ownerId,sessionId,trackName,kind})}}
+    return tracks.slice(0,MAX_SFU_TRACKS);
+  }
+
+  async broadcastSfuTracks(group,channel){const tracks=await this.sfuRoomTracks(group,channel);return this.sendUsers(group.members,{type:'sfu-track-set',groupId:group.id,channelId:channel.id,tracks})}
+
+  async handleSfuPublish(socket,attachment,user,value) {
+    const{group,channel}=await this.requireSfuRoom(user,attachment,value),requestId=normalizeId(value.requestId),description=cleanSessionDescription(value.sessionDescription,'offer'),rawTracks=Array.isArray(value.tracks)?value.tracks:[];if(!requestId||!description||!rawTracks.length||rawTracks.length>4)throw new Error('invalid SFU publish request');const tracks=rawTracks.map(track=>({location:'local',mid:cleanSfuOpaque(track?.mid,16),trackName:cleanSfuOpaque(track?.trackName),kind:track?.kind==='video'?'video':'audio'}));if(tracks.some(track=>!track.mid||!track.trackName))throw new Error('invalid SFU publish track');
+    const created=await this.sfuApi('/sessions/new'),sessionId=cleanSfuOpaque(created?.sessionId,128);if(!sessionId)throw new Error('SFU did not create a session');const published=await this.sfuApi(`/sessions/${encodeURIComponent(sessionId)}/tracks/new`,{body:{sessionDescription:description,tracks:tracks.map(({location,mid,trackName})=>({location,mid,trackName}))}}),answer=cleanSessionDescription(published?.sessionDescription,'answer'),publishedTracks=(Array.isArray(published?.tracks)?published.tracks:[]).map((track,index)=>({sessionId,trackName:cleanSfuOpaque(track?.trackName)||tracks[index]?.trackName||'',kind:tracks[index]?.kind||'audio'})).filter(track=>track.trackName);if(!answer||!publishedTracks.length)throw new Error('SFU did not accept the published tracks');
+    const previous=attachment.sfuPublisher;if(previous?.key&&previous.key!==this.sfuPublisherKey(group.id,channel.id,user.id))await this.state.storage.delete(previous.key);const key=this.sfuPublisherKey(group.id,channel.id,user.id);await this.state.storage.put(key,{ownerId:user.id,sessionId,tracks:publishedTracks,expiresAt:Date.now()+SFU_RECORD_TTL_MS});attachment.sfuPublisher={key,groupId:group.id,channelId:channel.id,sessionId};socket.serializeAttachment(attachment);const roomTracks=await this.sfuRoomTracks(group,channel);this.safeSend(socket,JSON.stringify({type:'sfu-response',requestId,action:'publish',ok:true,sessionId,sessionDescription:answer,tracks:published?.tracks||[],roomTracks}));await this.broadcastSfuTracks(group,channel);
+  }
+
+  async handleSfuSubscribe(socket,attachment,user,value) {
+    const{group,channel}=await this.requireSfuRoom(user,attachment,value),requestId=normalizeId(value.requestId);if(!requestId)throw new Error('invalid SFU subscribe request');const allowed=await this.sfuRoomTracks(group,channel),allowedKeys=new Map(allowed.filter(track=>track.ownerId!==user.id).map(track=>[`${track.sessionId}:${track.trackName}`,track])),requested=(Array.isArray(value.tracks)?value.tracks:[]).map(track=>allowedKeys.get(`${cleanSfuOpaque(track?.sessionId,128)}:${cleanSfuOpaque(track?.trackName)}`)).filter(Boolean).slice(0,MAX_SFU_TRACKS);if(!requested.length)throw new Error('no authorized SFU tracks are available');
+    const created=await this.sfuApi('/sessions/new'),sessionId=cleanSfuOpaque(created?.sessionId,128);if(!sessionId)throw new Error('SFU did not create a subscriber session');const pulled=await this.sfuApi(`/sessions/${encodeURIComponent(sessionId)}/tracks/new`,{body:{tracks:requested.map(track=>({location:'remote',sessionId:track.sessionId,trackName:track.trackName}))}}),offer=cleanSessionDescription(pulled?.sessionDescription,'offer');if(!offer)throw new Error('SFU did not offer the subscribed tracks');attachment.sfuSubscriber={groupId:group.id,channelId:channel.id,sessionId};socket.serializeAttachment(attachment);this.safeSend(socket,JSON.stringify({type:'sfu-response',requestId,action:'subscribe',ok:true,sessionId,sessionDescription:offer,tracks:pulled?.tracks||[]}));
+  }
+
+  async handleSfuRenegotiate(socket,attachment,user,value) {
+    await this.requireSfuRoom(user,attachment,value);const requestId=normalizeId(value.requestId),sessionId=cleanSfuOpaque(value.sessionId,128),description=cleanSessionDescription(value.sessionDescription,'answer');if(!requestId||!description||!sessionId||attachment.sfuSubscriber?.sessionId!==sessionId)throw new Error('invalid SFU renegotiation');await this.sfuApi(`/sessions/${encodeURIComponent(sessionId)}/renegotiate`,{method:'PUT',body:{sessionDescription:description}});this.safeSend(socket,JSON.stringify({type:'sfu-response',requestId,action:'renegotiate',ok:true}));
+  }
+
+  async closeSfuPublisher(socket,attachment,user,value={}) {
+    const requestId=normalizeId(value.requestId),record=attachment.sfuPublisher;if(record?.key)await this.state.storage.delete(record.key);delete attachment.sfuPublisher;delete attachment.sfuSubscriber;try{socket.serializeAttachment?.(attachment)}catch{}if(record?.groupId&&record?.channelId){const group=await this.groupDm(record.groupId),channel=group?.channels?.find(item=>item.id===record.channelId&&item.type==='voice');if(group&&channel)await this.broadcastSfuTracks(group,channel)}if(requestId)this.safeSend(socket,JSON.stringify({type:'sfu-response',requestId,action:'close',ok:true}));
   }
 
   async webSocketMessage(socket, message) {
@@ -241,7 +476,9 @@ export class PairDirectory {
     const user = await this.user(attachment.userId);
     if (!user) return socket.close(1008, 'account missing');
     try {
-      if (value.type === 'create-account') {
+      if (value.type === 'snapshot-request') {
+        await this.sendSnapshot(user.id,{bump:false});
+      } else if (value.type === 'create-account') {
         await this.createAccount(socket, user, value, attachment);await this.broadcastProfile(user.id);
       } else if (value.type === 'remove-friend') {
         const peerId = normalizeId(value.peerId); if (!peerId) throw new Error('friend is missing');
@@ -275,24 +512,26 @@ export class PairDirectory {
         socket.serializeAttachment(attachment);
         this.sendUser(peerId, { type: 'call-presence', from: user.id, active, session, at: Date.now() });
       } else if (value.type === 'update-profile') {
+        const publicImage = await this.storeMedia(value.image), suppliedAccountProfile = value.accountProfile && typeof value.accountProfile === 'object' ? { ...value.accountProfile } : null;
+        if (suppliedAccountProfile) suppliedAccountProfile.image = suppliedAccountProfile.imageFromPublic === true ? publicImage : await this.storeMedia(suppliedAccountProfile.image);
         let updatedUser;
         await this.state.storage.transaction(async transaction => {
           const actor = await transaction.get(`user:${user.id}`);if (!actor) throw new Error('account missing');
           actor.name = cleanText(value.name, 32, actor.name || 'Knot user');
-          actor.image = cleanImage(value.image);
+          actor.image = publicImage;
           actor.frame = cleanFrame(value.frame);
           actor.deviceKey = cleanDeviceKey(value.deviceKey) || actor.deviceKey || null;
           if (actor.username) {
             const account = await transaction.get(`account:${actor.username}`);
             if (account?.userId === actor.id) {
               const existing = cleanAccountProfile(account.profile, accountProfileFromUser(actor)) || accountProfileFromUser(actor);
-              account.profile = accountProfileFromWire(value.accountProfile, { ...existing, name: actor.name, image: actor.image, frame: actor.frame }) || existing;
+              account.profile = accountProfileFromWire(suppliedAccountProfile, { ...existing, name: actor.name, image: actor.image, frame: actor.frame }) || existing;
               await transaction.put(`account:${actor.username}`, account);
             }
           }
           updatedUser = this.normalizedUser(actor);await transaction.put(`user:${actor.id}`, updatedUser);
         });
-        Object.assign(user, updatedUser);await this.broadcastProfile(user.id);
+        Object.assign(user, updatedUser);await this.dualWriteDirectoryUser(updatedUser);await this.broadcastProfile(user.id);
       } else if (value.type === 'create-invite') {
         const kind = value.kind === 'server' ? 'server' : 'friend';
         if (kind === 'server' && !user.servers.includes(normalizeId(value.serverId))) throw new Error('not a server member');
@@ -302,7 +541,7 @@ export class PairDirectory {
       } else if (value.type === 'redeem-invite') {
         await this.consumeInviteRedeemBudget(socket, attachment); const audience=await this.redeemInvite(user, String(value.code || '')); await this.broadcastSnapshots(audience);
       } else if (value.type === 'create-server') {
-        const server = { id: randomHex(), name: cleanText(value.name, 48, 'New server'), picture: cleanImage(value.picture), owner: user.id, members: [user.id], channels: [{ id: randomHex(), type: 'text', name: 'general' }, { id: randomHex(), type: 'voice', name: 'Lounge' }] };
+        const server = { id: randomHex(), name: cleanText(value.name, 48, 'New server'), picture: await this.storeMedia(value.picture), owner: user.id, members: [user.id], channels: [{ id: randomHex(), type: 'text', name: 'general' }, { id: randomHex(), type: 'voice', name: 'Lounge' }] };
         await this.state.storage.transaction(async transaction => {
           if (await transaction.get(`server:${server.id}`)) throw new Error('could not allocate a server');
           const actor = await transaction.get(`user:${user.id}`); if (!actor) throw new Error('account missing');
@@ -316,7 +555,7 @@ export class PairDirectory {
       } else if (value.type === 'update-server') {
         const server = await this.server(value.serverId); this.requireOwner(server, user.id);
         if ('name' in value) server.name = cleanText(value.name, 48, server.name);
-        if ('picture' in value) server.picture = cleanImage(value.picture);
+        if ('picture' in value) server.picture = await this.storeMedia(value.picture);
         await this.state.storage.put(`server:${server.id}`, server); this.broadcastEntity(server);
       } else if (value.type === 'create-channel') {
         const server = await this.server(value.serverId); this.requireOwner(server, user.id);
@@ -338,11 +577,29 @@ export class PairDirectory {
         const channels = new Map(server.channels.map(channel => [channel.id, channel])); server.channels = ids.map(id => channels.get(id));
         await this.state.storage.put(`server:${server.id}`, server); this.broadcastEntity(server);
       } else if (value.type === 'voice-state') {
-        const entity=await this.updateVoiceState(socket, attachment, user, value); this.broadcastVoiceStates(entity);
+        const entity=await this.updateVoiceState(socket, attachment, user, value);if(!value.joined)await this.closeSfuPublisher(socket,attachment,user);this.broadcastVoiceStates(entity);if(value.joined&&entity?.kind==='group-dm'&&this.sfuConfiguration()){const channel=entity.channels.find(item=>item.id===attachment.voiceChannelId&&item.type==='voice');if(channel)this.safeSend(socket,JSON.stringify({type:'sfu-track-set',groupId:entity.id,channelId:channel.id,tracks:await this.sfuRoomTracks(entity,channel)}))}
+      } else if (value.type === 'sfu-publish') {
+        await this.handleSfuPublish(socket,attachment,user,value);
+      } else if (value.type === 'sfu-subscribe') {
+        await this.handleSfuSubscribe(socket,attachment,user,value);
+      } else if (value.type === 'sfu-renegotiate') {
+        await this.handleSfuRenegotiate(socket,attachment,user,value);
+      } else if (value.type === 'sfu-close') {
+        await this.closeSfuPublisher(socket,attachment,user,value);
+      } else if (value.type === 'sfu-track-request') {
+        const{group,channel}=await this.requireSfuRoom(user,attachment,value);this.safeSend(socket,JSON.stringify({type:'sfu-track-set',groupId:group.id,channelId:channel.id,tracks:await this.sfuRoomTracks(group,channel)}));
       } else if (value.type === 'relay-text') {
         await this.relayText(user, value);
       } else if (value.type === 'relay-ack') {
         await this.ackRelayText(user, value);
+      } else if (value.type === 'file-relay-create') {
+        await this.createFileRelay(socket,user,value);
+      } else if (value.type === 'file-relay-notify') {
+        await this.notifyFileRelay(socket,user,value);
+      } else if (value.type === 'file-relay-download') {
+        await this.downloadFileRelay(socket,user,value);
+      } else if (value.type === 'file-relay-abort') {
+        await this.abandonFileRelay(socket,user,value);
       } else if (value.type === 'relay-key') {
         await this.relayGroupKey(user, value);
       } else if (value.type === 'turn-credentials') {
@@ -350,13 +607,14 @@ export class PairDirectory {
       } else if (value.type === 'connect' || value.type === 'signal') {
         await this.relayPeerControl(socket, attachment, user, value);
       }
-    } catch (error) { this.safeSend(socket, JSON.stringify({ type: 'error', action: value.type, message: cleanText(error?.message, 160, 'request failed') })); }
+    } catch (error) { this.safeSend(socket, JSON.stringify({ type: 'error', action: value.type, ...(normalizeId(value?.requestId)?{requestId:normalizeId(value.requestId)}:{}), message: cleanText(error?.message, 160, 'request failed') })); }
   }
 
   async authenticate(socket, attachment, value) {
     if (value?.type === 'account-challenge') return this.accountChallenge(socket, attachment, value);
     if (value?.type === 'account-login') return this.loginAccount(socket, attachment, value);
     if (value?.type !== 'hello') return socket.close(1008, 'authenticate first');
+    attachment.directoryVersion = Number(value.directoryVersion) >= DIRECTORY_PROTOCOL_V2 ? DIRECTORY_PROTOCOL_V2 : 1;
     const id = normalizeId(value.userId), token = normalizeToken(value.token);
     if (!id || !token) return socket.close(1008, 'invalid credentials');
     const hash = await tokenHash(token); let user = await this.user(id), profileChanged = false, matchedSession = null;
@@ -372,17 +630,17 @@ export class PairDirectory {
       if (user.username && matchedSession) matchedSession.accountLogin = true;
       user.sessions = [...new Map(sessions.map(session => [session.hash, session])).values()].slice(-8);
     }
-    if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Knot user'), image: cleanImage(value.image), frame: cleanFrame(value.frame), deviceKey: cleanDeviceKey(value.deviceKey), friends: [], servers: [], groupDms: [] };
+    if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Knot user'), image: await this.storeMedia(value.image), frame: cleanFrame(value.frame), deviceKey: cleanDeviceKey(value.deviceKey), friends: [], servers: [], groupDms: [] };
     else {
       // A token created by password login is a recovery session. Its reconnect
       // handshake must not replace the saved account profile with a new
       // machine's defaults. Explicit update-profile messages still can.
-      const profileLocked=!!(user.username&&matchedSession?.accountLogin),name=!profileLocked&&'name'in value?cleanText(value.name,32,user.name):user.name,image=!profileLocked&&'image'in value?cleanImage(value.image):user.image,frame=!profileLocked&&'frame'in value?cleanFrame(value.frame):cleanFrame(user.frame),deviceKey=cleanDeviceKey(value.deviceKey)||user.deviceKey||null;
+      const profileLocked=!!(user.username&&matchedSession?.accountLogin),name=!profileLocked&&'name'in value?cleanText(value.name,32,user.name):user.name,image=!profileLocked&&'image'in value?await this.storeMedia(value.image):user.image,frame=!profileLocked&&'frame'in value?cleanFrame(value.frame):cleanFrame(user.frame),deviceKey=cleanDeviceKey(value.deviceKey)||user.deviceKey||null;
       profileChanged=name!==user.name||image!==user.image||frame.zoom!==user.frame?.zoom||frame.x!==user.frame?.x||frame.y!==user.frame?.y||deviceKey?.x!==user.deviceKey?.x||deviceKey?.y!==user.deviceKey?.y;
       user.name=name;user.image=image;user.frame=frame;user.deviceKey=deviceKey;
     }
     await this.putUser(user); attachment.authed = true; attachment.userId = id; attachment.connectionId = normalizeId(attachment.connectionId) || randomHex(); attachment.connectedAt = Date.now(); socket.serializeAttachment(attachment);this.limitUserSockets(id, socket);
-    this.safeSend(socket, JSON.stringify({ type: 'authenticated', userId: id, username: user.username || '', connectionId: attachment.connectionId })); await this.sendSnapshot(user.id);if(profileChanged)await this.broadcastProfile(user.id,[user.id]);else await this.broadcastPresence(user.id,[user.id]);await this.deliverMailbox(user.id);
+    this.safeSend(socket, JSON.stringify({ type: 'authenticated', userId: id, username: user.username || '', connectionId: attachment.connectionId, directoryVersion: attachment.directoryVersion, features:this.publicFeatures() })); await this.sendSnapshot(user.id,{bump:false});if(profileChanged)await this.broadcastProfile(user.id,[user.id]);else await this.broadcastPresence(user.id,[user.id]);await this.deliverMailbox(user.id);
   }
 
   async createAccount(socket, user, value, attachment = {}) {
@@ -393,6 +651,7 @@ export class PairDirectory {
     if (user.username && user.username !== username) throw new Error('this identity already has an account');
     const verifierHash = await tokenHash(verifier);
     let updatedUser,recoveryProfile;
+    const suppliedProfile=cleanAccountProfile(value.profile,accountProfileFromUser(user))||accountProfileFromUser(user);suppliedProfile.image=await this.storeMedia(suppliedProfile.image);
     await this.state.storage.transaction(async transaction => {
       const existing = await transaction.get(`account:${username}`);
       if (existing && existing.userId !== user.id) throw new Error('that username is already taken');
@@ -401,15 +660,17 @@ export class PairDirectory {
       const now = Date.now();
       if (actor.tokenHash) { actor.sessions = [...(actor.sessions || []), { hash: actor.tokenHash, expiresAt: now + ACCOUNT_SESSION_TTL_MS, accountLogin: true }].slice(-8); delete actor.tokenHash; }
       actor.username = username; updatedUser = this.normalizedUser(actor);
-      recoveryProfile = cleanAccountProfile(value.profile, accountProfileFromUser(actor)) || accountProfileFromUser(actor);
+      recoveryProfile = cleanAccountProfile(suppliedProfile, accountProfileFromUser(actor)) || accountProfileFromUser(actor);
       await transaction.put(`account:${username}`, { userId: user.id, passwordSalt, verifierHash, profile: recoveryProfile });
       await transaction.put(`user:${user.id}`, updatedUser);
     });
-    Object.assign(user, updatedUser);
-    this.safeSend(socket, JSON.stringify({ type: 'account-session', mode: 'created', userId: user.id, username, profile: { id: user.id, ...recoveryProfile }, profileMigrated: false }));
+    Object.assign(user, updatedUser);await this.dualWriteDirectoryUser(updatedUser);
+    const wireProfile={...recoveryProfile,image:await this.wireMedia(recoveryProfile.image,attachment.directoryVersion)};
+    this.safeSend(socket, JSON.stringify({ type: 'account-session', mode: 'created', userId: user.id, username, profile: { id: user.id, ...wireProfile }, profileMigrated: false }));
   }
 
   async accountChallenge(socket, attachment, value) {
+    attachment.directoryVersion = Number(value?.directoryVersion) >= DIRECTORY_PROTOCOL_V2 ? DIRECTORY_PROTOCOL_V2 : 1;
     const now = Date.now();
     if (!attachment.challengeWindowStarted || now - Number(attachment.challengeWindowStarted) >= LOGIN_WINDOW_MS) { attachment.challengeWindowStarted = now; attachment.challengeAttempts = 0; }
     attachment.challengeAttempts = Number(attachment.challengeAttempts || 0) + 1; socket.serializeAttachment?.(attachment);
@@ -427,6 +688,7 @@ export class PairDirectory {
   }
 
   async loginAccount(socket, attachment, value) {
+    attachment.directoryVersion = Number(value?.directoryVersion) >= DIRECTORY_PROTOCOL_V2 ? DIRECTORY_PROTOCOL_V2 : Number(attachment.directoryVersion) >= DIRECTORY_PROTOCOL_V2 ? DIRECTORY_PROTOCOL_V2 : 1;
     const now = Date.now(), genericError=()=>this.safeSend(socket, JSON.stringify({ type: 'error', action: 'account-login', message: 'username or password is incorrect, or sign-in is temporarily limited' }));
     if (!attachment.loginWindowStarted || now - Number(attachment.loginWindowStarted) >= LOGIN_WINDOW_MS) { attachment.loginWindowStarted=now;attachment.loginFailures=0; }
     if (Number(attachment.loginFailures)>=LOGIN_MAX_FAILURES) { genericError();return; }
@@ -455,9 +717,15 @@ export class PairDirectory {
       if (/identity is missing/.test(String(error?.message || ''))) return socket.close(1008, 'account identity is missing');
       genericError(); return;
     }
+    const migratedRecoveryImage=await this.storeMedia(recoveryProfile.image),migratedPublicImage=await this.storeMedia(user.image);
+    if (cleanMediaRef(migratedRecoveryImage) || cleanMediaRef(migratedPublicImage)) {
+      recoveryProfile={...recoveryProfile,image:migratedRecoveryImage};user={...user,image:migratedPublicImage};
+      await this.state.storage.transaction(async transaction=>{const currentAccount=await transaction.get(`account:${username}`),currentUser=await transaction.get(`user:${user.id}`);if(currentAccount?.userId===user.id){currentAccount.profile=recoveryProfile;await transaction.put(`account:${username}`,currentAccount)}if(currentUser){currentUser.image=migratedPublicImage;await transaction.put(`user:${user.id}`,this.normalizedUser(currentUser))}});
+    }
     delete attachment.loginFailures;delete attachment.loginWindowStarted;attachment.authed = true; attachment.userId = user.id; attachment.connectionId = normalizeId(attachment.connectionId) || randomHex(); attachment.connectedAt = now; socket.serializeAttachment(attachment);this.limitUserSockets(user.id, socket);
-    this.safeSend(socket, JSON.stringify({ type: 'account-session', mode: 'login', userId: user.id, token, username, connectionId: attachment.connectionId, profile: { id: user.id, ...recoveryProfile }, profileMigrated }));
-    await this.sendSnapshot(user.id);await this.broadcastPresence(user.id,[user.id]);await this.deliverMailbox(user.id);
+    await this.dualWriteDirectoryUser(user);const wireProfile={...recoveryProfile,image:await this.wireMedia(recoveryProfile.image,attachment.directoryVersion)};
+    this.safeSend(socket, JSON.stringify({ type: 'account-session', mode: 'login', userId: user.id, token, username, connectionId: attachment.connectionId, profile: { id: user.id, ...wireProfile }, profileMigrated, directoryVersion: attachment.directoryVersion }));
+    await this.sendSnapshot(user.id,{bump:false});await this.broadcastPresence(user.id,[user.id]);await this.deliverMailbox(user.id);
   }
 
   async createInvite(kind, targetId, ownerId) {
@@ -803,7 +1071,7 @@ export class PairDirectory {
   async ackRelayText(user, value) {
     const id = normalizeId(value.id);if (!id) throw new Error('invalid relay acknowledgement');
     const indexKey = `mail-id:${user.id}:${id}`;
-    await this.state.storage.transaction(async transaction => { const key = await transaction.get(indexKey);if(!key)return;const envelope=await transaction.get(key);if(envelope?.id===id)await transaction.delete(key);await transaction.delete(indexKey); });
+    await this.state.storage.transaction(async transaction => { const key = await transaction.get(indexKey);if(key){const envelope=await transaction.get(key);if(envelope?.id===id)await transaction.delete(key);await transaction.delete(indexKey)}const relay=await transaction.get(`file-relay:${id}`);if(relay?.recipientId===user.id)await transaction.delete(`file-relay:${id}`); });
   }
 
   // Group-key wrapping is also opaque. A requesting member broadcasts no key;
@@ -877,10 +1145,11 @@ export class PairDirectory {
     const byteLength=value=>new TextEncoder().encode(JSON.stringify(value)).byteLength,target=MAX_DIRECTORY_SNAPSHOT_BYTES-16*1024;
     let bytes=byteLength(snapshot);if(bytes<=MAX_DIRECTORY_SNAPSHOT_BYTES)return snapshot;
     const candidates=[];
-    for(const server of snapshot.servers||[])if(server.picture)candidates.push({owner:server,key:'picture',size:server.picture.length,priority:0});
-    for(const member of Object.values(snapshot.members||{}))if(member.image)candidates.push({owner:member,key:'image',size:member.image.length,priority:1});
-    for(const friend of snapshot.friends||[])if(friend.image)candidates.push({owner:friend,key:'image',size:friend.image.length,priority:2});
-    if(snapshot.self?.image)candidates.push({owner:snapshot.self,key:'image',size:snapshot.self.image.length,priority:3});
+    const mediaSize=value=>typeof value==='string'?value.length:new TextEncoder().encode(JSON.stringify(value||'')).byteLength;
+    for(const server of snapshot.servers||[])if(server.picture)candidates.push({owner:server,key:'picture',size:mediaSize(server.picture),priority:0});
+    for(const member of Object.values(snapshot.members||{}))if(member.image)candidates.push({owner:member,key:'image',size:mediaSize(member.image),priority:1});
+    for(const friend of snapshot.friends||[])if(friend.image)candidates.push({owner:friend,key:'image',size:mediaSize(friend.image),priority:2});
+    if(snapshot.self?.image)candidates.push({owner:snapshot.self,key:'image',size:mediaSize(snapshot.self.image),priority:3});
     candidates.sort((a,b)=>a.priority-b.priority||b.size-a.size);
     for(const candidate of candidates){if(bytes<=target)break;candidate.owner[candidate.key]='';bytes-=candidate.size}
     snapshot.profileImagesTruncated=true;bytes=byteLength(snapshot);
@@ -895,41 +1164,44 @@ export class PairDirectory {
     return snapshot;
   }
 
-  async snapshot(userId) {
-    const user = await this.user(userId); if (!user) return null;
+  async snapshot(userId,{version=1,revision=null}={}) {
+    const primaryUser = await this.user(userId); if (!primaryUser) return null;const user=version>=DIRECTORY_PROTOCOL_V2?await this.readDirectoryV2('user',userId,this.directoryUserRecord(primaryUser)):primaryUser;
     const liveAttachments=this.liveAttachments(),onlineIds=new Set(liveAttachments.filter(attachment=>attachment.authed).map(attachment=>attachment.userId).filter(Boolean));
     const imageBudget={remaining:2*1024*1024,truncated:false},serverImageBudget={remaining:512*1024,truncated:false};
-    const self=this.publicUser(user,onlineIds,imageBudget);
-    const friends=(await this.loadMany(user.friends||[],id=>this.user(id),friend=>friend?this.publicUser(friend,onlineIds,imageBudget):null)).filter(Boolean);
-    const servers=(await this.loadMany(user.servers||[],id=>this.server(id),server=>{if(!server)return null;const copy=structuredClone(server),size=String(copy.picture||'').length;if(size>serverImageBudget.remaining){copy.picture='';if(size)serverImageBudget.truncated=true}else serverImageBudget.remaining-=size;return copy})).filter(Boolean);
-    const groupDms=(await this.loadMany(user.groupDms||[],id=>this.groupDm(id),group=>group?.members?.includes(user.id)?structuredClone(group):null)).filter(Boolean);
+    const self=await this.publicUser(user,onlineIds,imageBudget,version);
+    const friends=(await this.loadMany(user.friends||[],async id=>{const primary=await this.user(id);return version>=DIRECTORY_PROTOCOL_V2&&primary?this.readDirectoryV2('user',id,this.directoryUserRecord(primary)):primary},friend=>friend?this.publicUser(friend,onlineIds,imageBudget,version):null)).filter(Boolean);
+    const servers=(await this.loadMany(user.servers||[],async id=>{const primary=await this.server(id);return version>=DIRECTORY_PROTOCOL_V2&&primary?this.readDirectoryV2('server',id,this.directoryEntityRecord('server',primary)):primary},async server=>{if(!server)return null;const copy=structuredClone(server);copy.picture=await this.wireMedia(copy.picture,version);const size=typeof copy.picture==='string'?copy.picture.length:0;if(version<2&&size>serverImageBudget.remaining){copy.picture='';if(size)serverImageBudget.truncated=true}else serverImageBudget.remaining-=size;return copy})).filter(Boolean);
+    const groupDms=(await this.loadMany(user.groupDms||[],async id=>{const primary=await this.groupDm(id);return version>=DIRECTORY_PROTOCOL_V2&&primary?this.readDirectoryV2('group',id,this.directoryEntityRecord('group',primary)):primary},group=>group?.members?.includes(user.id)?structuredClone(group):null)).filter(Boolean);
     const entities=[...servers,...groupDms],voiceStates=this.voiceStates(entities,liveAttachments),memberIds=[...new Set(entities.flatMap(entity=>entity.members||[]).map(normalizeId).filter(Boolean))];
     const prioritized=[],seen=new Set(),add=id=>{if(id&&!seen.has(id)){seen.add(id);prioritized.push(id)}};
     for(const group of groupDms)for(const id of group.members||[])add(id);
     for(const entries of Object.values(voiceStates))for(const entry of entries)add(entry.id);
     for(const id of memberIds)if(onlineIds.has(id))add(id);
     for(const id of memberIds)add(id);
-    const selectedIds=prioritized.slice(0,MAX_SNAPSHOT_MEMBER_PROFILES),memberEntries=(await this.loadMany(selectedIds,id=>this.user(id),member=>member?[member.id,this.publicUser(member,onlineIds,imageBudget)]:null)).filter(Boolean);
+    const selectedIds=prioritized.slice(0,MAX_SNAPSHOT_MEMBER_PROFILES),memberEntries=(await this.loadMany(selectedIds,async id=>{const primary=await this.user(id);return version>=DIRECTORY_PROTOCOL_V2&&primary?this.readDirectoryV2('user',id,this.directoryUserRecord(primary)):primary},member=>member?this.publicUser(member,onlineIds,imageBudget,version).then(profile=>[member.id,profile]):null)).filter(Boolean);
     const members=Object.fromEntries(memberEntries);
-    const snapshot={type:'snapshot',self,friends,servers,groupDms,members,voiceStates};
+    const snapshot={type:'snapshot',directoryVersion:version>=DIRECTORY_PROTOCOL_V2?DIRECTORY_PROTOCOL_V2:1,revision:Number.isInteger(revision)?revision:await this.currentDirectoryRevision(),self,friends,servers,groupDms,members,voiceStates};
     if(memberIds.length>selectedIds.length)snapshot.memberProfilesTruncated=true;
     if(imageBudget.truncated||serverImageBudget.truncated)snapshot.profileImagesTruncated=true;
     return this.boundedSnapshot(snapshot);
   }
 
-  publicUser(user,onlineIds=null,imageBudget=null) { const image=String(user.image||''),allowedImage=!imageBudget||image.length<=imageBudget.remaining;if(imageBudget&&image){if(allowedImage)imageBudget.remaining-=image.length;else imageBudget.truncated=true}return { id: user.id, name: user.name, username: user.username || '', image: allowedImage?image:'', frame: cleanFrame(user.frame), deviceKey: cleanDeviceKey(user.deviceKey), online: onlineIds?onlineIds.has(user.id):this.isOnline(user.id) }; }
+  async publicUser(user,onlineIds=null,imageBudget=null,directoryVersion=1) { const image=await this.wireMedia(user.image,directoryVersion),size=typeof image==='string'?image.length:0,allowedImage=directoryVersion>=DIRECTORY_PROTOCOL_V2||!imageBudget||size<=imageBudget.remaining;if(imageBudget&&size){if(allowedImage)imageBudget.remaining-=size;else imageBudget.truncated=true}return { id: user.id, name: user.name, username: user.username || '', image: allowedImage?image:'', frame: cleanFrame(user.frame), deviceKey: cleanDeviceKey(user.deviceKey), online: onlineIds?onlineIds.has(user.id):this.isOnline(user.id) }; }
   liveAttachments(){return this.state.getWebSockets().filter(socket=>socket.readyState===1).map(socket=>socket.deserializeAttachment()||{})}
   voiceStates(entities,attachments=this.liveAttachments()) { const allowed=new Map(entities.map(entity=>[entity.id,new Set((entity.channels||[]).filter(channel=>channel.type==='voice').map(channel=>channel.id))])),states={},seen={};for(const attachment of attachments){const channelId=normalizeId(attachment.voiceChannelId),channels=allowed.get(attachment.voiceServerId);if(!attachment.authed||!channels?.has(channelId))continue;const channelSeen=seen[channelId]||(seen[channelId]=new Set());if(channelSeen.has(attachment.userId))continue;channelSeen.add(attachment.userId);const list=states[channelId]||(states[channelId]=[]);list.push({id:attachment.userId,joinedAt:Number(attachment.voiceJoinedAt)||Date.now()})}return states; }
-  async loadMany(ids,loader,mapper=null){const values=[];for(let offset=0;offset<ids.length;offset+=STORAGE_READ_BATCH_SIZE){const batch=await Promise.all(ids.slice(offset,offset+STORAGE_READ_BATCH_SIZE).map(loader));values.push(...(mapper?batch.map(mapper):batch))}return values}
+  async loadMany(ids,loader,mapper=null){const values=[];for(let offset=0;offset<ids.length;offset+=STORAGE_READ_BATCH_SIZE){const batch=await Promise.all(ids.slice(offset,offset+STORAGE_READ_BATCH_SIZE).map(loader));values.push(...(mapper?await Promise.all(batch.map(mapper)):batch))}return values}
   isOnline(userId,excludedSocket=null) { return this.state.getWebSockets().some(socket => { if(socket===excludedSocket)return false;const a = socket.deserializeAttachment() || {}; return socket.readyState === 1 && a.authed && a.userId === userId; }); }
   async relatedUserIds(seedIds) { const ids=new Set((seedIds||[]).map(normalizeId).filter(Boolean));for(const seed of [...ids]){const user=await this.user(seed);if(!user)continue;for(const friend of user.friends||[])ids.add(friend);const entityIds=[...(user.servers||[]).map(id=>['server',id]),...(user.groupDms||[]).map(id=>['group',id])],entities=(await this.loadMany(entityIds,([kind,id])=>kind==='group'?this.groupDm(id):this.server(id))).filter(Boolean);for(const entity of entities)for(const member of entity.members||[])ids.add(member)}return[...ids]; }
+  async currentDirectoryRevision(){return Math.max(0,Number(await this.state.storage.get('directory:revision'))||0)}
+  async nextDirectoryRevision(){let revision=0;await this.state.storage.transaction(async transaction=>{revision=Math.max(0,Number(await transaction.get('directory:revision'))||0)+1;await transaction.put('directory:revision',revision)});return revision}
   async broadcastRelatedSnapshots(seedIds) { return this.broadcastSnapshots(await this.relatedUserIds(seedIds)); }
-  async broadcastSnapshots(userIds=[]) { const online=new Set(this.state.getWebSockets().map(socket=>(socket.deserializeAttachment()||{}).userId).filter(Boolean)),ids=[...new Set((userIds||[]).map(normalizeId).filter(id=>id&&online.has(id)))];for(let offset=0;offset<ids.length;offset+=8)await Promise.all(ids.slice(offset,offset+8).map(async id=>{const snapshot=await this.snapshot(id);if(snapshot)this.sendUser(id,snapshot)})); }
-  async sendSnapshot(userId){const snapshot=await this.snapshot(userId);return snapshot?this.sendUser(userId,snapshot):false}
-  async broadcastProfile(userId,excluded=[]){const user=await this.user(userId);if(!user)return false;const recipients=await this.relatedUserIds([userId]);return this.sendUsers(recipients,{type:'profile-update',profile:this.publicUser(user)},excluded)}
-  async broadcastPresence(userId,excluded=[],excludedSocket=null){const recipients=await this.relatedUserIds([userId]);return this.sendUsers(recipients,{type:'presence-update',userId,online:this.isOnline(userId,excludedSocket)},excluded)}
-  broadcastEntity(entity){return entity?this.sendUsers(entity.members||[],{type:'entity-update',entity}):false}
-  broadcastVoiceStates(entity){return entity?this.sendUsers(entity.members||[],{type:'voice-states',entityId:entity.id,voiceStates:this.voiceStates([entity])}):false}
+  async broadcastSnapshots(userIds=[]) { const online=new Set(this.state.getWebSockets().map(socket=>(socket.deserializeAttachment()||{}).userId).filter(Boolean)),ids=[...new Set((userIds||[]).map(normalizeId).filter(id=>id&&online.has(id)))],revision=await this.nextDirectoryRevision();await this.syncDirectoryV2ForUsers(ids);for(let offset=0;offset<ids.length;offset+=8)await Promise.all(ids.slice(offset,offset+8).map(id=>this.sendSnapshot(id,{bump:false,revision,sync:false}))); }
+  async sendSnapshot(userId,{bump=true,revision=null,sync=true}={}){const id=normalizeId(userId);if(!id)return false;if(sync)await this.syncDirectoryV2ForUsers([id]);const resolvedRevision=Number.isInteger(revision)?revision:bump?await this.nextDirectoryRevision():await this.currentDirectoryRevision(),cache=new Map();let sent=false;for(const socket of this.state.getWebSockets()){const attachment=socket.deserializeAttachment()||{};if(socket.readyState!==1||!attachment.authed||attachment.userId!==id)continue;const version=attachment.directoryVersion>=DIRECTORY_PROTOCOL_V2?DIRECTORY_PROTOCOL_V2:1;if(!cache.has(version))cache.set(version,await this.snapshot(id,{version,revision:resolvedRevision}));const snapshot=cache.get(version);if(snapshot&&this.safeSend(socket,JSON.stringify(snapshot)))sent=true}return sent}
+  sendDirectoryUpdate(userIds,legacy,change,revision,excluded=[]){const recipients=new Set((userIds||[]).map(normalizeId).filter(Boolean)),blocked=new Set((excluded||[]).map(normalizeId).filter(Boolean));let sent=false,legacyData=JSON.stringify(legacy),deltaData=JSON.stringify({type:'directory-delta',directoryVersion:DIRECTORY_PROTOCOL_V2,revision,changes:[change]});for(const socket of this.state.getWebSockets()){const attachment=socket.deserializeAttachment()||{};if(socket.readyState!==1||!attachment.authed||!recipients.has(attachment.userId)||blocked.has(attachment.userId))continue;if(this.safeSend(socket,attachment.directoryVersion>=DIRECTORY_PROTOCOL_V2?deltaData:legacyData))sent=true}return sent}
+  async broadcastProfile(userId,excluded=[]){const user=await this.user(userId);if(!user)return false;await this.dualWriteDirectoryUser(user);const recipients=await this.relatedUserIds([userId]),revision=await this.nextDirectoryRevision(),legacyProfile=await this.publicUser(user,null,null,1),profile=await this.publicUser(this.directoryUserRecord(user),null,null,DIRECTORY_PROTOCOL_V2);return this.sendDirectoryUpdate(recipients,{type:'profile-update',profile:legacyProfile},{kind:'profile',profile},revision,excluded)}
+  async broadcastPresence(userId,excluded=[],excludedSocket=null){const recipients=await this.relatedUserIds([userId]),online=this.isOnline(userId,excludedSocket),revision=await this.nextDirectoryRevision();return this.sendDirectoryUpdate(recipients,{type:'presence-update',userId,online},{kind:'presence',userId,online},revision,excluded)}
+  async broadcastEntity(entity){if(!entity)return false;await this.dualWriteDirectoryEntity(entity);const revision=await this.nextDirectoryRevision(),legacy=structuredClone(entity),v2=structuredClone(entity);if('picture'in legacy)legacy.picture=await this.wireMedia(legacy.picture,1);if('picture'in v2)v2.picture=await this.wireMedia(v2.picture,DIRECTORY_PROTOCOL_V2);return this.sendDirectoryUpdate(entity.members||[],{type:'entity-update',entity:legacy},{kind:'entity',entity:v2},revision)}
+  async broadcastVoiceStates(entity){if(!entity)return false;const voiceStates=this.voiceStates([entity]),revision=await this.nextDirectoryRevision();return this.sendDirectoryUpdate(entity.members||[],{type:'voice-states',entityId:entity.id,voiceStates},{kind:'voice-states',entityId:entity.id,voiceStates},revision)}
   sendUsers(userIds,value,excluded=[]){const recipients=new Set((userIds||[]).map(normalizeId).filter(Boolean)),blocked=new Set((excluded||[]).map(normalizeId).filter(Boolean));let sent=false,data=JSON.stringify(value);for(const socket of this.state.getWebSockets()){const attachment=socket.deserializeAttachment()||{};if(socket.readyState===1&&attachment.authed&&recipients.has(attachment.userId)&&!blocked.has(attachment.userId)&&this.safeSend(socket,data))sent=true}return sent}
   sendUser(userId, value) { let sent = false, data = JSON.stringify(value); for (const socket of this.state.getWebSockets()) { const a = socket.deserializeAttachment() || {}; if (socket.readyState === 1 && a.authed && a.userId === userId && this.safeSend(socket, data)) sent = true; } return sent; }
   async dummyPasswordSalt(username){let secret=this.challengeSecret;if(!/^[a-f0-9]{64}$/.test(String(secret||''))){await this.state.storage.transaction(async transaction=>{const existing=await transaction.get('security:challenge-secret');secret=/^[a-f0-9]{64}$/.test(String(existing||''))?existing:randomHex(32);if(secret!==existing)await transaction.put('security:challenge-secret',secret)});this.challengeSecret=secret}const keyBytes=Uint8Array.from(secret.match(/../g).map(value=>parseInt(value,16))),key=await crypto.subtle.importKey('raw',keyBytes,{name:'HMAC',hash:'SHA-256'},false,['sign']),digest=await crypto.subtle.sign('HMAC',key,new TextEncoder().encode(String(username||'')));return base64Url(new Uint8Array(digest).slice(0,16))}
@@ -972,6 +1244,6 @@ export class PairDirectory {
   requireGroupOwner(group, userId) { this.requireGroupMember(group, userId); if (group.owner !== userId) throw new Error('only the group owner can do that'); }
   safeSend(socket, message) { try { socket.send(message);return true; } catch { return false; } }
   withinRate(socket, attachment, bytes) { const now = Date.now(); if (!attachment.rateAt || now - attachment.rateAt >= 1000) { attachment.rateAt = now; attachment.rateBytes = 0;attachment.rateMessages = 0; } attachment.rateBytes = (attachment.rateBytes || 0) + bytes;attachment.rateMessages = (attachment.rateMessages || 0) + 1; socket.serializeAttachment(attachment); if (attachment.rateBytes <= MAX_SOCKET_BYTES_PER_SECOND && attachment.rateMessages <= MAX_SOCKET_MESSAGES_PER_SECOND) return true; socket.close(1008, 'rate limit'); return false; }
-  async webSocketClose(socket) { const attachment=socket.deserializeAttachment()||{},userId=attachment.userId;if(attachment.voiceServerId){const entity=attachment.voiceScope==='group-dm'?await this.groupDm(attachment.voiceServerId):await this.server(attachment.voiceServerId);if(entity)this.broadcastVoiceStates(entity)}if(userId)await this.broadcastPresence(userId,[userId],socket); }
+  async webSocketClose(socket) { const attachment=socket.deserializeAttachment()||{},userId=attachment.userId;if(attachment.sfuPublisher)try{await this.closeSfuPublisher(socket,attachment,{id:userId})}catch{}if(attachment.voiceServerId){const entity=attachment.voiceScope==='group-dm'?await this.groupDm(attachment.voiceServerId):await this.server(attachment.voiceServerId);if(entity)this.broadcastVoiceStates(entity)}if(userId)await this.broadcastPresence(userId,[userId],socket); }
   async webSocketError(socket) { return this.webSocketClose(socket); }
 }
