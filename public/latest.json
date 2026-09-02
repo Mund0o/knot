@@ -1,11 +1,11 @@
 {
-  "version": "1.1.90",
-  "notes": "Adds Paper, Terminal, Aurora, Blueprint, and Arcade as complete visual themes with distinct layouts, typography, message surfaces, controls, and settings styling. Also fixes theme-specific member-panel and Settings layering issues.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.90/pair-p2p-1.1.90.tar.gz",
-  "linuxSha256": "3357019a1516c3db011a04902e8c843cd612834e33a4e485cc9c7fcfd537fa19",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.90/Knot-1.1.90.AppImage",
-  "linuxAppImageSha256": "354567bd2a2200dfc1fc2e744b82de2f3a23c86320dd0c52184efc7c377fa2c7",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.90/Knot.Setup.1.1.90.exe",
-  "winSha256": "9ab8686d186b910823da9f9298fd06e99995253e851ff78988a10f6824bd9e38",
-  "signature": "DxDZYbctrScGyw6zE3PHVL32qqDw7T7p/nvMWddQztLaN4wav3O6IfR9nt7ij24uDfHJiUnc7Zb0+koG8nl9CA=="
+  "version": "1.1.91",
+  "notes": "Adds ten complete themes: Bento, Brutalist, Cozy, Cyberdeck, Minimal, Retro, Comic, Library, Studio, and Noir. Each changes layout, typography, density, controls, message treatment, or navigation—not only color.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.91/pair-p2p-1.1.91.tar.gz",
+  "linuxSha256": "34160329559ea080c609372d73fe1cf4430dc414adfce12534871f761e908304",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.91/Knot-1.1.91.AppImage",
+  "linuxAppImageSha256": "3121138d997fe92b4ede0d47dcc5cbe0f6567d331b58cf5a85133257b14a406e",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.91/Knot.Setup.1.1.91.exe",
+  "winSha256": "1d6eb49043c7a6494ae0746b72657a9a4d39034c5020984fd2b88a108e15ea14",
+  "signature": "1s/ZVo689xeLduRlnalq0KzOFiiHzjZmqYgzBZJj8g7yslfQfuzElzeoBrkUbpfi0zDlZiaJ7bHaP9Lyy9HCBw=="
 }
