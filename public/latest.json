@@ -1,11 +1,11 @@
 {
-  "version": "1.1.93",
-  "notes": "Keeps native AV1 screen sharing on a 110 ms target with a hard 180 ms ceiling, and fixes window, X11, and PipeWire capture leaks. Home no longer reopens the current DM; unfocused group chats still count as unread. Light themes use real tokens, links stay https-only, and group keys come only from the owner or steward.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.93/pair-p2p-1.1.93.tar.gz",
-  "linuxSha256": "7575752ac7395b6b3a70745a2c62323db9938c61c98d0908bfe8a7e7bc4d37ce",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.93/Knot-1.1.93.AppImage",
-  "linuxAppImageSha256": "2530adc8ff35ebd871a983d589f95b704d8b7d4cb70b07fdf47cf448cf654416",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.93/Knot.Setup.1.1.93.exe",
-  "winSha256": "ea5a163751e74e58061b834223eaf4f6c00fe78bcec61864baeac36daf966921",
-  "signature": "roVuqKKZIrn0Y2QZq2bF1wzZlT8upIWh02BjKvHgA6HXLlECOiSnFpesCpefy9ejFSRw+uZCqPxNmVEgCrxiAQ=="
+  "version": "1.1.94",
+  "notes": "Stops an empty directory snapshot from wiping friends, DMs, and servers. Directory V2 falls back to the primary identity when its roster is blank, and Knot keeps the last good friend list locally until a full snapshot arrives.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.94/pair-p2p-1.1.94.tar.gz",
+  "linuxSha256": "ae921b93ac6075fbee4b32ebc06db68026b4963e17514337dc00e12bab461b1b",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.94/Knot-1.1.94.AppImage",
+  "linuxAppImageSha256": "81a4aee568215f012871898b856d56d7bf04cd1c40379525204879f1c29c66bc",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.94/Knot.Setup.1.1.94.exe",
+  "winSha256": "172e2b3a561ae4f1c0248ec84d667c71a25589a8f942921ac60372b42af6fe33",
+  "signature": "Eukv3CqMQyVXjBQxkxQhPmjsuBhbnHM0bAhi0SB3yfVf+Gq6wzyhL9O8aVU8kkimzwlNA1j5Tgt4RFQHRhyYAg=="
 }
