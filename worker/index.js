@@ -367,14 +367,26 @@ export class PairDirectory {
     const shardId=this.env.PAIR_DIRECTORY_V2.idFromName(`directory-v2-${kind}-${id.slice(0,2)}`);return this.env.PAIR_DIRECTORY_V2.get(shardId);
   }
 
+  directoryV2Request(kind,id,init) {
+    return new Request(`https://directory-v2.invalid/record/${kind}/${id}`,init||undefined);
+  }
+
   async putDirectoryV2(kind,record) {
     const id=normalizeId(record?.id),stub=this.directoryShard(kind,id);if(!stub)return false;
-    const response=await stub.fetch(`https://directory-v2.invalid/record/${kind}/${id}`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(record)});return response.ok;
+    const response=await stub.fetch(this.directoryV2Request(kind,id,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(record)}));return response.ok;
+  }
+
+  directoryRosterPopulated(record) {
+    return !!(record&&((record.friends||[]).length||(record.servers||[]).length||(record.groupDms||[]).length));
   }
 
   async readDirectoryV2(kind,id,fallback=null) {
     const normalized=normalizeId(id),stub=this.directoryShard(kind,normalized);if(!stub)return fallback;
-    try{const response=await stub.fetch(`https://directory-v2.invalid/record/${kind}/${normalized}`);if(response.ok){const value=await response.json();if(value?.record?.id===normalized)return value.record}}catch{}
+    try{const response=await stub.fetch(this.directoryV2Request(kind,normalized));if(response.ok){const value=await response.json();if(value?.record?.id===normalized){
+      const record=value.record;
+      if(kind==='user'&&fallback&&!this.directoryRosterPopulated(record)&&this.directoryRosterPopulated(fallback)){await this.putDirectoryV2(kind,fallback);return fallback}
+      return record;
+    }}}catch{}
     if(fallback)await this.putDirectoryV2(kind,fallback);return fallback;
   }
 
@@ -1169,11 +1181,15 @@ export class PairDirectory {
   }
 
   async snapshot(userId,{version=1,revision=null}={}) {
-    const primaryUser = await this.user(userId); if (!primaryUser) return null;const user=version>=DIRECTORY_PROTOCOL_V2?await this.readDirectoryV2('user',userId,this.directoryUserRecord(primaryUser)):primaryUser;
+    const primaryUser = await this.user(userId); if (!primaryUser) return null;
+    let user=version>=DIRECTORY_PROTOCOL_V2?await this.readDirectoryV2('user',userId,this.directoryUserRecord(primaryUser)):primaryUser;
+    if(version>=DIRECTORY_PROTOCOL_V2&&!this.directoryRosterPopulated(user)&&this.directoryRosterPopulated(primaryUser))user=this.directoryUserRecord(primaryUser);
     const liveAttachments=this.liveAttachments(),onlineIds=new Set(liveAttachments.filter(attachment=>attachment.authed).map(attachment=>attachment.userId).filter(Boolean));
     const imageBudget={remaining:2*1024*1024,truncated:false},serverImageBudget={remaining:512*1024,truncated:false};
     const self=await this.publicUser(user,onlineIds,imageBudget,version);
-    const friends=(await this.loadMany(user.friends||[],async id=>{const primary=await this.user(id);return version>=DIRECTORY_PROTOCOL_V2&&primary?this.readDirectoryV2('user',id,this.directoryUserRecord(primary)):primary},friend=>friend?this.publicUser(friend,onlineIds,imageBudget,version):null)).filter(Boolean);
+    const friendIds=[...new Set((user.friends||[]).map(normalizeId).filter(Boolean))];
+    const friendRecords=await this.loadMany(friendIds,async id=>{const primary=await this.user(id);return version>=DIRECTORY_PROTOCOL_V2&&primary?this.readDirectoryV2('user',id,this.directoryUserRecord(primary)):primary});
+    const friends=await Promise.all(friendRecords.map((friend,index)=>friend?this.publicUser(friend,onlineIds,imageBudget,version):this.publicUser({id:friendIds[index],name:'Knot user'},onlineIds,null,version)));
     const servers=(await this.loadMany(user.servers||[],async id=>{const primary=await this.server(id);return version>=DIRECTORY_PROTOCOL_V2&&primary?this.readDirectoryV2('server',id,this.directoryEntityRecord('server',primary)):primary},async server=>{if(!server)return null;const copy=structuredClone(server);copy.picture=await this.wireMedia(copy.picture,version);const size=typeof copy.picture==='string'?copy.picture.length:0;if(version<2&&size>serverImageBudget.remaining){copy.picture='';if(size)serverImageBudget.truncated=true}else serverImageBudget.remaining-=size;return copy})).filter(Boolean);
     const groupDms=(await this.loadMany(user.groupDms||[],async id=>{const primary=await this.groupDm(id);return version>=DIRECTORY_PROTOCOL_V2&&primary?this.readDirectoryV2('group',id,this.directoryEntityRecord('group',primary)):primary},group=>group?.members?.includes(user.id)?structuredClone(group):null)).filter(Boolean);
     const entities=[...servers,...groupDms],voiceStates=this.voiceStates(entities,liveAttachments),memberIds=[...new Set(entities.flatMap(entity=>entity.members||[]).map(normalizeId).filter(Boolean))];
