@@ -144,7 +144,7 @@ contextBridge.exposeInMainWorld('pairEnv', {
   primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
   // Linux selection is handled by desktopCapturer inside the display-media
   // request so the PipeWire portal source is consumed before it can expire.
-  useSystemPicker: process.platform === 'linux',
+  useSystemPicker: process.platform === 'linux' && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY),
   isApp: true,
   iceServers: turnServersFromEnvironment(),
   getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),
@@ -243,6 +243,7 @@ contextBridge.exposeInMainWorld('pairNativeScreen', {
   info: () => ipcRenderer.invoke('pair:nativeScreenInfo', bridgeDocumentId),
   start: options => ipcRenderer.invoke('pair:startNativeScreen', bridgeDocumentId, options),
   read: id => ipcRenderer.invoke('pair:readNativeScreen', bridgeDocumentId, id),
+  readMany: (id, options) => ipcRenderer.invoke('pair:readNativeScreenMany', bridgeDocumentId, id, options || {}),
   stop: id => ipcRenderer.send('pair:stopNativeScreen', bridgeDocumentId, id),
   onError: cb => {
     if (typeof cb !== 'function') return () => {};

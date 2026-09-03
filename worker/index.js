@@ -1039,9 +1039,11 @@ export class PairDirectory {
     this.sendUsers(server.members,envelope,[user.id]);
   }
 
+  mailboxBytes(value) { const stored = Number(value?.storedBytes); return Number.isFinite(stored) && stored > 0 ? stored : JSON.stringify(value).length; }
+
   async storeMailbox(userId, envelope) {
     const now = Date.now(), key = `mail:${userId}:${String(now).padStart(13, '0')}:${envelope.id}`;
-    const stored = { ...envelope, expiresAt: now + DM_MAILBOX_TTL_MS }, indexKey = `mail-id:${userId}:${envelope.id}`; let storedKey;
+    const stored = { ...envelope, expiresAt: now + DM_MAILBOX_TTL_MS }, indexKey = `mail-id:${userId}:${envelope.id}`; stored.storedBytes = this.mailboxBytes(stored); let storedKey;
     await this.state.storage.transaction(async transaction => {
       storedKey = await transaction.get(indexKey); if (storedKey) return;
       await transaction.put(key, stored); await transaction.put(indexKey, key); storedKey = key;
@@ -1051,9 +1053,9 @@ export class PairDirectory {
 
   async pruneMailbox(userId) {
     const entries = [...(await this.state.storage.list({ prefix: `mail:${userId}:` })).entries()];let bytes = 0;const removals=[];
-    for (const [, value] of entries) bytes += JSON.stringify(value).length;
+    for (const [, value] of entries) bytes += this.mailboxBytes(value);
     while (entries.length && (entries.length > DM_MAILBOX_MAX_MESSAGES || bytes > DM_MAILBOX_MAX_BYTES || Number(entries[0][1]?.expiresAt) <= Date.now())) {
-      const [key, value] = entries.shift();bytes -= JSON.stringify(value).length;removals.push([key,`mail-id:${userId}:${value.id}`]);
+      const [key, value] = entries.shift();bytes -= this.mailboxBytes(value);removals.push([key,`mail-id:${userId}:${value.id}`]);
     }
     for(let offset=0;offset<removals.length;offset+=32)await this.state.storage.transaction(async transaction=>{for(const [key,indexKey] of removals.slice(offset,offset+32)){await transaction.delete(key);await transaction.delete(indexKey)}});
   }
@@ -1096,6 +1098,7 @@ export class PairDirectory {
         for (const memberId of group.members) if (memberId !== user.id) this.sendUser(memberId, envelope);
         return;
       }
+      if (user.id !== group.owner && user.id !== (group.keySteward || group.owner)) throw new Error('only the key steward can deliver this group key');
       const peerId = normalizeId(value.peerId), cipher = cleanCiphertext(value.cipher), request = await this.state.storage.get(requestKey);
       if (!peerId || !cipher || !group.members.includes(peerId) || request?.requester !== peerId || Number(request?.keyEpoch) !== keyEpoch || Number(request?.expiresAt) <= Date.now()) {
         await this.state.storage.delete(requestKey); throw new Error('invalid or expired group-key delivery');
@@ -1115,6 +1118,7 @@ export class PairDirectory {
       this.sendUsers(server.members,envelope,[user.id]);
       return;
     }
+    this.requireOwner(server, user.id);
     const peerId = normalizeId(value.peerId), id = normalizeId(value.id), cipher = cleanCiphertext(value.cipher);
     if (!peerId || !id || !cipher || !server.members.includes(peerId)) throw new Error('invalid key delivery');
     if (!this.sendUser(peerId, { type: 'relay-key', mode: 'deliver', from: user.id, id, serverId: server.id, cipher })) throw new Error('member is offline');

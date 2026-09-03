@@ -7,7 +7,7 @@ const parsed = parseInfo('section=gpu_info\nvendor|nvidia\ncard_path|/dev/dri/ca
 assert.deepStrictEqual(parsed, { vendor: 'nvidia', cardPath: '/dev/dri/card1', codecs: ['h264', 'av1', 'av1_10bit'] });
 const amd = parseInfo('section=gpu_info\nvendor|amd\ncard_path|/dev/dri/card2\nsection=video_codecs\nh264\nav1\n');
 assert.deepStrictEqual(validateNativeScreenInfo('0x1002', 'card2', amd, 'fixture'), {
-  supported: true, source: 'fixture', vendor: 'amd', encoder: 'AMD VA-API', cardPath: '/dev/dri/card2', codecs: ['h264', 'av1'], latencyTargetMs: 100
+  supported: true, source: 'fixture', vendor: 'amd', encoder: 'AMD VA-API', cardPath: '/dev/dri/card2', codecs: ['h264', 'av1'], latencyTargetMs: 110
 });
 assert.strictEqual(validateNativeScreenInfo('0x1002', 'card1', amd).supported, false);
 assert.strictEqual(validateNativeScreenInfo('0x10de', 'card2', amd).supported, false);
@@ -59,6 +59,7 @@ if (live.supported) {
   assert.strictEqual((await service.infoAsync()).supported, false);
   await assert.rejects(service.startAsync({}), /discrete NVIDIA or AMD GPU/);
   assert.strictEqual(typeof service.startAsync, 'function');
+  assert.deepStrictEqual(service.readMany(1), { active: false, items: [] }, 'idle native screen drain invented live clusters');
   console.log('PASS non-blocking native screen capability API');
 })().catch(error => { console.error(error);process.exitCode = 1; });
 
@@ -85,7 +86,7 @@ if (live.supported) {
     children.push(child);
     return child;
   };
-  const supported = { supported: true, source: 'fixture', vendor: 'nvidia', encoder: 'NVENC', latencyTargetMs: 100 };
+  const supported = { supported: true, source: 'fixture', vendor: 'nvidia', encoder: 'NVENC', latencyTargetMs: 110 };
   const service = new NativeScreenService({
     _spawnRecorder: spawnFake,
     _recorderRunner: () => ({ command: '/fixture/recorder', prefix: [], source: 'fixture' }),
@@ -121,6 +122,30 @@ if (live.supported) {
   assert.strictEqual(children.length, 2, 'replacement starts only after the old child close event');
   assert.notStrictEqual(replacement.id, first.id);
   await service.stopAsync(replacement.id);
+
+  const classify = new NativeScreenService({
+    _spawnRecorder: spawnFake,
+    _recorderRunner: () => ({ command: '/fixture/recorder', prefix: [], source: 'fixture' }),
+    _stopDelays: { term: 10, kill: 20 }
+  });
+  classify.infoAsync = async () => supported;
+  const live = classify.start({bitrateKbps:100}, supported);
+  const payload=Buffer.from([1,2,3,4]),simpleBlock=Buffer.concat([Buffer.from([0x81,0x00,0x02,0x80]),payload]);
+  const body=Buffer.concat([Buffer.from([0xe7,0x81,0x05,0xa3,0x80|simpleBlock.length]),simpleBlock]);
+  const cluster=Buffer.concat([Buffer.from([0x1f,0x43,0xb6,0x75,0x80|body.length]),body]);
+  children.at(-1).stdout.write(Buffer.concat([Buffer.from('init-bytes'), cluster]));
+  await new Promise(resolve=>setImmediate(resolve));
+  const drained=classify.readMany(live.id);
+  assert.strictEqual(drained.items.length,2,'native classify drain lost the init or key cluster');
+  assert.strictEqual(drained.items[0].kind,'init');
+  assert.strictEqual(drained.items[1].kind,'cluster');
+  assert.strictEqual(drained.items[1].key,true,'native enqueue no longer classifies AV1 key clusters without copying payloads');
+  assert.strictEqual(drained.items[1].frameCount,1);
+
+  children.at(-1).emit('error', new Error('recorder stdin closed'));
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert(children.at(-1).signals.includes('SIGINT')||children.at(-1).signals.includes('SIGKILL'),'a spawn/recorder error left the detached GPU recorder running');
+  await classify.stopAsync(live.id);
   clearTimeout(keepAlive);
   console.log('PASS native screen recorder stop escalation and serialized restart');
 })().catch(error => { console.error(error);process.exitCode = 1; });

@@ -1,6 +1,6 @@
 const fs = require('fs');
 const { execFile, execFileSync, spawn } = require('child_process');
-const { webmAv1Frames } = require('./native-video');
+const { webmAv1FrameMeta } = require('./native-video');
 
 const FLATPAK_APP = 'com.dec05eba.gpu_screen_recorder';
 const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
@@ -96,7 +96,7 @@ function validateNativeScreenInfo(primaryGpuVendor = '', primaryGpuCard = '', in
   // host card names incorrectly disabled native AV1 and sent users through the
   // much heavier Chromium fallback path.
   if (source !== 'flatpak' && primaryGpuCard && info.cardPath !== `/dev/dri/${primaryGpuCard}`) return { supported: false, reason: `${encoder} resolved to ${info.cardPath || 'an unknown card'}, not the selected ${primaryGpuCard}` };
-  return { supported: true, source, vendor, encoder, cardPath: info.cardPath, codecs: info.codecs.filter(codec => codec === 'av1' || codec === 'h264'), latencyTargetMs: 100 };
+  return { supported: true, source, vendor, encoder, cardPath: info.cardPath, codecs: info.codecs.filter(codec => codec === 'av1' || codec === 'h264'), latencyTargetMs: 110 };
 }
 
 function nativeScreenInfo(primaryGpuVendor = '', primaryGpuCard = '') {
@@ -296,10 +296,9 @@ class NativeScreenService {
     this.session = session;
     const reportSessionError=()=>{if(session.error&&!session.errorReported){session.errorReported=true;this.onError(session.error)}};
     const enqueue = segment => {
-      const data = Buffer.from(segment.data);
-      const frames = segment.kind === 'cluster' ? webmAv1Frames(data, fps) : [];
-      const key = frames.some(frame => frame.type === 'key');
-      const item = { kind: segment.kind, key, frameCount: frames.length, seq: session.seq++, capturedAt: Date.now(), data };
+      const data = Buffer.isBuffer(segment.data) ? segment.data : Buffer.from(segment.data);
+      const meta = segment.kind === 'cluster' ? webmAv1FrameMeta(data, fps) : { key: false, frameCount: 0 };
+      const item = { kind: segment.kind, key: !!meta.key, frameCount: meta.frameCount || 0, seq: session.seq++, capturedAt: Date.now(), data };
       const waiter = session.waiters.shift();if (waiter) waiter(item);else { session.queue.push(item);session.queueBytes += item.data.length; }
       if (session.queueBytes > MAX_QUEUE_BYTES && session.queue.length > 1) {
         const original=session.queue,latestInit=original.findLast(value=>value.kind==='init'),latestKey=original.findLastIndex(value=>value.kind==='cluster'&&value.key);let keep=[];
@@ -319,19 +318,27 @@ class NativeScreenService {
       catch(error){if(!session.error)session.error=error?.message||String(error);reportSessionError();this.stop(session.id)}
     });
     child.stderr.on('data', chunk => { session.stderr = (session.stderr + chunk.toString()).slice(-8192); });
-    child.on('error', error => { session.error = error?.message || String(error);session.active=false;reportSessionError(); });
+    const finishSession=()=>{if(session.finished)return;session.finished=true;while (session.waiters.length) session.waiters.shift()(null);if(this.session===session)this.session=null;session.resolveStopped?.();session.resolveStopped=null};
+    child.on('error', error => {
+      session.error = error?.message || String(error);
+      reportSessionError();
+      if (!session.stopping && this.session === session) this.stop(session.id);
+      else { session.active = false;finishSession(); }
+    });
     child.on('close', code => {
       for(const timer of session.stopTimers||[])clearTimeout(timer);
       if(!session.stopping)try{for (const segment of session.segmenter.push(null, true)) enqueue(segment)}catch(error){if(!session.error)session.error=error?.message||String(error)}
       session.active = false;if (code && !session.stopping && !session.error) session.error = session.stderr.trim().split('\n').at(-1) || `GPU Screen Recorder exited with code ${code}`;
-      while (session.waiters.length) session.waiters.shift()(null);
-      if(this.session===session)this.session=null;
-      session.resolveStopped?.();
+      finishSession();
       reportSessionError();
     });
     return { id: session.id, codec, fps, width, height, source: info.source, vendor: info.vendor, encoder: info.encoder, latencyTargetMs: info.latencyTargetMs };
   }
 
+  packQueueItem(session, item) {
+    if (item && session.discontinuity) { item.discontinuity = true;session.discontinuity = false; }
+    return item ? { active: true, kind: item.kind, key: item.key, frameCount: item.frameCount, seq: item.seq, capturedAt: item.capturedAt, discontinuity: !!item.discontinuity, droppedSegments: session.droppedSegments, data: item.data } : { active: session.active, error: session.error };
+  }
   async read(id, timeoutMs = 1500) {
     const session = this.session;if (!session || session.id !== id) return { active: false, error: 'Native screen session ended' };
     let item = session.queue.shift();
@@ -341,8 +348,16 @@ class NativeScreenService {
       if(session.waiters.length>=MAX_READ_WAITERS)return{active:true,error:'Too many pending native screen reads'};
       item = await new Promise(resolve => { const timer = setTimeout(() => { const index = session.waiters.indexOf(done);if (index >= 0) session.waiters.splice(index, 1);resolve(null); }, timeoutMs);const done = value => { clearTimeout(timer);resolve(value); };session.waiters.push(done); });
     }
-    if (item && session.discontinuity) { item.discontinuity = true;session.discontinuity = false; }
-    return item ? { active: true, kind: item.kind, key: item.key, frameCount: item.frameCount, seq: item.seq, capturedAt: item.capturedAt, discontinuity: !!item.discontinuity, droppedSegments: session.droppedSegments, data: item.data } : { active: session.active, error: session.error };
+    return this.packQueueItem(session, item);
+  }
+  readMany(id, options={}) {
+    const session = this.session;if (!session || session.id !== id) return { active: false, items: [] };
+    const maxItems=Math.max(1,Math.min(8,Number(options.maxItems)||4)),maxBytes=Math.max(1,Math.min(2*1024*1024,Number(options.maxBytes)||1024*1024));
+    const items=[];let bytes=0;
+    while (session.queue.length && items.length<maxItems && bytes<maxBytes) {
+      const item=session.queue.shift();session.queueBytes-=item.data.length;bytes+=item.data.length;items.push(this.packQueueItem(session, item));
+    }
+    return { active: session.active, error: session.error, items };
   }
 
   stop(id) {
@@ -357,7 +372,9 @@ class NativeScreenService {
 
   async stopAsync(id) {
     const initiated=this.stop(id),retiring=this.retiring;
-    if(retiring)await retiring;
+    if(!retiring)return initiated;
+    let timer;await Promise.race([retiring,new Promise(resolve=>{timer=setTimeout(resolve,4000);timer.unref?.()})]);clearTimeout(timer);
+    const session=this.session;if(session?.child&&session.stopping)try{session.child.unref?.()}catch{};
     return initiated;
   }
 }

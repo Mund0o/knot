@@ -1,6 +1,6 @@
 const assert = require('assert');
 const fs = require('fs');
-const { av1Description, av1Codec, webmAv1Frames } = require('../native-video');
+const { av1Description, av1Codec, webmAv1Frames, webmAv1FrameMeta } = require('../native-video');
 
 const description = Uint8Array.from([0x81,0x0d,0x8c,0,0]);
 const init = Buffer.concat([Buffer.from([0x63,0xa2,0x85]),Buffer.from(description)]);
@@ -15,6 +15,9 @@ assert.strictEqual(frames.length,1);
 assert.strictEqual(frames[0].type,'key');
 assert.strictEqual(frames[0].timestamp,7000);
 assert.deepStrictEqual([...frames[0].data],[...payload]);
+const meta=webmAv1FrameMeta(cluster,60);
+assert.deepStrictEqual(meta,{key:true,frameCount:1},'key classification copied AV1 payloads instead of reading SimpleBlock flags');
+assert.strictEqual(frames[0].data.buffer,cluster.buffer,'decoded AV1 frames copied the live cluster instead of sharing its bytes');
 
 const liveFile=process.env.KNOT_AV1_TEST_FILE;
 if(liveFile&&fs.existsSync(liveFile)){

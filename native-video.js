@@ -42,19 +42,22 @@
     let value = 0;for (let offset=start;offset<end;offset++){value=value*256+bytes[offset];if(!Number.isSafeInteger(value))return 0}return value;
   }
 
-  function blockFrame(bytes, start, end, clusterTimeMs, durationUs, forceKey = false) {
+  function blockFrame(bytes, start, end, clusterTimeMs, durationUs, forceKey = false, copyData = true) {
     const track = vint(bytes,start);if (!track || start+track.length+3>end) return null;
     let offset=start+track.length;let relative=(bytes[offset]<<8)|bytes[offset+1];if(relative&0x8000)relative-=0x10000;offset+=2;
     const flags=bytes[offset++],lacing=(flags>>1)&3;if(lacing||offset>=end)return null;
-    return {
+    const frame = {
       type: forceKey || !!(flags&0x80) ? 'key' : 'delta',
       timestamp: Math.max(0,Math.round((clusterTimeMs+relative)*1000)),
-      duration: durationUs,
-      data: bytes.slice(offset,end)
+      duration: durationUs
     };
+    // EncodedVideoChunk copies the payload. Keep a view here so 4K60 classify
+    // and decode paths do not pay an extra main-thread memcpy per cluster.
+    if (copyData) frame.data = bytes.subarray(offset,end);
+    return frame;
   }
 
-  function webmAv1Frames(cluster, fps = 60) {
+  function parseAv1Cluster(cluster, fps = 60, copyData = true) {
     const bytes=bytesOf(cluster),clusterId=[0x1f,0x43,0xb6,0x75];
     if(bytes.length<6||!clusterId.every((value,index)=>bytes[index]===value))return[];
     const size=vint(bytes,4);if(!size)return[];let offset=4+size.length,clusterTime=0;const frames=[],duration=Math.round(1000000/Math.max(1,fps));
@@ -62,19 +65,28 @@
       const id=vint(bytes,offset,true);if(!id)break;const elementSize=vint(bytes,offset+id.length);if(!elementSize)break;
       const start=offset+id.length+elementSize.length,end=start+elementSize.value;if(end>bytes.length)break;
       if(id.value===0xe7)clusterTime=unsigned(bytes,start,end);
-      else if(id.value===0xa3){const frame=blockFrame(bytes,start,end,clusterTime,duration);if(frame)frames.push(frame);}
+      else if(id.value===0xa3){const frame=blockFrame(bytes,start,end,clusterTime,duration,false,copyData);if(frame)frames.push(frame);}
       else if(id.value===0xa0){
         // BlockGroup is uncommon for this live muxer, but accepting it keeps the
         // parser compatible with AMD/FFmpeg versions that choose Block instead
         // of SimpleBlock. No ReferenceBlock means a key frame.
         let child=start,block=null,referenced=false;
         while(child<end){const childId=vint(bytes,child,true),childSize=childId&&vint(bytes,child+childId.length);if(!childId||!childSize)break;const body=child+childId.length+childSize.length,bodyEnd=body+childSize.value;if(bodyEnd>end)break;if(childId.value===0xa1)block=[body,bodyEnd];else if(childId.value===0xfb)referenced=true;child=bodyEnd;}
-        if(block){const frame=blockFrame(bytes,block[0],block[1],clusterTime,duration,!referenced);if(frame)frames.push(frame);}
+        if(block){const frame=blockFrame(bytes,block[0],block[1],clusterTime,duration,!referenced,copyData);if(frame)frames.push(frame);}
       }
       offset=end;
     }
     return frames;
   }
 
-  return { vint, av1Description, av1Codec, webmAv1Frames };
+  function webmAv1Frames(cluster, fps = 60) {
+    return parseAv1Cluster(cluster, fps, true);
+  }
+
+  function webmAv1FrameMeta(cluster, fps = 60) {
+    const frames = parseAv1Cluster(cluster, fps, false);
+    return { key: frames.some(frame => frame.type === 'key'), frameCount: frames.length };
+  }
+
+  return { vint, av1Description, av1Codec, webmAv1Frames, webmAv1FrameMeta };
 });

@@ -186,6 +186,12 @@ async function startLinuxShareAudioInner(webContents,generation) {
   const module = await pipewireAsync('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Knot_Share_Audio']);
   if (!module) return null;
   if(generation!==linuxShareAudioGeneration){await pipewireAsync('pactl',['unload-module',module]);return null}
+  const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  if(generation!==linuxShareAudioGeneration){
+    try { capture.kill('SIGKILL'); } catch {}
+    await pipewireAsync('pactl',['unload-module',module]);
+    return null;
+  }
   // Move selected desktop streams to the private share sink, then loop that
   // monitor back once to the normal speakers. The previous combine-sink design
   // fanned every stream into two sinks; PipeWire could exhaust its playback
@@ -200,12 +206,17 @@ async function startLinuxShareAudioInner(webContents,generation) {
   // microphone. Chromium's Linux device enumeration can omit virtual monitor
   // sources even though PipeWire created them successfully, which used to make
   // a healthy share route appear as "sound unavailable".
-  const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
   // Do not redirect real desktop audio until the new monitor and loopback have
   // settled. This costs only a fraction of a second of initial share audio and
   // prevents the full-volume startup burst reported on PipeWire systems.
   const state = { original, sink, module, loop: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, loopTimer: null, routeRunning: false, routeAgain: false, routeReadyAt: Date.now() + 650, discardUntil: Date.now() + 250, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1 };
   linuxShareAudio = state;
+  if(generation!==linuxShareAudioGeneration){
+    linuxShareAudio = null;
+    try { capture.kill('SIGKILL'); } catch {}
+    await pipewireAsync('pactl',['unload-module',module]);
+    return null;
+  }
   const failCaptureRoute = message => {
     if (linuxShareAudio !== state) return;
     if (webContents && !webContents.isDestroyed()) try { webContents.send('pair:linuxShareAudioError', message); } catch {}
@@ -296,7 +307,7 @@ const MAX_IPC_CHUNK = 8 * 1024 * 1024;
 const MAX_FILE_SIZE = 200 * 1024 ** 3;
 const DIRECT_FILE_DEFAULT_PORT = 8787;
 const MAX_SYSTEM_AVATAR_SIZE = 5 * 1024 * 1024;
-const MAX_SHARE_SOURCES = 256;
+const MAX_SHARE_SOURCES = 64;
 const DEEPFILTER_ASSETS = Object.freeze({
   wasm: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'pkg', 'df_bg.wasm'),
   model: path.join(__dirname, 'build', 'deepfilternet', 'v3', 'models', 'DeepFilterNet3_onnx.tar.gz')
@@ -371,12 +382,14 @@ ipcMain.handle('pair:getDeepFilterAsset', async (event, name) => {
   } catch { return null; }
 });
 ipcMain.handle('pair:setPendingSource', (event, selection) => {
-  if (!isPairRenderer(event) || !selection || typeof selection.id !== 'string') return false;
+  if (!isPairRenderer(event)) return false;
+  if (selection == null) { pendingSource = null; pendingSources = []; return true; }
+  if (!selection || typeof selection.id !== 'string') return false;
   const source = pendingSources.find(item => item.id === selection.id);
   if (!source || isExcludedShareSource(source)) return false;
   // Keep immutable source identity as well as Electron's transient id. Windows
   // can recreate an HWND capture source between the picker and getDisplayMedia.
-  pendingSource = { id: source.id, displayId: String(source.display_id || ''), type: source.id.startsWith('screen:') ? 'screen' : 'application' };
+  pendingSource = { id: source.id, displayId: String(source.display_id || ''), type: source.id.startsWith('screen:') ? 'screen' : 'application', name: String(source.name || '') };
   return true;
 });
 ipcMain.handle('pair:startLinuxShareAudio', event => isPairRenderer(event) ? startLinuxShareAudio(event.sender) : null);
@@ -392,9 +405,16 @@ ipcMain.handle('pair:nativeScreenInfo', (event, documentId) => bridgeRequestOwne
 ipcMain.handle('pair:startNativeScreen', (event, documentId, options) => {
   const owner=bridgeRequestOwner(event,documentId);
   if (!owner || !options || typeof options !== 'object') return null;
-  return nativeScreenService?.startAsync(options,()=>currentBridgeOwner(owner)).catch(error=>({error:error?.message||String(error)})) || { error: 'Native screen capture is unavailable' };
+  const started=nativeScreenService?.startAsync(options,()=>currentBridgeOwner(owner)).then(result=>{
+    // Native capture never consumes picker NativeImages. Drop them so a live
+    // share does not keep 64 window thumbnails pinned in the main process.
+    if(result&&!result.error)pendingSources=[];
+    return result;
+  }).catch(error=>({error:error?.message||String(error)}));
+  return started || { error: 'Native screen capture is unavailable' };
 });
 ipcMain.handle('pair:readNativeScreen', (event, documentId, id) => bridgeRequestOwner(event,documentId) && Number.isInteger(id) ? nativeScreenService?.read(id) || { active: false } : { active: false });
+ipcMain.handle('pair:readNativeScreenMany', (event, documentId, id, options) => bridgeRequestOwner(event,documentId) && Number.isInteger(id) ? nativeScreenService?.readMany(id, options) || { active: false, items: [] } : { active: false, items: [] });
 ipcMain.on('pair:stopNativeScreen', (event, documentId, id) => { if (bridgeRequestOwner(event,documentId)) nativeScreenService?.stop(Number.isInteger(id) ? id : 0); });
 
 const fs = require('fs');
@@ -771,8 +791,9 @@ function createWindow() {
 
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     try {
-      const parsed = new URL(url);
-      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') void shell.openExternal(parsed.href).catch(()=>{});
+      const parsed = new URL(url), host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+      const loopback = host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '::1' || host === '0.0.0.0' || /^127\.\d+\.\d+\.\d+$/.test(host) || /^169\.254\.\d+\.\d+$/.test(host);
+      if (parsed.protocol === 'https:' && !loopback) void shell.openExternal(parsed.href).catch(()=>{});
     } catch {}
     return { action: 'deny' };
   });
@@ -832,7 +853,8 @@ app.whenReady().then(async () => {
     try {
       if(request.frame!==mainWin?.webContents?.mainFrame||request.frame?.url!==PAIR_RENDERER_URL)return callback({video:undefined});
       let src;
-      if (process.platform === 'linux') {
+      const wayland = process.platform === 'linux' && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY);
+      if (wayland) {
         // On Wayland, getSources() owns the xdg-desktop-portal session. Fetch
         // the selected source inside this request and consume it immediately;
         // retaining a source from an earlier renderer IPC call makes KDE close
@@ -845,20 +867,22 @@ app.whenReady().then(async () => {
         src = sources[0];
       } else {
         const selection = pendingSource;
-        // A Windows display source is not durable across the picker → capture
-        // boundary. Display 1 often keeps its original source object alive,
-        // while Display 2 can be recreated by DWM and then starts a dead
-        // capture track. Always resolve screens again at consumption time by
-        // their stable display_id; windows keep the cached object first.
-        src = selection?.type === 'screen' ? null : selection ? pendingSources.find(source => source.id === selection.id) : null;
-        if (!src && selection) {
+        // Cached DesktopCapturerSource objects die across the picker → capture
+        // gap. Windows recreates HWNDs for fullscreen/UWP apps, and X11 screen
+        // indexes can reshuffle. Always resolve a fresh source: monitors by
+        // display_id, windows by id then a unique title.
+        if (selection) {
           const fresh = await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 1, height: 1 } });
           const allowed = fresh.filter(source => !isExcludedShareSource(source));
-          src = selection.type === 'screen'
-            // `display_id` identifies the physical Windows monitor, unlike a
-            // transient screen:<index> source id. Never fall back by name.
-            ? (selection.displayId ? allowed.find(source => String(source.display_id || '') === selection.displayId) : null) || allowed.find(source => source.id === selection.id)
-            : allowed.find(source => source.id === selection.id);
+          if (selection.type === 'screen') {
+            src = (selection.displayId ? allowed.find(source => String(source.display_id || '') === selection.displayId) : null) || allowed.find(source => source.id === selection.id);
+          } else {
+            src = allowed.find(source => source.id === selection.id);
+            if (!src && selection.name) {
+              const named = allowed.filter(source => String(source.name || '') === selection.name && !String(source.id || '').startsWith('screen:'));
+              if (named.length === 1) src = named[0];
+            }
+          }
         }
       }
       pendingSource = null;
@@ -881,6 +905,13 @@ app.whenReady().then(async () => {
   });
 });
 
+let quitting=false;
+app.on('before-quit', event => {
+  if (quitting) return;
+  event.preventDefault();
+  quitting=true;
+  void cleanupRuntime().finally(() => app.exit(0));
+});
 app.on('window-all-closed', async () => {
   await cleanupRuntime();
   if (process.platform !== 'darwin') app.quit();

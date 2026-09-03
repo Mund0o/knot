@@ -26,6 +26,10 @@ const { SettingsStore, settingsObject } = require('../settings-store');
     assert.strictEqual(saved.latest, '99');
     assert.strictEqual(saved.key99, 'value99');
     assert.strictEqual(Object.hasOwn(saved, 'key0'), false);
+    const unchangedMtime = fs.statSync(file).mtimeMs;
+    assert.strictEqual(await store.set('latest', '99'), true, 'identical settings writes must still resolve');
+    assert.strictEqual(await store.flush(), true);
+    assert.strictEqual(fs.statSync(file).mtimeMs, unchangedMtime, 'an unchanged setting rewrote the durable file');
     if (process.platform !== 'win32') assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
     assert.strictEqual(fs.readdirSync(directory).some(name => name.endsWith('.tmp')), false);
 

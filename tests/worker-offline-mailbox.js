@@ -83,6 +83,7 @@ class Storage {
   await assert.rejects(async () => directory.relayGroupKey(await storage.get(`user:${senderId}`), { scope: 'group-dm', mode: 'deliver', groupId: group.id, keyEpoch: expandedGroup.keyEpoch + 1, id: keyRequestId, peerId: recipientId, cipher: { iv: 'E'.repeat(16), data: 'F'.repeat(32) } }), /invalid group-key relay|out of date/, 'a mismatched group key epoch was delivered');
   await directory.relayGroupKey(await storage.get(`user:${senderId}`), { scope: 'group-dm', mode: 'deliver', groupId: group.id, keyEpoch: expandedGroup.keyEpoch, id: keyRequestId, peerId: recipientId, cipher: { iv: 'E'.repeat(16), data: 'F'.repeat(32) } });
   assert(delivered.slice(keyBefore).some(value => value.type === 'relay-key' && value.id === keyRequestId && value.keyEpoch === expandedGroup.keyEpoch), 'request-bound group key was not delivered');
+  await assert.rejects(async () => directory.relayGroupKey(await storage.get(`user:${fourthId}`), { scope: 'group-dm', mode: 'deliver', groupId: group.id, keyEpoch: expandedGroup.keyEpoch, id: keyRequestId, peerId: recipientId, cipher: { iv: 'E'.repeat(16), data: 'F'.repeat(32) } }), /key steward/, 'a non-steward member could pin a group key');
   const replacementRequestId = '7'.repeat(32);
   await directory.relayGroupKey(await storage.get(`user:${recipientId}`), { scope: 'group-dm', mode: 'request', groupId: group.id, keyEpoch: expandedGroup.keyEpoch, id: replacementRequestId });
   const activeKeyRequests = await storage.list({ prefix: `group-key-request:${group.id}:` });

@@ -120,15 +120,15 @@ is disabled in this mode. On Linux systems with both integrated and discrete
 graphics, Knot excludes the integrated render node, pins Chromium and VA-API to
 the main discrete card, and uses NVENC on NVIDIA or VA-API on AMD for its native
 GPU-only AV1 screen route. The 4K60 route measures segment-arrival-to-presentation
-latency, targets 100 ms on WebCodecs, and caps the MediaSource safety path at
-150 ms without faster-than-display playback. If a Linux driver advertises AV1
+latency, targets about 110 ms on WebCodecs, and caps the MediaSource safety path at
+180 ms without faster-than-display playback. If a Linux driver advertises AV1
 decoding but rejects or silently
 stalls on the stream, Knot retries with CPU decode as the necessary compatibility
 fallback while capture and encode remain on the discrete GPU. Decoded frames feed
 a generated video track directly into Chromium's compositor instead of copying
 every 4K frame through a renderer canvas. The sender's own preview never falls back to CPU AV1 decode;
 if hardware preview decode is unavailable, Knot shows a lightweight live-share
-placeholder. A receiver that cannot decode AV1 within the 100 ms target requests
+placeholder. A receiver that cannot decode AV1 within the 180 ms ceiling requests
 H.264 rather than remaining black or accumulating stale frames.
 PipeWire capture import remains compositor-managed so Wayland screen shares
 continue to produce valid frames. Audio processing, encryption, networking,

@@ -19,7 +19,7 @@ function simulateMediaPath({rttMs=20,lossPct=0,uploadMbps=25,viewers=1,publisher
     if(latency>staleFrameMs){droppedFrames++;linkFreeAt=Math.min(linkFreeAt,capturedAt+staleFrameMs);continue}
     latencies.push(latency);
   }
-  return{rttMs,lossPct,uploadMbps,viewers,publisherCopies,staleFrameMs,frames,deliveredFrames:latencies.length,lostFrames,droppedFrames,p50Ms:percentile(latencies,.5),p95Ms:percentile(latencies,.95),maxMs:Math.max(0,...latencies),queueP95Ms:percentile(queueDepths,.95),maxQueueMs,under100Pct:latencies.filter(value=>value<=100).length/Math.max(1,latencies.length)*100,under150Pct:latencies.filter(value=>value<=150).length/Math.max(1,latencies.length)*100};
+  return{rttMs,lossPct,uploadMbps,viewers,publisherCopies,staleFrameMs,frames,deliveredFrames:latencies.length,lostFrames,droppedFrames,p50Ms:percentile(latencies,.5),p95Ms:percentile(latencies,.95),maxMs:Math.max(0,...latencies),queueP95Ms:percentile(queueDepths,.95),maxQueueMs,under110Pct:latencies.filter(value=>value<=110).length/Math.max(1,latencies.length)*100,under180Pct:latencies.filter(value=>value<=180).length/Math.max(1,latencies.length)*100};
 }
 
 function runNetworkMatrix({loss=[0,1,2,5],rtt=[20,50,100],upload=[10,25,50],viewers=[1,5,9],publisherCopies=true}={}){const results=[];let seed=1;for(const lossPct of loss)for(const rttMs of rtt)for(const uploadMbps of upload)for(const count of viewers)results.push(simulateMediaPath({lossPct,rttMs,uploadMbps,viewers:count,publisherCopies,seed:seed++}));return results}
