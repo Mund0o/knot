@@ -1,11 +1,11 @@
 {
-  "version": "1.1.92",
-  "notes": "Cleans up theme presentation with a compact Appearance list and open message lanes for Aurora, Arcade, Cozy, Cyberdeck, Library, and Studio. Card-based messages remain only where they are part of the theme concept.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.92/pair-p2p-1.1.92.tar.gz",
-  "linuxSha256": "04e92bb1057c03293c8900b0cb435ba84aabb8138750fef86ffd4e6a3b9eb27c",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.92/Knot-1.1.92.AppImage",
-  "linuxAppImageSha256": "3bc6544ba8e9168cfc3853cc3c30c0994fd7009cd366519d272d243376191200",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.92/Knot.Setup.1.1.92.exe",
-  "winSha256": "b0e217fea9776eb23e0d5b111a320de6d18b66752497894ce422cf0288a76d19",
-  "signature": "bG2MjODhcslEtkXxvqmsBlm0fD2m81894jI6Ns1SNrShbykE1ZQOafITpWs0UVdJeVOreusfIRNvCGORYhZYBg=="
+  "version": "1.1.93",
+  "notes": "Keeps native AV1 screen sharing on a 110 ms target with a hard 180 ms ceiling, and fixes window, X11, and PipeWire capture leaks. Home no longer reopens the current DM; unfocused group chats still count as unread. Light themes use real tokens, links stay https-only, and group keys come only from the owner or steward.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.93/pair-p2p-1.1.93.tar.gz",
+  "linuxSha256": "7575752ac7395b6b3a70745a2c62323db9938c61c98d0908bfe8a7e7bc4d37ce",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.93/Knot-1.1.93.AppImage",
+  "linuxAppImageSha256": "2530adc8ff35ebd871a983d589f95b704d8b7d4cb70b07fdf47cf448cf654416",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.93/Knot.Setup.1.1.93.exe",
+  "winSha256": "ea5a163751e74e58061b834223eaf4f6c00fe78bcec61864baeac36daf966921",
+  "signature": "roVuqKKZIrn0Y2QZq2bF1wzZlT8upIWh02BjKvHgA6HXLlECOiSnFpesCpefy9ejFSRw+uZCqPxNmVEgCrxiAQ=="
 }
