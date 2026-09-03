@@ -1,11 +1,11 @@
 {
-  "version": "1.1.91",
-  "notes": "Adds ten complete themes: Bento, Brutalist, Cozy, Cyberdeck, Minimal, Retro, Comic, Library, Studio, and Noir. Each changes layout, typography, density, controls, message treatment, or navigation—not only color.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.91/pair-p2p-1.1.91.tar.gz",
-  "linuxSha256": "34160329559ea080c609372d73fe1cf4430dc414adfce12534871f761e908304",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.91/Knot-1.1.91.AppImage",
-  "linuxAppImageSha256": "3121138d997fe92b4ede0d47dcc5cbe0f6567d331b58cf5a85133257b14a406e",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.91/Knot.Setup.1.1.91.exe",
-  "winSha256": "1d6eb49043c7a6494ae0746b72657a9a4d39034c5020984fd2b88a108e15ea14",
-  "signature": "1s/ZVo689xeLduRlnalq0KzOFiiHzjZmqYgzBZJj8g7yslfQfuzElzeoBrkUbpfi0zDlZiaJ7bHaP9Lyy9HCBw=="
+  "version": "1.1.92",
+  "notes": "Cleans up theme presentation with a compact Appearance list and open message lanes for Aurora, Arcade, Cozy, Cyberdeck, Library, and Studio. Card-based messages remain only where they are part of the theme concept.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.92/pair-p2p-1.1.92.tar.gz",
+  "linuxSha256": "04e92bb1057c03293c8900b0cb435ba84aabb8138750fef86ffd4e6a3b9eb27c",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.92/Knot-1.1.92.AppImage",
+  "linuxAppImageSha256": "3bc6544ba8e9168cfc3853cc3c30c0994fd7009cd366519d272d243376191200",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.92/Knot.Setup.1.1.92.exe",
+  "winSha256": "b0e217fea9776eb23e0d5b111a320de6d18b66752497894ce422cf0288a76d19",
+  "signature": "bG2MjODhcslEtkXxvqmsBlm0fD2m81894jI6Ns1SNrShbykE1ZQOafITpWs0UVdJeVOreusfIRNvCGORYhZYBg=="
 }
