@@ -41,7 +41,7 @@ app.whenReady().then(async () => {
     bridges: [
       'pairSave', 'pairDirectFile', 'pairSettings', 'pairDeepFilter',
       'pairUpdates', 'pairEnv', 'pairCapture', 'pairEmojiCatalog',
-      'pairNativeScreen'
+      'pairNativeScreen', 'pairLan'
     ].every(name => typeof window[name] === 'object')
   })`);
   assert.deepStrictEqual(preloadErrors, [], preloadErrors.join('\n'));

@@ -3,9 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self'; img-src 'self' https: data: blob: emoji:; media-src 'self' https: blob:; connect-src 'self' blob: https: wss: ws://localhost:* ws://127.0.0.1:*; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self'; font-src 'self'; img-src 'self' https: data: blob: emoji:; media-src 'self' https: blob:; connect-src 'self' blob: https: wss: ws://localhost:* ws://127.0.0.1:*; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <title>Knot — private P2P chat</title>
+    <link rel="stylesheet" href="fonts.css" />
     <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="themes-next.css" />
   </head>
   <body>
     <svg class="icon-definitions" aria-hidden="true" focusable="false">
@@ -197,6 +199,7 @@
 
       <section id="serverVoiceStage" class="server-voice-stage" aria-label="Server voice channel" hidden>
         <div class="server-stage-heading"><div><span class="server-stage-live">Voice Connected</span><h2 id="serverVoiceStageChannel">Voice channel</h2></div><time id="serverVoiceStageTime">0:00</time></div>
+        <div id="serverWatchMount" class="watch-mount"></div>
         <div id="serverVoiceStageMembers" class="server-stage-members"></div>
         <div id="serverVoiceScreens" class="server-stage-screens"><video id="serverVoiceScreenPreview" muted autoplay playsinline hidden></video></div>
         <div class="server-stage-controls"><button id="serverStageMute" type="button" aria-label="Mute microphone" title="Mute microphone">♩</button><button id="serverStageShare" type="button" aria-label="Share screen" title="Share screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H7v-2h2v-2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v10h16V6H4Zm8 1 4 4h-3v4h-2v-4H8l4-4Z"/></svg></button><button id="serverStageFullscreen" type="button" aria-label="Fullscreen share" title="Fullscreen share">⛶</button><button id="serverStageLeave" class="leave" type="button" aria-label="Disconnect from voice" title="Disconnect"><svg class="call-icon call-icon-end" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-call-end"></use></svg></button></div>
@@ -205,6 +208,7 @@
       <section id="voicePanel" class="voice card">
         <div class="section-heading"><div><p class="eyebrow">02 / CALL</p><h2>Voice</h2></div><span id="callTimer" class="call-timer"></span></div>
         <div class="voice-body">
+          <div id="dmWatchMount" class="watch-mount"></div>
           <div id="callWaiting" class="call-waiting" aria-live="polite" hidden>
             <span class="call-waiting-orbit" aria-hidden="true"><i></i><i></i><i></i><b>✦</b></span>
             <strong id="callWaitingTitle">Waiting for your friend</strong>
@@ -253,10 +257,27 @@
       </section>
       <footer><span>WebRTC data channel · AES-GCM payload encryption</span><span id="fingerprint">Keys generated on connect</span></footer>
       </div>
-      <div hidden><input id="fileInput" type="file" multiple /><input id="profileInput" type="file" accept="image/*" /><input id="serverPictureInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /><div id="transfers"></div></div>
+      <div hidden><input id="fileInput" type="file" multiple /><input id="profileInput" type="file" accept="image/*" /><input id="serverPictureInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" /><input id="watchFile" type="file" accept="video/*,audio/*" /><div id="transfers"></div></div>
+      <section id="watchTogether" class="watch-together" hidden>
+        <div class="watch-stage">
+          <div id="watchFrame" class="watch-frame" hidden></div>
+          <video id="watchLocal" class="watch-local" hidden playsinline></video>
+        </div>
+        <div class="watch-bar">
+          <label class="sr-only" for="watchUrl">YouTube link</label>
+          <input id="watchUrl" type="url" maxlength="500" placeholder="Paste a YouTube link" autocomplete="off" />
+          <button id="watchOpen" type="button">Watch</button>
+          <button id="watchPickFile" type="button">This PC</button>
+          <button id="watchToggle" type="button" hidden>Pause</button>
+          <input id="watchSeek" type="range" min="0" max="1" step="0.001" value="0" hidden aria-label="Watch position" />
+          <button id="watchClose" type="button" hidden>End</button>
+        </div>
+        <p id="watchStatus" class="watch-status" hidden></p>
+      </section>
       </div>
     </main>
     <script src="native-video.js"></script>
+    <script src="watch-together.js"></script>
     <script src="file-transfer-protocol.js"></script>
     <script src="realtime-sfu.js"></script>
     <script src="app.js"></script>

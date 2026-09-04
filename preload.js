@@ -252,3 +252,48 @@ contextBridge.exposeInMainWorld('pairNativeScreen', {
     return () => ipcRenderer.removeListener('pair:nativeScreenError', listener);
   }
 });
+
+const validLanFp = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+const validLanNonce = value => typeof value === 'string' && /^[a-f0-9]{16,64}$/.test(value);
+const validLanHost = value => typeof value === 'string' && /^(?:127\.|10\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.)\d{1,3}(?:\.\d{1,3}){0,2}$/.test(value);
+const validLanPort = value => Number.isInteger(value) && value >= 1024 && value <= 65535;
+const validLanPeerId = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);
+const validLanFrame = value => {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.t !== 'string' || value.t.length > 32) return false;
+  try { return JSON.stringify(value).length <= 48 * 1024; } catch { return false; }
+};
+
+contextBridge.exposeInMainWorld('pairLan', {
+  start: () => ipcRenderer.invoke('pair:lanStart', bridgeDocumentId),
+  stop: () => ipcRenderer.invoke('pair:lanStop', bridgeDocumentId),
+  setBeacon: (fp, nonce) => validLanFp(fp) && validLanNonce(nonce)
+    ? ipcRenderer.invoke('pair:lanSetBeacon', bridgeDocumentId, fp, nonce)
+    : Promise.resolve(false),
+  connect: (host, port) => validLanHost(host) && validLanPort(port)
+    ? ipcRenderer.invoke('pair:lanConnect', bridgeDocumentId, host, port)
+    : Promise.reject(new Error('LAN peer is not on this network')),
+  send: (id, value) => validLanPeerId(id) && validLanFrame(value)
+    ? ipcRenderer.invoke('pair:lanSend', bridgeDocumentId, id, value)
+    : Promise.resolve(false),
+  close: id => validLanPeerId(id) ? (ipcRenderer.send('pair:lanClose', bridgeDocumentId, id), true) : false,
+  onBeacon: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, documentId, beacon) => { if (documentId === bridgeDocumentId && beacon && validLanFp(beacon.fp) && validLanHost(beacon.host) && validLanPort(beacon.port)) cb(beacon); };
+    ipcRenderer.on('pair:lanBeacon', listener); return () => ipcRenderer.removeListener('pair:lanBeacon', listener);
+  },
+  onPeer: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, documentId, peer) => { if (documentId === bridgeDocumentId && peer && validLanPeerId(peer.id) && validLanHost(peer.host)) cb(peer); };
+    ipcRenderer.on('pair:lanPeer', listener); return () => ipcRenderer.removeListener('pair:lanPeer', listener);
+  },
+  onFrame: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, documentId, id, value) => { if (documentId === bridgeDocumentId && validLanPeerId(id) && validLanFrame(value)) cb(id, value); };
+    ipcRenderer.on('pair:lanFrame', listener); return () => ipcRenderer.removeListener('pair:lanFrame', listener);
+  },
+  onClose: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, documentId, id) => { if (documentId === bridgeDocumentId && validLanPeerId(id)) cb(id); };
+    ipcRenderer.on('pair:lanClose', listener); return () => ipcRenderer.removeListener('pair:lanClose', listener);
+  },
+});

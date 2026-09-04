@@ -6,6 +6,7 @@ const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
 const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
+const { LanHouse, localIpv4, privateIpv4 } = require('./lan-house');
 const { SettingsStore } = require('./settings-store');
 const { FORMAT: LOCAL_SETTINGS_FORMAT, LocalSettingsCipher } = require('./settings-crypto');
 const { EncryptedHistoryStore, validScope: validHistoryScope, MAX_ENTRY_BYTES: MAX_HISTORY_ENTRY_BYTES } = require('./history-store');
@@ -489,6 +490,7 @@ ipcMain.on('pair:bridgeReady',(event,documentId)=>{
     void stopLinuxShareAudio().catch(error=>console.error('[runtime] bridge share-audio cleanup failed:',error?.message||error));
     stopNativeCapture();
     void closeDirectFileRuntime().catch(()=>{});void closeAllSaveStreams().catch(()=>{});
+    void closeLanHouse().catch(()=>{});
   }
 });
 function validSaveId(value) { return Number.isSafeInteger(value) && value > 0 ? value : 0; }
@@ -644,6 +646,63 @@ ipcMain.on('pair:directFileAck', (event, documentId, id, bytes) => {
   record.peer.credit(count);
 });
 
+let lanHouse = null, lanOwner = null;
+function lanFrameOk(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.t !== 'string' || value.t.length > 32) return false;
+  try { return JSON.stringify(value).length <= 48 * 1024; } catch { return false; }
+}
+function emitLan(channel, ...args) {
+  if (!lanOwner || !mainWin || mainWin.isDestroyed() || !currentBridgeOwner(lanOwner)) return;
+  try { mainWin.webContents.send(channel, lanOwner.document, ...args); } catch {}
+}
+function attachLanPeer(peer) {
+  peer.onFrame = value => { if (lanFrameOk(value)) emitLan('pair:lanFrame', peer.id, value); };
+  const previousClose = peer.onClose;
+  peer.onClose = () => { try { previousClose?.(); } catch {} emitLan('pair:lanClose', peer.id); };
+  emitLan('pair:lanPeer', { id: peer.id, host: peer.host, port: peer.port, localAddress: peer.localAddress || '', incoming: !!peer.incoming });
+}
+async function closeLanHouse() {
+  const house = lanHouse; lanHouse = null; lanOwner = null;
+  try { house?.close(); } catch {}
+}
+ipcMain.handle('pair:lanStart', async (event, documentId) => {
+  const owner = bridgeRequestOwner(event, documentId); if (!owner) return { ok: false };
+  if (lanOwner && !sameBridgeOwner(owner, lanOwner)) await closeLanHouse();
+  if (!lanHouse) {
+    const house = new LanHouse();
+    house.onBeacon = beacon => emitLan('pair:lanBeacon', beacon);
+    house.onPeer = attachLanPeer;
+    try { await house.start(); } catch (error) { return { ok: false, error: error?.message || 'LAN house failed to start' }; }
+    lanHouse = house;
+  }
+  lanOwner = owner;
+  return { ok: true, port: lanHouse.tcpPort, addresses: localIpv4() };
+});
+ipcMain.handle('pair:lanStop', async (event, documentId) => {
+  const owner = bridgeRequestOwner(event, documentId); if (!owner || (lanOwner && !sameBridgeOwner(owner, lanOwner))) return false;
+  await closeLanHouse(); return true;
+});
+ipcMain.handle('pair:lanSetBeacon', async (event, documentId, fp, nonce) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (!owner || !sameBridgeOwner(owner, lanOwner) || !lanHouse || typeof fp !== 'string' || !/^[a-f0-9]{32}$/.test(fp) || typeof nonce !== 'string' || !/^[a-f0-9]{16,64}$/.test(nonce)) return false;
+  return lanHouse.setBeacon(fp, nonce);
+});
+ipcMain.handle('pair:lanConnect', async (event, documentId, host, portValue) => {
+  const owner = bridgeRequestOwner(event, documentId), port = Number(portValue);
+  if (!owner || !sameBridgeOwner(owner, lanOwner) || !lanHouse || !privateIpv4(host) || !Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('LAN peer is not on this network');
+  const peer = await lanHouse.connect(host, port);
+  return { id: peer.id, host: peer.host, port: peer.port, localAddress: peer.localAddress || '', incoming: false };
+});
+ipcMain.handle('pair:lanSend', async (event, documentId, id, value) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (!owner || !sameBridgeOwner(owner, lanOwner) || !lanHouse || typeof id !== 'string' || !lanFrameOk(value)) return false;
+  return lanHouse.send(id, value);
+});
+ipcMain.on('pair:lanClose', (event, documentId, id) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (owner && sameBridgeOwner(owner, lanOwner) && typeof id === 'string') lanHouse?.closePeer(id);
+});
+
 // --- Settings persistence (sandboxed renderer can't rely on localStorage) ---
 // Writes/reads a small JSON file in the app's userData directory so room code
 // and signaling address survive restarts even in sandboxed Electron on file://.
@@ -730,7 +789,7 @@ ipcMain.handle('pair:acceptUpdate', event => isPairRenderer(event) ? installAvai
 let runtimeCleanupPromise=null,relaunching=false;
 async function cleanupRuntime(){
   if(runtimeCleanupPromise)return runtimeCleanupPromise;
-  runtimeCleanupPromise=(async()=>{await nativeScreenService?.stopAsync?.();await stopLinuxShareAudio();await closeDirectFileRuntime();await closeAllSaveStreams();await settingsStore.flush();historyStore.close();metricsStore.close();await stopEmojiWorker();emojiCatalog.close();stopNativeCapture()})().finally(()=>{runtimeCleanupPromise=null});
+  runtimeCleanupPromise=(async()=>{await nativeScreenService?.stopAsync?.();await stopLinuxShareAudio();await closeDirectFileRuntime();await closeLanHouse();await closeAllSaveStreams();await settingsStore.flush();historyStore.close();metricsStore.close();await stopEmojiWorker();emojiCatalog.close();stopNativeCapture()})().finally(()=>{runtimeCleanupPromise=null});
   return runtimeCleanupPromise;
 }
 ipcMain.on('pair:relaunch', event => { if(!isPairRenderer(event)||relaunching)return;relaunching=true;void cleanupRuntime().finally(()=>{app.relaunch();app.exit(0)}) });
@@ -778,7 +837,7 @@ function createWindow() {
       void nativeScreenService?.stopAsync?.().catch(error=>console.error('[runtime] navigation screen cleanup failed:',error?.message||error));
       void stopLinuxShareAudio().catch(error=>console.error('[runtime] navigation share-audio cleanup failed:',error?.message||error));
       stopNativeCapture();
-      void closeDirectFileRuntime().catch(()=>{});void closeAllSaveStreams().catch(()=>{});
+      void closeDirectFileRuntime().catch(()=>{});void closeLanHouse().catch(()=>{});void closeAllSaveStreams().catch(()=>{});
     }
   });
   mainWin.webContents.on('render-process-gone', (_event, details) => {

@@ -19,6 +19,7 @@
   --r: 12px;
   --r-lg: 16px;
   --app-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --heading-font: var(--app-font);
 }
 
 html[data-font="rounded"] { --app-font: "Arial Rounded MT Bold", "Trebuchet MS", ui-rounded, sans-serif; }
@@ -200,13 +201,14 @@ label { display: block; margin: 0 0 6px; color: #b0b8c5; font-size: 10px; font-w
 .meta { margin-top: 4px; color: var(--subtle); font-size: 10px; }
 .composer { position: relative; display: flex; gap: 6px; padding: 5px 5px 5px 12px; border: 1px solid var(--stroke); border-radius: 10px; background: var(--field); }
 .composer { flex-wrap: nowrap; align-items: center; }
-.gif-attachment { display: flex; flex: 0 0 100%; align-items: center; gap: 8px; min-width: 0; padding: 5px 4px 1px; color: var(--muted); font-size: 12px; }
+.composer:has(.gif-attachment:not([hidden])) { flex-wrap: wrap; }
+.gif-attachment { display: flex; flex: 1 0 100%; align-items: center; gap: 8px; min-width: 0; padding: 5px 4px 1px; color: var(--muted); font-size: 12px; }
 .gif-attachment[hidden] { display: none; }
 .gif-attachment img { width: 42px; height: 32px; object-fit: cover; border-radius: 5px; }
 .gif-attachment-name { flex: 1; }
 .gif-attachment-remove { min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 20px; }
 .gif-attachment-remove:hover { background: var(--surface-hover); color: var(--text); }
-.composer .gif-attachment ~ input { flex: 1 1 180px; min-width: 0; }
+.composer:has(.gif-attachment:not([hidden])) input { flex: 1 1 140px; min-width: 120px; }
 .composer:focus-within { border-color: #7682f8; }
 .composer input { width: auto; flex: 1 1 0; min-width: 0; height: 38px; border: 0; background: transparent; font-size: 14px; }
 .composer input:focus { background: transparent; }
@@ -672,6 +674,10 @@ body:not(.server-view) #voicePanel.call-active,body:not(.server-view) #voicePane
 #voicePanel.resizing{user-select:none}
 .friend-row{position:relative;display:flex;align-items:center}.friend-row>.friend-entry{flex:1;min-width:0;padding-right:30px!important}.dm-close{position:absolute;right:5px;display:grid;width:23px;min-width:23px;height:23px;min-height:23px;padding:0;place-items:center;border:0;background:transparent;color:var(--subtle);font-size:17px;opacity:0}.friend-row:hover .dm-close,.dm-close:focus-visible{opacity:1}.dm-close:hover{border:0;background:var(--surface-raised);color:var(--text)}
 .friends-roster{display:flex;width:min(760px,100%);margin:0 auto;flex-direction:column;gap:6px}.friends-roster-heading{padding:8px 4px 14px;border-bottom:1px solid var(--stroke-quiet)}.friends-roster-heading div{display:flex;flex-direction:column;gap:4px}.friends-roster-heading span{color:var(--subtle);font-size:11px}.friends-roster-row{display:grid;grid-template-columns:38px minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:10px;border-bottom:1px solid var(--stroke-quiet)}.friends-roster-row .friend-copy{display:flex;min-width:0;flex-direction:column;gap:3px}.friends-roster-row .friend-copy small{color:var(--subtle)}.friends-roster-row button{min-height:34px;padding:0 12px}.friends-roster-row .danger{color:#f07d83}
+.lan-chip{display:inline-flex;align-items:center;margin-left:6px;padding:1px 6px;border-radius:999px;background:color-mix(in srgb,#3ecf8e 28%,var(--surface));color:#d4ffe8;font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}#directoryPresence.lan{box-shadow:0 0 0 2px #3ecf8e}
+.watch-together{display:flex;flex-direction:column;gap:8px;min-width:0}.watch-together[hidden]{display:none!important}.watch-mount:empty{display:none}.watch-stage{position:relative;display:none;overflow:hidden;border:1px solid var(--stroke);border-radius:var(--r);background:#050607}.watch-together.is-open .watch-stage{display:block;min-height:220px;aspect-ratio:16/9;max-height:min(52vh,560px)}.watch-frame,.watch-local{display:block;width:100%;height:100%;border:0;background:#050607;object-fit:contain}.watch-frame iframe{width:100%;height:100%;border:0}.watch-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.watch-bar input{flex:1 1 180px;min-width:0;height:34px}.watch-bar button{min-height:34px;padding:0 10px}.watch-status{margin:0;color:var(--muted);font-size:11px}.watch-status[hidden]{display:none!important}
+body.watching-together .server-voice-stage{min-height:520px}body.watching-together #voicePanel.call-active{height:min(70vh,720px)}
+.channel-entry.voice.occupied{color:var(--text)}.friend-entry.on-lan .friend-copy small{color:#65d987}
 @media(max-width:620px){.friends-roster-row{grid-template-columns:34px minmax(0,1fr) auto}.friends-roster-row .danger{grid-column:3}.friends-roster-row button{padding:0 8px}}
 .account-dialog{width:min(520px,calc(100vw - 28px));padding:0;border:1px solid var(--stroke);border-radius:18px;background:var(--surface);color:var(--text);box-shadow:0 30px 90px rgba(0,0,0,.6)}.account-dialog::backdrop{background:rgba(4,5,8,.82);backdrop-filter:blur(8px)}.account-welcome{display:flex;flex-direction:column;gap:16px;padding:28px}.account-brand{display:flex;align-items:center;gap:14px}.account-brand img{width:56px;height:56px;border-radius:15px}.account-brand h2{margin-top:4px;font-size:24px}.account-welcome>p{margin:0;color:var(--muted);line-height:1.55}.account-welcome label{display:flex;flex-direction:column;gap:7px;color:var(--muted);font-size:11px;font-weight:750}.account-welcome input{width:100%}.account-mode-tabs{display:grid;padding:4px;grid-template-columns:1fr 1fr;gap:4px;border-radius:11px;background:var(--field)}.account-mode-tabs button{border:0;background:transparent}.account-mode-tabs button.active{background:var(--surface-raised);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.24)}#authSubmit{min-height:44px}#authContinueLocal{align-self:center;border:0;background:transparent;color:var(--subtle)}
 .account-remember{display:grid!important;grid-template-columns:18px minmax(0,1fr);align-items:start;padding:11px;border:1px solid var(--stroke-quiet);border-radius:11px;background:var(--field);color:var(--text)!important}.account-remember input{width:16px!important;height:16px;margin:1px 0 0;accent-color:var(--accent)}.account-remember span{display:grid;gap:3px}.account-remember strong{font-size:12px}.account-remember small{color:var(--muted);font-size:10px;font-weight:500;line-height:1.35}

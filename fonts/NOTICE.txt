@@ -1,0 +1,12 @@
+Bundled fonts (SIL Open Font License 1.1). Each OFL-*.txt is the original license.
+
+- Inter — The Inter Project Authors (https://github.com/rsms/inter)
+- Outfit — Owen Earl / Outfitio (https://github.com/Outfitio/Outfit-Fonts)
+- IBM Plex Sans — IBM Corp. (https://github.com/IBM/plex)
+- Space Grotesk — Florian Karsten (https://github.com/floriankarsten/space-grotesk)
+- Manrope — Mikhail Sharanda (https://github.com/sharanda/manrope)
+- DM Sans — Colophon Foundry / Indian Type Foundry / Google
+- Source Serif 4 — Adobe (https://github.com/adobe-fonts/source-serif)
+- Fraunces — Undercase Type (https://github.com/undercasetype/Fraunces)
+
+These files are unmodified latin woff2 subsets for Knot's appearance themes.
