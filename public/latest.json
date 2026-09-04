@@ -1,11 +1,11 @@
 {
-  "version": "1.1.94",
-  "notes": "Stops an empty directory snapshot from wiping friends, DMs, and servers. Directory V2 falls back to the primary identity when its roster is blank, and Knot keeps the last good friend list locally until a full snapshot arrives.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.94/pair-p2p-1.1.94.tar.gz",
-  "linuxSha256": "ae921b93ac6075fbee4b32ebc06db68026b4963e17514337dc00e12bab461b1b",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.94/Knot-1.1.94.AppImage",
-  "linuxAppImageSha256": "81a4aee568215f012871898b856d56d7bf04cd1c40379525204879f1c29c66bc",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.94/Knot.Setup.1.1.94.exe",
-  "winSha256": "172e2b3a561ae4f1c0248ec84d667c71a25589a8f942921ac60372b42af6fe33",
-  "signature": "Eukv3CqMQyVXjBQxkxQhPmjsuBhbnHM0bAhi0SB3yfVf+Gq6wzyhL9O8aVU8kkimzwlNA1j5Tgt4RFQHRhyYAg=="
+  "version": "1.1.95",
+  "notes": "Watch together for YouTube and local files, LAN calling when Knot cloud is down, and a new incoming ringtone.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.95/pair-p2p-1.1.95.tar.gz",
+  "linuxSha256": "b620042fd28ce8bd6f44ba8b58044c612f119b7e21203d9d995ec6b0e8648b5c",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.95/Knot-1.1.95.AppImage",
+  "linuxAppImageSha256": "516381f43c9e3a5842a0f24424838546144e96078d48cc2ef7ff321b86a844a4",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.95/Knot.Setup.1.1.95.exe",
+  "winSha256": "49b8b47649b36adf0f0b209c208c21dd61b5fd8e8cca2559edf356225dd5efe4",
+  "signature": "TOLW74HhvudTiCkn6FKOut5Guuq2CF/GYT/seQKwyJ5MV+xWqkSggisSG3PW+b4FwC2Y4SIRY3tuWyBMt5JbAw=="
 }
