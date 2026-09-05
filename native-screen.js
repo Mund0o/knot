@@ -8,10 +8,10 @@ const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 // stdout. Pausing back-pressures the capture/encoder pipeline and makes the
 // desktop and Knot compositor visibly stutter when a WAN peer cannot keep up.
 const MAX_QUEUE_BYTES = 8 * 1024 * 1024;
-// Encoder keyint is 0.15s. Queued clusters older than one GOP are already
-// late for the 110 ms live target; keep init plus the latest key instead of
-// waiting until 8 MiB of CBR has piled up.
-const GOP_STALE_MS = 150;
+// Encoder keyint is 0.15s. Trim after two GOPs so a pump that is one key
+// behind still sends a complete picture, instead of dropping the live GOP
+// and freezing until the next IDR. 8 MiB overflow still force-trims.
+const GOP_STALE_MS = 280;
 const MAX_SEGMENT_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_READ_WAITERS = 4;
 const STOP_TERM_DELAY_MS = 1500;

@@ -1,7 +1,7 @@
 const assert = require('assert');
 const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
-const { parseInfo, validateNativeScreenInfo, WebmClusterSegmenter, nativeScreenInfo, nativeScreenInfoAsync, NativeScreenService } = require('../native-screen');
+const { parseInfo, validateNativeScreenInfo, WebmClusterSegmenter, nativeScreenInfo, nativeScreenInfoAsync, NativeScreenService, GOP_STALE_MS, trimNativeCaptureQueue } = require('../native-screen');
 
 const parsed = parseInfo('section=gpu_info\nvendor|nvidia\ncard_path|/dev/dri/card1\nsection=video_codecs\nh264\nav1\nav1_10bit\n');
 assert.deepStrictEqual(parsed, { vendor: 'nvidia', cardPath: '/dev/dri/card1', codecs: ['h264', 'av1', 'av1_10bit'] });
@@ -154,6 +154,11 @@ if (live.supported) {
   await new Promise(resolve=>setImmediate(resolve));
   const staleKey = lag.session.queue.find(item => item.key);
   assert(staleKey, 'fixture cluster was not classified as a key');
+  assert.ok(GOP_STALE_MS > 150, 'capture GOP trim is tighter than one keyint and freezes the live picture');
+  staleKey.capturedAt = Date.now() - 200;
+  const queuedBefore = lag.session.queue.length;
+  trimNativeCaptureQueue(lag.session);
+  assert.strictEqual(lag.session.queue.length, queuedBefore, 'a one-GOP-old cluster was trimmed as stale');
   staleKey.capturedAt = Date.now() - 400;
   children.at(-1).stdout.write(cluster);
   await new Promise(resolve=>setImmediate(resolve));

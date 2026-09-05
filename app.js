@@ -3298,8 +3298,16 @@ function validNativeScreenMeta(value,expectedServerId=''){
 // A 4K60 AV1 key cluster is routinely larger than the old fixed 320 KiB
 // watermark. Admit the current segment plus the 96 KiB low-water slack so a
 // legitimate key is not refused, but never grant 3 copies of it — that was
-// ~1 s of SCTP queue on a 50 Mbps viewer.
+// ~1 s of SCTP queue on a 50 Mbps viewer. After a key is queued, keep a 256 KiB
+// tail so the rest of that GOP is not dropped (a freeze until the next key).
 function nativeScreenBufferBudget(segmentBytes=0){return Math.min(NATIVE_SCREEN_BUFFER_HARD,Math.max(NATIVE_SCREEN_BUFFER_HIGH,Math.max(0,Number(segmentBytes)||0)+NATIVE_SCREEN_BUFFER_LOW))}
+function nativeScreenAdmitLimit(channel,segmentBytes=0){return Math.min(NATIVE_SCREEN_BUFFER_HARD,Math.max(nativeScreenBufferBudget(segmentBytes),Math.max(0,Number(channel?._nativeSend?.burstUntil)||0)))}
+function noteNativeScreenBurst(channel,segmentBytes=0,key=false){
+  const state=channel?._nativeSend;if(!state)return;
+  const buffered=Number(channel.bufferedAmount)||0,segment=Math.max(0,Number(segmentBytes)||0);
+  if(key)state.burstUntil=Math.min(NATIVE_SCREEN_BUFFER_HARD,Math.max(buffered,segment)+NATIVE_SCREEN_BUFFER_HIGH);
+  else if(buffered<=NATIVE_SCREEN_BUFFER_HIGH)state.burstUntil=0;
+}
 // 4K60 AV1 requires level 6.1 high tier. Advertising main tier made Chromium
 // accept the WebM container but hand an incompatible profile to VA-API, which
 // produced a black frame and then fell back to CPU decoding on NVIDIA/AMD.
@@ -3342,7 +3350,7 @@ function createWebCodecsNativeScreenPlayer(video,codec,onError=()=>{},options={}
   const schedulePresentation=()=>{
     if(presentationTimer||frameWriterBusy||destroyed||decoderDisabled||!playbackActive||!presentationQueue.length)return;
     let frame=presentationQueue[0],now=performance.now();
-    if(presentationClockTimestamp===null){presentationClockTimestamp=frame.timestamp;presentationClockAt=now+Math.min(20,frameIntervalMs)}
+    if(presentationClockTimestamp===null){presentationClockTimestamp=frame.timestamp;presentationClockAt=now}
     let due=presentationClockAt+(frame.timestamp-presentationClockTimestamp)/1000;
     if(now-due>Math.max(35,frameIntervalMs*2)){
       while(presentationQueue.length>1){const nextDue=presentationClockAt+(presentationQueue[1].timestamp-presentationClockTimestamp)/1000;if(nextDue>now-frameIntervalMs)break;const stale=presentationQueue.shift();arrivalTimes.delete(stale.timestamp);try{stale.close()}catch{}presentationDroppedFrames++}
@@ -3536,7 +3544,8 @@ function drainNativeScreenReceive(channel){
   }
   if(!state.complete.size)return;
   const later=[...state.complete.entries()].filter(([seq])=>seq>state.nextSeq).sort((a,b)=>a[0]-b[0]);if(!later.length)return;const recovery=later.find(([,entry])=>entry.kind==='cluster'&&entry.key);if(!recovery)return;
-  const now=performance.now();if(!state.gapSince)state.gapSince=now;if(now-state.gapSince<NATIVE_SCREEN_GAP_WAIT){state.gapTimer=setTimeout(()=>drainNativeScreenReceive(channel),NATIVE_SCREEN_GAP_WAIT-(now-state.gapSince)+1);return}
+  const now=performance.now(),partial=state.fragments.get(state.nextSeq),gapWait=partial&&partial.count>0?Math.max(NATIVE_SCREEN_GAP_WAIT,NATIVE_SCREEN_KEY_WAIT_MS):NATIVE_SCREEN_GAP_WAIT;
+  if(!state.gapSince)state.gapSince=now;if(now-state.gapSince<gapWait){state.gapTimer=setTimeout(()=>drainNativeScreenReceive(channel),gapWait-(now-state.gapSince)+1);return}
   const [keySeq,keyEntry]=recovery,initEntry=[...state.complete.entries()].filter(([seq,entry])=>seq<keySeq&&entry.kind==='init').sort((a,b)=>b[0]-a[0])[0]?.[1]||null;
   if(state.haveInit){if(typeof state.player?.reset!=='function'||state.player.reset()===false){requestNativeReceiveFallback(state,new Error('Native AV1 packet loss could not be recovered'));return}}
   else if(!initEntry&&!state.latestInit){requestNativeReceiveFallback(state,new Error('Native AV1 initialization was lost'));return}
@@ -3554,7 +3563,7 @@ function wireNativeScreenChannel(channel,{remote=false}={}){
 }
 async function waitNativeScreenChannel(channel){if(channel.readyState==='open')return true;return new Promise(resolve=>{let done=false;const finish=value=>{if(done)return;done=true;clearTimeout(timer);channel.removeEventListener('open',opened);channel.removeEventListener('close',closed);resolve(value)};const opened=()=>finish(true),closed=()=>finish(false),timer=setTimeout(()=>finish(false),5000);channel.addEventListener('open',opened,{once:true});channel.addEventListener('close',closed,{once:true})})}
 function initializeNativeScreenSender(channel,meta,sessionId,onFallback=()=>{}){
-  settleNativeScreenReady(channel,false);channel._nativePeerProtocol=0;channel._nativeSend={sessionId,seq:0,init:null,fps:Number(meta.fps)||60,dropping:false,droppedSegments:0,droppedFrames:0,sourceFrames:0,sentFrames:0,discontinuities:0,missedKeys:0,congestedSince:0,fallbackRequested:false,onFallback};channel.bufferedAmountLowThreshold=NATIVE_SCREEN_BUFFER_LOW;
+  settleNativeScreenReady(channel,false);channel._nativePeerProtocol=0;channel._nativeSend={sessionId,seq:0,init:null,fps:Number(meta.fps)||60,dropping:false,droppedSegments:0,droppedFrames:0,sourceFrames:0,sentFrames:0,discontinuities:0,missedKeys:0,congestedSince:0,burstUntil:0,fallbackRequested:false,onFallback};channel.bufferedAmountLowThreshold=NATIVE_SCREEN_BUFFER_LOW;
   channel._nativeReadySettled=false;channel._nativeReadyPromise=new Promise(resolve=>{channel._nativeReadyResolve=resolve});
   const metaFrame=JSON.stringify({...meta,transportVersion:NATIVE_SCREEN_PROTOCOL});
   channel.send(metaFrame);
@@ -3563,7 +3572,7 @@ function initializeNativeScreenSender(channel,meta,sessionId,onFallback=()=>{}){
 }
 function settleNativeScreenReady(channel,ready){clearTimeout(channel?._nativeProtocolTimer);clearInterval(channel?._nativeMetaRetry);if(!channel||channel._nativeReadySettled)return;channel._nativeReadySettled=true;channel._nativeReadyResolve?.(!!ready);channel._nativeReadyResolve=null}
 async function waitNativeScreenReady(channel){if(!channel?._nativeReadyPromise)return channel?.readyState==='open';const ready=await channel._nativeReadyPromise;return !!ready&&channel.readyState==='open'}
-async function nativeChannelBackpressure(channel,segmentBytes=0,waitMs=0){const admitted=()=>channel.readyState==='open'&&(Number(channel.bufferedAmount)||0)+Math.max(0,Number(segmentBytes)||0)<=nativeScreenBufferBudget(segmentBytes);if(channel.readyState!=='open')return false;if(admitted())return true;if(!waitMs||typeof channel.addEventListener!=='function')return false;channel.bufferedAmountLowThreshold=NATIVE_SCREEN_BUFFER_LOW;return new Promise(resolve=>{let done=false;const finish=value=>{if(done)return;done=true;clearTimeout(timer);channel.removeEventListener('bufferedamountlow',low);channel.removeEventListener('close',closed);resolve(value)};const low=()=>finish(admitted()),closed=()=>finish(false),timer=setTimeout(()=>finish(admitted()),waitMs);channel.addEventListener('bufferedamountlow',low,{once:true});channel.addEventListener('close',closed,{once:true})})}
+async function nativeChannelBackpressure(channel,segmentBytes=0,waitMs=0){const admitted=()=>channel.readyState==='open'&&(Number(channel.bufferedAmount)||0)+Math.max(0,Number(segmentBytes)||0)<=nativeScreenAdmitLimit(channel,segmentBytes);if(channel.readyState!=='open')return false;if(admitted())return true;if(!waitMs||typeof channel.addEventListener!=='function')return false;channel.bufferedAmountLowThreshold=NATIVE_SCREEN_BUFFER_LOW;return new Promise(resolve=>{let done=false;const finish=value=>{if(done)return;done=true;clearTimeout(timer);channel.removeEventListener('bufferedamountlow',low);channel.removeEventListener('close',closed);resolve(value)};const low=()=>finish(admitted()),closed=()=>finish(false),timer=setTimeout(()=>finish(admitted()),waitMs);channel.addEventListener('bufferedamountlow',low,{once:true});channel.addEventListener('close',closed,{once:true})})}
 async function sendNativeScreenSegment(channel,item){
   const data=item.data instanceof Uint8Array?item.data:new Uint8Array(item.data);if(!data.byteLength||data.byteLength>NATIVE_SCREEN_MAX_SEGMENT||channel.readyState!=='open')return false;const total=Math.max(1,Math.ceil(data.byteLength/NATIVE_SCREEN_PART)),waitMs=Number(item.waitMs)||0;if(total>NATIVE_SCREEN_MAX_PARTS||(!item.admitted&&!await nativeChannelBackpressure(channel,data.byteLength,waitMs)))return false;try{for(let part=0;part<total;part++){const start=part*NATIVE_SCREEN_PART,end=Math.min(data.byteLength,start+NATIVE_SCREEN_PART),packet=new Uint8Array(12+end-start),view=new DataView(packet.buffer);view.setUint32(0,NATIVE_SCREEN_PACKET);view.setUint32(4,item.seq);view.setUint16(8,part);view.setUint16(10,total);packet.set(data.subarray(start,end),12);channel.send(packet.buffer)}return true}catch{return false}
 }
@@ -3576,10 +3585,9 @@ async function sendNativeScreenLiveItem(channel,item){
   if(item.discontinuity){state.dropping=true;state.discontinuities++}
   if(capturedAt&&Date.now()-capturedAt>NATIVE_SCREEN_STALE_MS){
     if(!key){markNativeScreenCongested(channel,state,false,frameCount);return true}
-    // A stale key on an already backed-up pipe is a GOP from the past. Skip it
-    // and wait for a fresh one. An idle pipe still sends so first paint is not
-    // delayed another keyint.
-    if(state.dropping||(Number(channel.bufferedAmount)||0)>NATIVE_SCREEN_BUFFER_LOW){markNativeScreenCongested(channel,state,true,frameCount);return true}
+    // Skip a stale key only when this GOP is already being dropped. Leftover
+    // bytes from the previous key are normal and used to skip every IDR.
+    if(state.dropping){markNativeScreenCongested(channel,state,true,frameCount);return true}
   }
   if(state.dropping&&!key){markNativeScreenCongested(channel,state,false,frameCount);return true}
   if(!await nativeChannelBackpressure(channel,data.byteLength,key?NATIVE_SCREEN_KEY_WAIT_MS:0)){markNativeScreenCongested(channel,state,key,frameCount);return true}
@@ -3589,7 +3597,7 @@ async function sendNativeScreenLiveItem(channel,item){
   // avoiding the artificial sequence gap and visible 80 ms pause used before.
   if(recovering&&key&&state.init){const initSeq=state.seq,initSent=await sendNativeScreenSegment(channel,{kind:'init',seq:initSeq,data:state.init,admitted:true});state.seq++;if(!initSent){markNativeScreenCongested(channel,state,true,frameCount);return channel.readyState==='open'}}
   const seq=state.seq,sent=await sendNativeScreenSegment(channel,{kind:'cluster',seq,data,admitted:true});state.seq++;if(!sent){markNativeScreenCongested(channel,state,key,frameCount);return channel.readyState==='open'}
-  state.sentFrames+=frameCount;if(key){state.dropping=false;state.missedKeys=0;state.congestedSince=0}return true
+  noteNativeScreenBurst(channel,data.byteLength,key);state.sentFrames+=frameCount;if(key){state.dropping=false;state.missedKeys=0;state.congestedSince=0}return true
 }
 function nativeScreenChannelOptions(){return{ordered:false,maxRetransmits:1,priority:'medium'}}
 function selectedNativeDimensions(){const dimensions={720:[1280,720],1080:[1920,1080],1440:[2560,1440],2160:[3840,2160]};return dimensions[Number(shareResolution)]||[0,0]}
