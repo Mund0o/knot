@@ -474,6 +474,9 @@ body{background:var(--background);background-attachment:fixed}.app-shell{display
 #voicePanel.call-together{background:linear-gradient(135deg,rgba(23,29,42,.98),rgba(13,17,25,.98) 50%,rgba(17,34,34,.96))}
 #voicePanel.call-active .voice-participants{z-index:2;transition:left .5s cubic-bezier(.16,1,.3,1),gap .4s ease,transform .4s ease}
 #voicePanel.call-waiting-peer .voice-participants{left:35%}
+#voicePanel.call-waiting-peer .watch-mount,#voicePanel.call-waiting-peer .watch-together{display:none!important}
+#voicePanel.call-waiting-peer .call-waiting{bottom:92px;width:min(320px,calc(100% - 32px))}
+#voicePanel.call-waiting-peer .call-waiting small{max-width:280px;overflow:visible;white-space:normal}
 .voice-participant{min-width:190px;padding:14px 18px;border:1px solid rgba(255,255,255,.055);border-radius:22px;background:linear-gradient(145deg,rgba(255,255,255,.065),rgba(255,255,255,.018));box-shadow:0 16px 34px rgba(0,0,0,.2),inset 0 1px 0 rgba(255,255,255,.045);backdrop-filter:blur(12px);transition:transform .3s cubic-bezier(.16,1,.3,1),border-color .25s ease,box-shadow .25s ease,opacity .25s ease,filter .25s ease}
 .voice-participant:hover{transform:translateY(-3px);border-color:rgba(139,151,255,.2);box-shadow:0 20px 42px rgba(0,0,0,.26),inset 0 1px 0 rgba(255,255,255,.07)}
 .voice-participant .avatar{position:relative;box-shadow:0 10px 26px rgba(0,0,0,.3);transition:transform .3s cubic-bezier(.16,1,.3,1),box-shadow .25s ease}

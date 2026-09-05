@@ -1125,12 +1125,32 @@ function preferVoiceAudioCodecs(transceiver){
     const ordered=(useRed?red:[]).concat(opus,rest);if(ordered.length)transceiver.setCodecPreferences(ordered);
   }catch{}
 }
+function remapAudioPayloadType(section,fromPt,toPt){
+  const from=String(fromPt),to=String(toPt);
+  if(from===to||new RegExp('a=rtpmap:'+to+'\\b').test(section))return section;
+  let next=section.replace(/^m=audio .+$/m,line=>{const parts=line.trim().split(/\s+/);if(parts.length<4)return line;return parts.slice(0,3).concat([...new Set(parts.slice(3).map(pt=>pt===from?to:pt))]).join(' ')});
+  next=next.replace(new RegExp('^(a=(?:rtpmap|fmtp|rtcp-fb):)'+from+'(?=\\s|$)','gm'),'$1'+to);
+  next=next.replace(new RegExp('(\\bapt=)'+from+'\\b','g'),'$1'+to);
+  next=next.replace(new RegExp('(a=fmtp:\\d+ )'+from+'(?=/)','g'),'$1'+to);
+  return next;
+}
+function unbundleOpusCollision(sdp){
+  let audioIndex=0;
+  return String(sdp||'').split(/(?=^m=)/m).map(part=>{
+    if(!part.startsWith('m=audio'))return part;
+    if(audioIndex++===0)return part;
+    return remapAudioPayloadType(part,111,112);
+  }).join('');
+}
 function patchOpusSection(section,kind){
   const voice=kind==='voice',bitrate=relayVoiceMode?24000:voice?targetVoiceBitrate():256000,playback=relayVoiceMode?16000:48000,stereo=relayVoiceMode||voice?0:1,dtx=relayVoiceMode||voice?1:0;
-  return section.replace(/a=fmtp:111[^\r\n]*/g,m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate='+bitrate;else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate='+bitrate);if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate='+playback;else m=m.replace(/maxplaybackrate=\d+/,'maxplaybackrate='+playback);if(!m.includes('maxptime'))m+='; maxptime=20';else m=m.replace(/maxptime=\d+/,'maxptime=20');if(!m.includes('minptime'))m+='; minptime=10';else m=m.replace(/minptime=\d+/,'minptime=10');if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx='+dtx;else m=m.replace(/usedtx=[01]/,'usedtx='+dtx);if(!m.includes('cbr'))m+='; cbr=1';if(!m.includes('stereo'))m+='; stereo='+stereo;else m=m.replace(/stereo=[01]/,'stereo='+stereo);if(!m.includes('sprop-stereo'))m+='; sprop-stereo='+stereo;else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo='+stereo);return m});
+  const pt=(section.match(/a=rtpmap:(\d+) opus\//i)||[])[1]||'111';
+  const patched=section.replace(new RegExp('a=fmtp:'+pt+'[^\\r\\n]*','g'),m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate='+bitrate;else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate='+bitrate);if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate='+playback;else m=m.replace(/maxplaybackrate=\d+/,'maxplaybackrate='+playback);if(!m.includes('maxptime'))m+='; maxptime=20';else m=m.replace(/maxptime=\d+/,'maxptime=20');if(!m.includes('minptime'))m+='; minptime=10';else m=m.replace(/minptime=\d+/,'minptime=10');if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx='+dtx;else m=m.replace(/usedtx=[01]/,'usedtx='+dtx);if(!m.includes('cbr'))m+='; cbr=1';if(!m.includes('stereo'))m+='; stereo='+stereo;else m=m.replace(/stereo=[01]/,'stereo='+stereo);if(!m.includes('sprop-stereo'))m+='; sprop-stereo='+stereo;else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo='+stereo);return m});
+  return /a=fmtp:/.test(patched)?patched:patched.replace(new RegExp('(a=rtpmap:'+pt+' opus/[^\\r\\n]*)'),'$1\r\na=fmtp:'+pt+' minptime=10;useinbandfec=1;maxaveragebitrate='+bitrate+';maxplaybackrate='+playback+';maxptime=20;usedtx='+dtx+';cbr=1;stereo='+stereo+';sprop-stereo='+stereo);
 }
-function patchOpusSdp(sdp){let audioIndex=0;return String(sdp||'').split(/(?=^m=)/m).map(part=>part.startsWith('m=audio')?patchOpusSection(part,audioIndex++===0?'voice':'music'):part).join('')}
+function patchOpusSdp(sdp){let audioIndex=0;return unbundleOpusCollision(sdp).split(/(?=^m=)/m).map(part=>part.startsWith('m=audio')?patchOpusSection(part,audioIndex++===0?'voice':'music'):part).join('')}
 function patchSdp(sdp){return patchOpusSdp(sdp)}
+function remoteCallSdp(sdp){return unbundleOpusCollision(sdp)}
 function monitorVoicePlayout(receiver,track){
   if(!receiver||!track)return ()=>{};
   let latencyTargetMs=28,stableWindows=0,finished=false,sampleInFlight=false;
@@ -1147,7 +1167,7 @@ function monitorVoicePlayout(receiver,track){
   const timer=setInterval(sample,2500);track.addEventListener?.('ended',stop,{once:true});setTimeout(sample,1200);return stop;
 }
 $('#createOffer').onclick=async()=>{try{if(pc||signaling)disconnectRoom();pairSignalBusy=false;pairReplyAccepted=false;processSignal.disabled=false;role='offer';signalIn.value='';ssSet('savedInviteCode',null);setOutgoingCode('');processSignal.textContent='Finish connection';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Invite ready. Copy it, send it to your friend, then paste their reply in step 2.'}catch(e){pairHint.textContent='Could not create invite: '+(e?.message||e)}};
-processSignal.onclick=async()=>{if(pairSignalBusy){pairHint.textContent='Still processing that code…';return}if(role==='offer'&&(pairReplyAccepted||!pc||pc.signalingState!=='have-local-offer')){const failed=pc&&['failed','disconnected','closed'].includes(pc.connectionState);pairHint.textContent=failed?'That connection attempt already ended. Click Create invite, then send the new code to your friend for a fresh try.':'That reply was already accepted. Connecting directly…';processSignal.disabled=true;return}pairSignalBusy=true;processSignal.disabled=true;try{const remote=await cleanSignal(signalIn.value);if(role==='offer'){if(remote.type!=='answer')throw new Error('Paste the reply your friend created, not another invite');await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!await derive(pc._kp,remote.pub))throw new Error('Security code was not confirmed');pairReplyAccepted=true;pairHint.textContent='Connecting directly…'}else if(!role){if(remote.type!=='offer')throw new Error('Paste an invite first, then create its reply');role='answer';setOutgoingCode('');setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!await derive(kp,remote.pub))throw new Error('Security code was not confirmed');const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Reply ready. Copy it and send it back to the person who invited you.';processSignal.textContent='Reply ready'}else pairHint.textContent='Your reply is already ready. Copy it and send it back to your friend.'}catch(e){processSignal.disabled=false;pairHint.textContent='Could not continue pairing: '+(e?.message||e)}finally{pairSignalBusy=false}};
+processSignal.onclick=async()=>{if(pairSignalBusy){pairHint.textContent='Still processing that code…';return}if(role==='offer'&&(pairReplyAccepted||!pc||pc.signalingState!=='have-local-offer')){const failed=pc&&['failed','disconnected','closed'].includes(pc.connectionState);pairHint.textContent=failed?'That connection attempt already ended. Click Create invite, then send the new code to your friend for a fresh try.':'That reply was already accepted. Connecting directly…';processSignal.disabled=true;return}pairSignalBusy=true;processSignal.disabled=true;try{const remote=await cleanSignal(signalIn.value);if(role==='offer'){if(remote.type!=='answer')throw new Error('Paste the reply your friend created, not another invite');await pc.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remote.sdp)});if(!await derive(pc._kp,remote.pub))throw new Error('Security code was not confirmed');pairReplyAccepted=true;pairHint.textContent='Connecting directly…'}else if(!role){if(remote.type!=='offer')throw new Error('Paste an invite first, then create its reply');role='answer';setOutgoingCode('');setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remote.sdp)});if(!await derive(kp,remote.pub))throw new Error('Security code was not confirmed');const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Reply ready. Copy it and send it back to the person who invited you.';processSignal.textContent='Reply ready'}else pairHint.textContent='Your reply is already ready. Copy it and send it back to your friend.'}catch(e){processSignal.disabled=false;pairHint.textContent='Could not continue pairing: '+(e?.message||e)}finally{pairSignalBusy=false}};
 copySignal.onclick=()=>copyOutgoingCode().catch(e=>{pairHint.textContent='Could not copy code: '+(e?.message||e)});
 messageForm.onsubmit=async e=>{e.preventDefault();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE){pairHint.textContent='Messages are limited to 64 KB.';return}if(!sharedKey){if(LOCAL_TEST_MODE){addMessage(text,true,gif);messageInput.value='';setPendingGif(null);return}return}send({t:'msg',v:await seal(payload)});addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics)};
 async function waitForDirectFileChannel(peerId,timeoutMs=30000){const until=Date.now()+timeoutMs;while(Date.now()<until){if(fileBus()&&pc?.connectionState==='connected'&&dmPeerId===peerId)return true;await new Promise(resolve=>setTimeout(resolve,100))}return false}
@@ -2247,10 +2267,10 @@ async function handleServerSignal(message){
   if(payload.kind==='offer'){
     const sdp=validPeerSdp(payload.sdp);if(!sdp)return;const collision=state.makingOffer||connection.signalingState!=='stable';state.ignoreOffer=!state.polite&&collision;if(state.ignoreOffer)return;
     if(collision){state.offerGeneration++;state.makingOffer=false;state.renegotiateRequested=true;if(connection.signalingState==='have-local-offer')await connection.setLocalDescription({type:'rollback'});else if(connection.signalingState!=='stable')return}
-    await connection.setRemoteDescription({type:'offer',sdp});const answer=await connection.createAnswer();if(answer.sdp)answer.sdp=patchSdp(answer.sdp);await connection.setLocalDescription(answer);directorySend({type:'signal',peerId,context:state.context,payload:{kind:'answer',sdp:connection.localDescription.sdp}});await addQueuedServerCandidates(state);if(state.renegotiateRequested)queueMicrotask(()=>renegotiateServerPeer(peerId,state).catch(()=>{}));return
+    await connection.setRemoteDescription({type:'offer',sdp:remoteCallSdp(sdp)});const answer=await connection.createAnswer();if(answer.sdp)answer.sdp=patchSdp(answer.sdp);await connection.setLocalDescription(answer);directorySend({type:'signal',peerId,context:state.context,payload:{kind:'answer',sdp:connection.localDescription.sdp}});await addQueuedServerCandidates(state);if(state.renegotiateRequested)queueMicrotask(()=>renegotiateServerPeer(peerId,state).catch(()=>{}));return
   }
   if(payload.kind==='answer'){
-    const sdp=validPeerSdp(payload.sdp);if(!sdp||connection.signalingState!=='have-local-offer')return;state.ignoreOffer=false;await connection.setRemoteDescription({type:'answer',sdp});await addQueuedServerCandidates(state);return
+    const sdp=validPeerSdp(payload.sdp);if(!sdp||connection.signalingState!=='have-local-offer')return;state.ignoreOffer=false;await connection.setRemoteDescription({type:'answer',sdp:remoteCallSdp(sdp)});await addQueuedServerCandidates(state);return
   }
   if(payload.kind==='candidate'){
     const candidate=cleanIceCandidate(payload.candidate);if(!candidate||state.ignoreOffer)return;if(connection.remoteDescription)try{await connection.addIceCandidate(candidate)}catch(error){if(!state.ignoreOffer)throw error}else if(state.candidates.length<128)state.candidates.push(candidate)
@@ -2511,7 +2531,7 @@ function installGroupDmDialog(){
   $('#groupDmLeave').onclick=()=>{const group=groupDm(activeGroupDmId);if(!group||!confirm('Leave '+groupDmDisplayName(group)+'? You will lose access to its local conversation view.'))return;if(serverVoiceStream&&joinedVoiceServerId===group.id||serverVoiceAttempt?.serverId===group.id)stopServerVoice();if(directorySend({type:'leave-group-dm',groupId:group.id})){pairHint.textContent='Leaving group DM…';showFriendsLanding()}else pairHint.textContent='Knot is offline. Reconnect before leaving the group.'}
 }
 function watchApi(){return window.KnotWatchTogether||null}
-function watchLive(){return !!(callActive||friendInCall||serverVoiceStream)}
+function watchLive(){return !!((callActive&&friendInCall)||serverVoiceStream)}
 function placeWatchTogether(){
   const panel=$('#watchTogether');if(!panel)return;
   const host=serverVoiceStream&&!$('#serverVoiceStage')?.hidden?$('#serverWatchMount'):$('#dmWatchMount');
@@ -2686,13 +2706,13 @@ async function acceptLanSignal(socket,remote){
     if(pc&&dmPeerId===peerId&&['connected','connecting'].includes(pc.connectionState))return;
     dmIceServers=[];relayVoiceMode=false;
     setupPeer();if(pc)pc._lan=true;const kp=await keyPair();if(!pc)return;pc._kp=kp;
-    await pc.setRemoteDescription({type:'offer',sdp});if(!pc)return;if(!await derive(kp,remote.pub))return;
+    await pc.setRemoteDescription({type:'offer',sdp:remoteCallSdp(sdp)});if(!pc)return;if(!await derive(kp,remote.pub))return;
     pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv')t.setDirection('sendrecv')}catch{}});
     bindReservedAudioTransceivers();const answer=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});if(!pc)return;await waitIce();
     lanSend(socket.id,{t:'answer',sdp:rewriteLanSdp(pc.localDescription.sdp,socket.localAddress||''),pub:await exportPub(kp.publicKey)});
     pairHint.textContent='Connected on this Wi-Fi.';
   }else if(remote.t==='answer'&&pc){
-    await pc.setRemoteDescription({type:'answer',sdp});if(!pc)return;if(!await derive(pc._kp,remote.pub))return;
+    await pc.setRemoteDescription({type:'answer',sdp:remoteCallSdp(sdp)});if(!pc)return;if(!await derive(pc._kp,remote.pub))return;
     bindReservedAudioTransceivers();pairHint.textContent='Connected on this Wi-Fi.';
   }
 }
@@ -2748,7 +2768,7 @@ async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
       if(remote.kind==='offer'&&role==='join'){
         if(!validPeerSdp(remote.sdp)||!validDevicePublicKey(remote.pub))throw new Error('The peer sent an invalid offer');
         setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;
-        await pc.setRemoteDescription({type:'offer',sdp:remote.sdp});if(!pc)return;if(!await derive(kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}if(!pc)return;
+        await pc.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remote.sdp)});if(!pc)return;if(!await derive(kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}if(!pc)return;
         // Ensure the audio transceiver's direction is sendrecv so the answer
         // includes a sender — the browser may have created a recvonly transceiver
         // for the offer's audio m-line when no local sender track was attached yet.
@@ -2766,7 +2786,7 @@ async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
       }else if(remote.kind==='answer'&&role==='host'){
         if(!validPeerSdp(remote.sdp)||!validDevicePublicKey(remote.pub))throw new Error('The peer sent an invalid answer');
         logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
-        await pc.setRemoteDescription({type:'answer',sdp:remote.sdp});if(!pc)return;if(!await derive(pc._kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}
+        await pc.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remote.sdp)});if(!pc)return;if(!await derive(pc._kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}
         logCallEvent('Diag: after setRD(answer)');
         bindReservedAudioTransceivers();const matched=audioTransceiver;
         const cd=matched?matched.currentDirection:'none';
@@ -2938,9 +2958,9 @@ async function answerDirectRenegotiation(sdp,reply){
   const target=pc,remoteSdp=validPeerSdp(sdp);if(!target||!remoteSdp||target.signalingState==='closed')return false;const polite=role==='join'||role==='answer',interrupted=renegPending,collision=interrupted||target.signalingState!=='stable';
   if(collision&&!polite)return false;
   if(collision){renegotiating++;settleDirectRenegotiation();if(target.signalingState==='have-local-offer')try{await target.setLocalDescription({type:'rollback'})}catch{return false}else if(target.signalingState!=='stable')return false}
-  if(target!==pc)return false;await target.setRemoteDescription({type:'offer',sdp:remoteSdp});if(target!==pc)return false;const answer=await target.createAnswer();if(target!==pc)return false;await target.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});await waitIce(target);if(target!==pc)return false;const sent=reply(target.localDescription.sdp)!==false;if(sent&&interrupted)queueMicrotask(()=>{if(target===pc&&target.signalingState==='stable')renegotiate().catch(()=>{})});return sent
+  if(target!==pc)return false;await target.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remoteSdp)});if(target!==pc)return false;const answer=await target.createAnswer();if(target!==pc)return false;await target.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});await waitIce(target);if(target!==pc)return false;const sent=reply(target.localDescription.sdp)!==false;if(sent&&interrupted)queueMicrotask(()=>{if(target===pc&&target.signalingState==='stable')renegotiate().catch(()=>{})});return sent
 }
-async function applyDirectRenegotiationAnswer(sdp){const target=pc,remoteSdp=validPeerSdp(sdp);if(!target||!remoteSdp||target.signalingState!=='have-local-offer')return false;await target.setRemoteDescription({type:'answer',sdp:remoteSdp});if(target===pc)settleDirectRenegotiation();return target===pc}
+async function applyDirectRenegotiationAnswer(sdp){const target=pc,remoteSdp=validPeerSdp(sdp);if(!target||!remoteSdp||target.signalingState!=='have-local-offer')return false;await target.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remoteSdp)});if(target===pc)settleDirectRenegotiation();return target===pc}
 // A screen share has two negotiations: video immediately, then audio once the
 // clean capture route is ready.  Do not create the latter offer while the
 // former is still awaiting its answer.  Chrome rejects createOffer in
