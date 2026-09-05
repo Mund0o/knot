@@ -1,11 +1,11 @@
 {
-  "version": "1.1.97",
-  "notes": "Keeps your profile photo and account session across updates. The local GIF paints through knot-avatar, leftover Pair identity is merged without minting, and zoom crops inside the circle.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.97/pair-p2p-1.1.97.tar.gz",
-  "linuxSha256": "b9f2297084fa429a4feaf2a225c45c8ce1c33000270313fedf42da341209b95b",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.97/Knot-1.1.97.AppImage",
-  "linuxAppImageSha256": "bb7cfe7f358d91d901b4a4deef399ac46a2640624bfef682aae180584b60d853",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.97/Knot.Setup.1.1.97.exe",
-  "winSha256": "3af77ec7a81dd7aa872c9a77d0ecb38b80e15daa4dc62a26cafb781c548614d3",
-  "signature": "LnXEKLXoh6LG5Af0AR9CkDxYpZdue5oucJadtLs4As+H3HWQ8HUbeUgZdB9OoOdbq/+0N/X3bxYNndNv8Ch0Bg=="
+  "version": "1.1.98",
+  "notes": "Fixes joining a call crashing, and hides Watch Together until your friend is in the call.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.98/pair-p2p-1.1.98.tar.gz",
+  "linuxSha256": "1a82bda6e825beeae95aa9cd54122754c396572db639d6336d1a64789a526edc",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.98/Knot-1.1.98.AppImage",
+  "linuxAppImageSha256": "a75768c3d34628f9030dc784b883db1a8207cc0d16fad8ab7ef063e9a97785f3",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.98/Knot.Setup.1.1.98.exe",
+  "winSha256": "70df38020a01137099fedc330a9f47af720c78aef4813d936ed8dde2709a50ef",
+  "signature": "0lEwhcGSJXe9a+uGJSfSpGRal4V6BrS5hMb6lHJy91eC7IJQQKuHT9GbnzLfoQO2BcYizWjlVorM48cMC/uVCg=="
 }
