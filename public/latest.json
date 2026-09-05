@@ -1,11 +1,11 @@
 {
-  "version": "1.1.96",
-  "notes": "Caps screen share to the slowest person in the call, aborts the speed probe while sharing, and stops a native AV1 viewer failure from recapturing the room.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.96/pair-p2p-1.1.96.tar.gz",
-  "linuxSha256": "0a7e1845d0fb9408a145a99afdc40d6b549ba6ab0fc16defccc25244054ed8b1",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.96/Knot-1.1.96.AppImage",
-  "linuxAppImageSha256": "9dbd5f15cab0573fce2ebccb785111697bd37bb61e5a28cb68c25455631d0516",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.96/Knot.Setup.1.1.96.exe",
-  "winSha256": "eedf5815866fe45ac9f25d93339336b7a6d48164de43ed84e7fead44b780cfd1",
-  "signature": "iEvEkbiHqceLEx1WoryeYO5heq649pjsYV5pF/qtPq+STJZi7xRk8MWqwXepBu3dwNOfLS9HJxvEteFQjIhbAA=="
+  "version": "1.1.97",
+  "notes": "Keeps your profile photo and account session across updates. The local GIF paints through knot-avatar, leftover Pair identity is merged without minting, and zoom crops inside the circle.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.97/pair-p2p-1.1.97.tar.gz",
+  "linuxSha256": "b9f2297084fa429a4feaf2a225c45c8ce1c33000270313fedf42da341209b95b",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.97/Knot-1.1.97.AppImage",
+  "linuxAppImageSha256": "bb7cfe7f358d91d901b4a4deef399ac46a2640624bfef682aae180584b60d853",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.97/Knot.Setup.1.1.97.exe",
+  "winSha256": "3af77ec7a81dd7aa872c9a77d0ecb38b80e15daa4dc62a26cafb781c548614d3",
+  "signature": "LnXEKLXoh6LG5Af0AR9CkDxYpZdue5oucJadtLs4As+H3HWQ8HUbeUgZdB9OoOdbq/+0N/X3bxYNndNv8Ch0Bg=="
 }
