@@ -143,6 +143,26 @@ if (live.supported) {
   assert.strictEqual(drained.items[1].key,true,'native enqueue no longer classifies AV1 key clusters without copying payloads');
   assert.strictEqual(drained.items[1].frameCount,1);
 
+  const lag = new NativeScreenService({
+    _spawnRecorder: spawnFake,
+    _recorderRunner: () => ({ command: '/fixture/recorder', prefix: [], source: 'fixture' }),
+    _stopDelays: { term: 10, kill: 20 }
+  });
+  lag.infoAsync = async () => supported;
+  const lagLive = lag.start({bitrateKbps:100}, supported);
+  children.at(-1).stdout.write(Buffer.concat([Buffer.from('init-bytes'), cluster]));
+  await new Promise(resolve=>setImmediate(resolve));
+  const staleKey = lag.session.queue.find(item => item.key);
+  assert(staleKey, 'fixture cluster was not classified as a key');
+  staleKey.capturedAt = Date.now() - 400;
+  children.at(-1).stdout.write(cluster);
+  await new Promise(resolve=>setImmediate(resolve));
+  const kept = lag.readMany(lagLive.id);
+  assert(kept.items.some(item => item.kind === 'init'), 'age-trim dropped the init segment');
+  assert.strictEqual(kept.items.filter(item => item.kind === 'cluster').length, 1, 'age-trim kept a stale GOP behind the latest key');
+  assert(kept.items.some(item => item.discontinuity) || lag.session.droppedSegments > 0, 'age-trim did not drop the stale GOP');
+  await lag.stopAsync(lagLive.id);
+
   children.at(-1).emit('error', new Error('recorder stdin closed'));
   await new Promise(resolve=>setTimeout(resolve,30));
   assert(children.at(-1).signals.includes('SIGINT')||children.at(-1).signals.includes('SIGKILL'),'a spawn/recorder error left the detached GPU recorder running');

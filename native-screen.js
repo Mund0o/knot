@@ -8,6 +8,10 @@ const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 // stdout. Pausing back-pressures the capture/encoder pipeline and makes the
 // desktop and Knot compositor visibly stutter when a WAN peer cannot keep up.
 const MAX_QUEUE_BYTES = 8 * 1024 * 1024;
+// Encoder keyint is 0.15s. Queued clusters older than one GOP are already
+// late for the 110 ms live target; keep init plus the latest key instead of
+// waiting until 8 MiB of CBR has piled up.
+const GOP_STALE_MS = 150;
 const MAX_SEGMENT_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_READ_WAITERS = 4;
 const STOP_TERM_DELAY_MS = 1500;
@@ -69,6 +73,38 @@ async function gpuScreenRecorderCommandAsync() {
       });
   }
   return recorderRunnerPending;
+}
+
+function trimNativeCaptureQueue(session, now = Date.now()) {
+  if (!session?.queue?.length) return;
+  const original = session.queue;
+  const latestInit = original.findLast(value => value.kind === 'init');
+  const latestKey = original.findLastIndex(value => value.kind === 'cluster' && value.key);
+  const oldestCluster = original.find(value => value.kind === 'cluster');
+  const stale = oldestCluster && now - Number(oldestCluster.capturedAt || 0) > GOP_STALE_MS;
+  const overflow = session.queueBytes > MAX_QUEUE_BYTES && original.length > 1;
+  if (!stale && !overflow) return;
+  let keep = [];
+  if (latestInit) keep.push(latestInit);
+  if (latestKey >= 0) {
+    const keyItem = original[latestKey];
+    if (now - Number(keyItem.capturedAt || 0) > GOP_STALE_MS) keep = latestInit ? [latestInit] : [];
+    else for (const value of original.slice(latestKey)) if (value !== latestInit) keep.push(value);
+  }
+  let keepBytes = keep.reduce((total, value) => total + value.data.length, 0);
+  if (overflow && keepBytes > MAX_QUEUE_BYTES) {
+    const keyItem = latestKey >= 0 ? original[latestKey] : null;
+    keep = [...new Set([latestInit, keyItem].filter(Boolean))];
+    keepBytes = keep.reduce((total, value) => total + value.data.length, 0);
+  }
+  const retained = new Set(keep);
+  let dropped = 0;
+  for (const item of original) if (!retained.has(item)) dropped++;
+  if (!dropped) return;
+  session.droppedSegments += dropped;
+  session.queue = keep;
+  session.queueBytes = keepBytes;
+  session.discontinuity = true;
 }
 
 function parseInfo(output) {
@@ -302,22 +338,7 @@ class NativeScreenService {
       const meta = segment.kind === 'cluster' ? webmAv1FrameMeta(data, fps) : { key: false, frameCount: 0 };
       const item = { kind: segment.kind, key: !!meta.key, frameCount: meta.frameCount || 0, seq: session.seq++, capturedAt: Date.now(), data };
       const waiter = session.waiters.shift();if (waiter) waiter(item);else { session.queue.push(item);session.queueBytes += item.data.length; }
-      if (session.queueBytes > MAX_QUEUE_BYTES && session.queue.length > 1) {
-        const original=session.queue,latestInit=original.findLast(value=>value.kind==='init'),latestKey=original.findLastIndex(value=>value.kind==='cluster'&&value.key);
-        let keep=[];
-        if(latestInit)keep.push(latestInit);
-        if(latestKey>=0)for(const value of original.slice(latestKey))if(value!==latestInit)keep.push(value);
-        let keepBytes=keep.reduce((total,value)=>total+value.data.length,0);
-        if(keepBytes>MAX_QUEUE_BYTES){
-          const keyItem=latestKey>=0?original[latestKey]:null;
-          keep=[latestInit,keyItem].filter(Boolean);
-          keep=[...new Set(keep)];
-          keepBytes=keep.reduce((total,value)=>total+value.data.length,0);
-        }
-        const retained=new Set(keep);for(const stale of original)if(!retained.has(stale))session.droppedSegments++;
-        session.queue=keep;session.queueBytes=keepBytes;
-        session.discontinuity = true;
-      }
+      trimNativeCaptureQueue(session);
     };
     child.stdout.on('data', chunk => {
       if(!session.active||session.stopping)return;
@@ -348,6 +369,7 @@ class NativeScreenService {
   }
   async read(id, timeoutMs = 1500) {
     const session = this.session;if (!session || session.id !== id) return { active: false, error: 'Native screen session ended' };
+    trimNativeCaptureQueue(session);
     let item = session.queue.shift();
     if (item) {
       session.queueBytes -= item.data.length;
@@ -359,6 +381,7 @@ class NativeScreenService {
   }
   readMany(id, options={}) {
     const session = this.session;if (!session || session.id !== id) return { active: false, items: [] };
+    trimNativeCaptureQueue(session);
     const maxItems=Math.max(1,Math.min(8,Number(options.maxItems)||4)),maxBytes=Math.max(1,Math.min(2*1024*1024,Number(options.maxBytes)||1024*1024));
     const items=[];let bytes=0;
     while (session.queue.length && items.length<maxItems && bytes<maxBytes) {
@@ -386,4 +409,4 @@ class NativeScreenService {
   }
 }
 
-module.exports = { gpuScreenRecorderCommand, gpuScreenRecorderCommandAsync, parseInfo, validateNativeScreenInfo, nativeScreenInfo, nativeScreenInfoAsync, ByteQueue, WebmClusterSegmenter, NativeScreenService };
+module.exports = { gpuScreenRecorderCommand, gpuScreenRecorderCommandAsync, parseInfo, validateNativeScreenInfo, nativeScreenInfo, nativeScreenInfoAsync, ByteQueue, WebmClusterSegmenter, NativeScreenService, GOP_STALE_MS, trimNativeCaptureQueue };

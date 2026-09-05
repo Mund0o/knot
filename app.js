@@ -188,7 +188,8 @@ remoteAudio.addEventListener('play',()=>{if(!callActive)queueMicrotask(()=>setRe
 // safe value only if this particular browser reports a full RTCDataChannel
 // queue. That retains LAN/broadband speed without treating queue pressure as a
 // transfer failure on smaller Chromium queues.
-const MAX_SEND_WINDOW=48*1024*1024,MIN_SEND_WINDOW=8*1024*1024;let sendWindow=MAX_SEND_WINDOW;
+const MAX_SEND_WINDOW=48*1024*1024,MIN_SEND_WINDOW=8*1024*1024,SHARE_FILE_SEND_WINDOW=256*1024;let sendWindow=MAX_SEND_WINDOW;
+function effectiveFileSendWindow(){return (nativeScreenSession||serverNativeScreenSession)?Math.min(sendWindow,SHARE_FILE_SEND_WINDOW):sendWindow}
 const MIN_FILE_CHUNK_BYTES=16*1024,FILE_FRAME_RESERVE_BYTES=4096;
 function negotiatedFileChunkSize(maxMessageSize){const negotiated=Number(maxMessageSize)||16*1024*1024;return Math.min(4*1024*1024,Math.max(MIN_FILE_CHUNK_BYTES,negotiated-FILE_FRAME_RESERVE_BYTES))}
 const CRYPTO_AHEAD_BYTES=32*1024*1024,MAX_CRYPTO_AHEAD=32;
@@ -204,11 +205,13 @@ function announceFileCapabilities(epoch=fileSessionEpoch,attempt=0){if(epoch!==f
 async function safeSend(data,session=currentFileSession()){if(typeof data!=='string'||data.length>MAX_FILE_CONTROL_BYTES)throw new Error('invalid file control message');assertFileSession(session);return webRtcSafeSend(session.bus,data,session)}
 // Apply backpressure to the direct WebRTC file channel so its send buffer
 // remains bounded even during very large transfers.
-const FILE_DRAIN_TIMEOUT=45000,busDrains=new Map();function awaitBusDrain(bus,session,afterSendError=false){if(!bus||bus.readyState!=='open'||session&&!liveFileSession(session))return Promise.resolve(false);const low=sendWindow*.5,starting=bus.bufferedAmount,goal=afterSendError?Math.min(low,Math.max(0,starting-Math.max(CHUNK,1024*1024))):low;if(bus.bufferedAmount<=goal)return Promise.resolve(true);let waiters=busDrains.get(bus);if(!waiters){waiters=new Set();busDrains.set(bus,waiters)}return new Promise(resolve=>{let done=false;const finish=ok=>{if(done)return;done=true;clearInterval(timer);clearTimeout(timeout);try{bus.removeEventListener('bufferedamountlow',h)}catch{};waiters.delete(h);resolve(ok)};const h=()=>{if(bus.readyState!=='open'||session&&!liveFileSession(session))finish(false);else if(bus.bufferedAmount<=goal)finish(true)};const timer=setInterval(h,30);const timeout=setTimeout(()=>finish(false),FILE_DRAIN_TIMEOUT);try{bus.addEventListener('bufferedamountlow',h)}catch{};waiters.add(h)})}
+const FILE_DRAIN_TIMEOUT=45000,busDrains=new Map();function awaitBusDrain(bus,session,afterSendError=false){if(!bus||bus.readyState!=='open'||session&&!liveFileSession(session))return Promise.resolve(false);const windowBytes=effectiveFileSendWindow(),low=windowBytes*.5,starting=bus.bufferedAmount,goal=afterSendError?Math.min(low,Math.max(0,starting-Math.max(CHUNK,1024*1024))):low;if(bus.bufferedAmount<=goal)return Promise.resolve(true);let waiters=busDrains.get(bus);if(!waiters){waiters=new Set();busDrains.set(bus,waiters)}return new Promise(resolve=>{let done=false;const finish=ok=>{if(done)return;done=true;clearInterval(timer);clearTimeout(timeout);try{bus.removeEventListener('bufferedamountlow',h)}catch{};waiters.delete(h);resolve(ok)};const h=()=>{if(bus.readyState!=='open'||session&&!liveFileSession(session))finish(false);else if(bus.bufferedAmount<=goal)finish(true)};const timer=setInterval(h,30);const timeout=setTimeout(()=>finish(false),FILE_DRAIN_TIMEOUT);try{bus.addEventListener('bufferedamountlow',h)}catch{};waiters.add(h)})}
 async function webRtcSafeSend(bus,data,session){let retries=0;for(;;){if(!bus||bus.readyState!=='open'||session&&!liveFileSession(session))throw new Error('disconnected');
   // Proactively wait if the socket's send buffer is already near the window, so
   // we never overflow it (which would throw and abort the whole transfer).
-  if(bus.bufferedAmount>=sendWindow){if(!await awaitBusDrain(bus,session))throw new Error('File transfer stalled — the direct connection stopped draining');continue}
+  // Native AV1 share uses the same SCTP association; a 48 MiB file window
+  // would own the congestion window for seconds while the picture sits in queue.
+  if(bus.bufferedAmount>=effectiveFileSendWindow()){if(!await awaitBusDrain(bus,session))throw new Error('File transfer stalled — the direct connection stopped draining');continue}
   try{bus.send(data);return}catch(e){const m=String(e?.message||'').toLowerCase();if(m.includes('closed')||m.includes('not connected')||(m.includes('invalid state')&&bus.readyState!=='open'))throw new Error('disconnected');if(m.includes('send queue is full')||m.includes('buffered')||m.includes('invalid state')){sendWindow=Math.min(sendWindow,Math.max(MIN_SEND_WINDOW,bus.bufferedAmount-Math.max(CHUNK,1024*1024)));try{bus.bufferedAmountLowThreshold=Math.max(1024*1024,sendWindow*.5)}catch{}retries++;if(retries>8)throw new Error('File transfer stalled — the direct connection send queue stayed full');if(!await awaitBusDrain(bus,session,true))throw new Error('File transfer stalled — the direct connection stopped draining');continue}throw e}}}
 async function busSafeSend(data,session,tcpId=''){assertFileSession(session);if(typeof data==='string')throw new Error('file controls cannot use the TCP chunk lane');const candidate=activeDirectFileId(session,tcpId);if(candidate&&window.pairDirectFile){try{await window.pairDirectFile.send(candidate,data);assertFileSession(session);return'tcp'}catch{retireDirectFilePeer(candidate)}}await webRtcSafeSend(session.bus,data,session);return'webrtc'}
 // Both peers used to start at sequence 1. Simultaneous uploads therefore
@@ -802,11 +805,12 @@ function wire(){
           if(!remoteCallSessionId&&!friendInCall)return;
           applyRemoteCallState(false);logCallEvent('Friend left the call');return;
         }
-        if(value.t==='screen-start'){remoteScreenExpected=true;remoteNativeScreenExpected=value.native===true;remoteScreenSuppressed=false;logCallEvent('Friend started '+(value.native===true?'native AV1 ':'')+'screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';return}
+        if(value.t==='screen-start'){remoteScreenExpected=true;remoteNativeScreenExpected=value.native===true;remoteScreenSuppressed=false;logCallEvent('Friend started '+(value.native===true?'native AV1 ':'')+'screen sharing');remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';watchDmShare('remote');return}
         if(value.t==='screen-watch'&&screenActive){const watching=value.active===true;if(watching===friendWatchingScreen)return;friendWatchingScreen=watching;const status=watching?'Sharing · friend is watching':'Sharing · waiting for friend';screenStatus.textContent=status+screenAudioDebug;screenBtn.title=status;if(watching){playSound('screen-watch');logCallEvent('Friend started watching your screen')}else logCallEvent('Friend stopped watching your screen');return}
         if(value.t==='screen-end'){logCallEvent('Friend stopped screen sharing');clearRemoteScreenShare();return}
         if(value.t==='watch'){receiveWatchMessage(value);return}
         if(value.t==='net-budget'){rememberPeerNetBudget(directBudgetKey(),value,{aliasDirect:true});return}
+        if(value.t==='net-budget-ask'){announceNetBudget();return}
         if(value.t==='screen-codec-fallback'&&screenActive){await switchScreenCodec(compatibilityScreenCodec());return}
         if(value.t==='reneg-offer'){await answerDirectRenegotiation(value.sdp,sdp=>send({t:'reneg-answer',sdp}));return}
         if(value.t==='reneg-answer')await applyDirectRenegotiationAnswer(value.sdp);
@@ -946,13 +950,13 @@ function setupPeer(){
       // after its video track is replaced, leaving Windows standard shares
       // visibly live but silent. The dedicated element gives standard and AV1
       // shares the same reliable playback, output-device, and volume route.
-      const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio.volume=remoteScreen.volume;audio.muted=remoteScreenSuppressed||!screenExpanded||focusedScreen!=='remote'||audio.volume===0;e.track.enabled=true;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
-      const play=()=>{if(!remoteScreenSuppressed&&screenExpanded&&focusedScreen==='remote'&&audio.srcObject===stream){e.track.enabled=true;audio.volume=remoteScreen.volume;audio.muted=audio.volume===0;if(!audio.muted)audio.play().catch(()=>{})}};
+      const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio.volume=remoteScreen.volume;audio.muted=remoteScreenSuppressed||audio.volume===0;e.track.enabled=true;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
+      const play=()=>{if(!remoteScreenSuppressed&&audio.srcObject===stream){e.track.enabled=true;audio.volume=remoteScreen.volume;audio.muted=audio.volume===0;if(!audio.muted)audio.play().catch(()=>{})}};
       logCallEvent((remoteNativeScreenExpected||nativeRemotePlayer||remoteNativeScreenChannel)?'Native screen audio received':'Screen audio received');screenAudioDebug=' · audio received';screenStatus.textContent='Friend sharing'+screenAudioDebug;updateScreenLayout();play();
       if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
-    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){const receiver=pc.getReceivers().find(value=>value.track===e.track);remoteScreenDecodeStop?.();remoteScreenDecodeStop=receiver?monitorRemoteScreenDecode(receiver,e.track,null,()=>!remoteScreen.hidden&&!remoteScreenSuppressed&&!remoteScreen.paused):null;remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};updateScreenLayout();e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
+    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){const receiver=pc.getReceivers().find(value=>value.track===e.track);remoteScreenDecodeStop?.();remoteScreenDecodeStop=receiver?monitorRemoteScreenDecode(receiver,e.track,null,()=>!remoteScreen.hidden&&!remoteScreenSuppressed&&!remoteScreen.paused):null;remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};watchDmShare('remote');e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
 }
 function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
   let latencyTargetMs=45;const applyLatencyTarget=value=>{latencyTargetMs=Math.min(180,value);try{receiver.playoutDelayHint=latencyTargetMs/1000}catch{}try{if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=latencyTargetMs}catch{}};applyLatencyTarget(latencyTargetMs);
@@ -1034,6 +1038,13 @@ function announceNetBudget(){
     try{state.channel.send(JSON.stringify({...message,serverId:state.context.serverId}))}catch{}
   }
 }
+function askPeerNetBudget(){
+  try{send({t:'net-budget-ask'})}catch{}
+  for(const state of serverPeers.values()){
+    if(state.closing||state.channel?.readyState!=='open')continue;
+    try{state.channel.send(JSON.stringify({t:'net-budget-ask',serverId:state.context.serverId}))}catch{}
+  }
+}
 function stopNetBudgetPulse(){if(!netBudgetTimer)return;clearInterval(netBudgetTimer);netBudgetTimer=null}
 function startNetBudgetPulse(){
   if(netBudgetTimer)return;
@@ -1100,10 +1111,12 @@ async function startNetworkCapacityProbe(){
   try{const result=await probe();if(screenActive||serverScreenSharing()||receivingRemoteShare())return;if(result&&Number(result.uploadMbps)>0&&Number(result.downloadMbps)>0){networkCapacity={uploadMbps:Number(result.uploadMbps),downloadMbps:Number(result.downloadMbps),probeVersion:Number(result.probeVersion)||networkMath()?.PROBE_VERSION||2,at:Number(result.at)||Date.now()};ssSet('networkCapacity',JSON.stringify(networkCapacity));announceNetBudget()}}catch{}
 }
 async function waitForViewerBudgets(timeoutMs=400){
+  announceNetBudget();
+  askPeerNetBudget();
   const deadline=Date.now()+Math.max(0,Number(timeoutMs)||0);
   while(Date.now()<deadline){
-    if(serverVoiceStream){const peers=[...serverPeers].filter(([id,state])=>!state.closing&&voicePeerAllowed(id));if(!peers.length||peers.every(([id])=>lookupPeerBudget(id)))return}
-    else if(!chat||chat.readyState!=='open'||lookupPeerBudget(directBudgetKey()))return;
+    if(serverVoiceStream){const peers=[...serverPeers].filter(([id,state])=>!state.closing&&voicePeerAllowed(id));if(peers.length&&peers.every(([id])=>lookupPeerBudget(id)))return}
+    else if(chat?.readyState==='open'&&lookupPeerBudget(directBudgetKey()))return;
     await new Promise(resolve=>setTimeout(resolve,40));
   }
 }
@@ -2195,7 +2208,7 @@ async function startGroupSfu(entity,channel){
 // Server peer data channels now carry only media-control messages. Keeping
 // history/text off this channel prevents a voice join from silently becoming a
 // second text transport or reintroducing a peer-mesh dependency for chat.
-function wireServerChannel(peerId,channel,serverId=activeServerId){channel.onopen=()=>{if(serverVoiceStream)setServerStatus('Connected directly to '+serverPeers.size+' voice peer'+(serverPeers.size===1?'':'s'),true);requestWatchState();announceNetBudget();startNetBudgetPulse()};channel.onmessage=event=>{try{if(typeof event.data!=='string'||event.data.length>64*1024)return;const value=JSON.parse(event.data),state=serverPeers.get(peerId);if(!state||value?.serverId&&value.serverId!==serverId)return;if(value?.t==='watch'){receiveWatchMessage(value);return}if(value?.t==='net-budget'){rememberPeerNetBudget(peerId,value);return}if(value?.t==='screen-codec-fallback'){switchServerScreenCodec(peerId,state,compatibilityScreenCodec()).catch(()=>{});return}if(value?.t==='server-screen-end')clearServerScreenVideo(state)}catch{}}}
+function wireServerChannel(peerId,channel,serverId=activeServerId){channel.onopen=()=>{if(serverVoiceStream)setServerStatus('Connected directly to '+serverPeers.size+' voice peer'+(serverPeers.size===1?'':'s'),true);requestWatchState();announceNetBudget();startNetBudgetPulse()};channel.onmessage=event=>{try{if(typeof event.data!=='string'||event.data.length>64*1024)return;const value=JSON.parse(event.data),state=serverPeers.get(peerId);if(!state||value?.serverId&&value.serverId!==serverId)return;if(value?.t==='watch'){receiveWatchMessage(value);return}if(value?.t==='net-budget'){rememberPeerNetBudget(peerId,value);return}if(value?.t==='net-budget-ask'){announceNetBudget();return}if(value?.t==='screen-codec-fallback'){switchServerScreenCodec(peerId,state,compatibilityScreenCodec()).catch(()=>{});return}if(value?.t==='server-screen-end')clearServerScreenVideo(state)}catch{}}}
 function voicePeerAllowed(peerId){return !!serverVoiceStream&&!groupSfuPilot&&voiceChannelEntries(joinedVoiceChannelId).some(entry=>entry.id===peerId)}
 function sharedServerSilentAudio(){
   if(serverSilentAudioCtx?.state!=='closed'&&serverSilentScreenAudioTrack?.readyState==='live')return{context:serverSilentAudioCtx,stream:serverSilentAudioStream,track:serverSilentScreenAudioTrack};
@@ -3283,10 +3296,10 @@ function validNativeScreenMeta(value,expectedServerId=''){
   return{...value,width,height,fps,latencyTargetMs,transportVersion,encoder:String(value.encoder||'GPU').slice(0,120),audio:value.audio===true}
 }
 // A 4K60 AV1 key cluster is routinely larger than the old fixed 320 KiB
-// watermark. Admission now includes the entire segment and grants legitimate
-// keyframe bursts more room, while small delta frames still meet the tighter
-// steady-state watermark so a truly slow peer cannot build seconds of latency.
-function nativeScreenBufferBudget(segmentBytes=0){return Math.min(NATIVE_SCREEN_BUFFER_HARD,Math.max(NATIVE_SCREEN_BUFFER_HIGH,Math.max(0,Number(segmentBytes)||0)*3+NATIVE_SCREEN_BUFFER_LOW))}
+// watermark. Admit the current segment plus the 96 KiB low-water slack so a
+// legitimate key is not refused, but never grant 3 copies of it — that was
+// ~1 s of SCTP queue on a 50 Mbps viewer.
+function nativeScreenBufferBudget(segmentBytes=0){return Math.min(NATIVE_SCREEN_BUFFER_HARD,Math.max(NATIVE_SCREEN_BUFFER_HIGH,Math.max(0,Number(segmentBytes)||0)+NATIVE_SCREEN_BUFFER_LOW))}
 // 4K60 AV1 requires level 6.1 high tier. Advertising main tier made Chromium
 // accept the WebM container but hand an incompatible profile to VA-API, which
 // produced a black frame and then fell back to CPU decoding on NVIDIA/AMD.
@@ -3506,7 +3519,7 @@ function beginRemoteNativeScreen(meta,channel){
   // Preserve that already-bound audio element while initializing the AV1 video
   // player; clearing it here was the Linux → Windows silent-share race.
   meta=validNativeScreenMeta(meta);if(!meta)return false;cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true});remoteNativeScreenChannel=channel;remoteScreenExpected=true;remoteNativeScreenExpected=true;remoteScreenSuppressed=false;remoteScreen.hidden=false;remoteScreen.srcObject=null;let fallbackRequested=false;const requestFallback=()=>{if(fallbackRequested)return;fallbackRequested=true;try{if(channel.readyState==='open')channel.send(JSON.stringify({t:'native-screen-fallback'}))}catch{}};
-  try{nativeRemotePlayer=createNativeScreenPlayer(remoteScreen,meta.codec||'AV1',requestFallback,meta)}catch(error){screenStatus.textContent=error.message;requestFallback();return false}channel._nativeReceive=nativeScreenReceiveState(nativeRemotePlayer,meta,requestFallback);drainNativeScreenPreMeta(channel);try{channel.send(JSON.stringify({t:'native-screen-ready',transportVersion:NATIVE_SCREEN_PROTOCOL}))}catch{}screenStatus.textContent='Friend sharing · '+(meta.codec||'AV1')+' · '+(meta.width||'source')+'×'+(meta.height||'source')+' · '+(meta.fps||60)+'fps';updateScreenLayout();return true;
+  try{nativeRemotePlayer=createNativeScreenPlayer(remoteScreen,meta.codec||'AV1',requestFallback,meta)}catch(error){screenStatus.textContent=error.message;requestFallback();return false}channel._nativeReceive=nativeScreenReceiveState(nativeRemotePlayer,meta,requestFallback);drainNativeScreenPreMeta(channel);try{channel.send(JSON.stringify({t:'native-screen-ready',transportVersion:NATIVE_SCREEN_PROTOCOL}))}catch{}screenStatus.textContent='Friend sharing · '+(meta.codec||'AV1')+' · '+(meta.width||'source')+'×'+(meta.height||'source')+' · '+(meta.fps||60)+'fps';watchDmShare('remote');return true;
 }
 function removeNativeReceiveSequence(state,seq){const complete=state.complete.get(seq);if(complete){state.pendingBytes=Math.max(0,state.pendingBytes-complete.data.byteLength);state.complete.delete(seq)}const fragment=state.fragments.get(seq);if(fragment){state.pendingBytes=Math.max(0,state.pendingBytes-fragment.bytes);state.fragments.delete(seq)}}
 function appendNativeReceiveEntry(state,entry){
@@ -3561,7 +3574,14 @@ async function sendNativeScreenLiveItem(channel,item){
   if(item.kind==='init'){state.init=data.slice();if(!await nativeChannelBackpressure(channel,data.byteLength,100)){markNativeScreenCongested(channel,state,false);return true}const seq=state.seq,sent=await sendNativeScreenSegment(channel,{kind:'init',seq,data,admitted:true});state.seq++;if(!sent)markNativeScreenCongested(channel,state,false);return channel.readyState==='open'}
   const parsed=item.key===undefined||item.frameCount===undefined?nativeScreenSegmentInfo(data,state.fps):null,key=item.key===true||!!parsed?.key,frameCount=Math.max(0,Number(item.frameCount??parsed?.frameCount)||0),capturedAt=Number(item.capturedAt)||0;state.sourceFrames+=frameCount;
   if(item.discontinuity){state.dropping=true;state.discontinuities++}
-  if((capturedAt&&Date.now()-capturedAt>NATIVE_SCREEN_STALE_MS&&!key)||(state.dropping&&!key)){markNativeScreenCongested(channel,state,false,frameCount);return true}
+  if(capturedAt&&Date.now()-capturedAt>NATIVE_SCREEN_STALE_MS){
+    if(!key){markNativeScreenCongested(channel,state,false,frameCount);return true}
+    // A stale key on an already backed-up pipe is a GOP from the past. Skip it
+    // and wait for a fresh one. An idle pipe still sends so first paint is not
+    // delayed another keyint.
+    if(state.dropping||(Number(channel.bufferedAmount)||0)>NATIVE_SCREEN_BUFFER_LOW){markNativeScreenCongested(channel,state,true,frameCount);return true}
+  }
+  if(state.dropping&&!key){markNativeScreenCongested(channel,state,false,frameCount);return true}
   if(!await nativeChannelBackpressure(channel,data.byteLength,key?NATIVE_SCREEN_KEY_WAIT_MS:0)){markNativeScreenCongested(channel,state,key,frameCount);return true}
   const recovering=state.dropping;
   // A duplicate init is sent only at an intentional recovery boundary. The
@@ -3576,7 +3596,7 @@ function selectedNativeDimensions(){const dimensions={720:[1280,720],1080:[1920,
 function targetNativeAv1BitrateKbps(width,height,fps,viewers=1){
   const w=Number(width)>0?Number(width):3840,h=Number(height)>0?Number(height):2160,f=Number(fps)===30?30:60,selectedPixels=w*h,pixels=Math.max(1,selectedPixels),cadence=f===30?.62:1,ratio=pixels/(1920*1080),formulaMbps=Math.max(2.75,6.774*Math.pow(ratio,.62)*cadence),viewCount=Math.max(1,Number(viewers)||1),encoderCap=encoderShareCapMbps({native:true,width:w,height:h,fps:f});
   let budgetMbps=screenBitrateMbps;if(screenShareHasProbe()){const ceiling=effectiveScreenBitrateCeiling(),raise=!screenBitrateExplicit&&effectiveUploadCapMbps()>20;budgetMbps=raise?Math.min(ceiling,encoderCap):Math.min(screenBitrateMbps,ceiling,encoderCap)}
-  const uploadBudget=Math.max(.35,budgetMbps/viewCount),viewerCap=currentViewerReceiveCapMbps(),pathBudget=Number.isFinite(viewerCap)?Math.min(uploadBudget,Math.max(.35,viewerCap)):uploadBudget,raise=screenShareHasProbe()&&!screenBitrateExplicit&&effectiveUploadCapMbps()>20;
+  const uploadBudget=Math.max(.35,budgetMbps/viewCount),viewerCap=currentViewerReceiveCapMbps(),pathBudget=Number.isFinite(viewerCap)?Math.min(uploadBudget,Math.max(.35,viewerCap)):uploadBudget,knownPath=lanSharePath()||Number.isFinite(viewerCap),raise=screenShareHasProbe()&&!screenBitrateExplicit&&effectiveUploadCapMbps()>20&&knownPath;
   return Math.round(Math.min(raise?pathBudget:Math.min(pathBudget,formulaMbps))*1000);
 }
 async function attachNativeShareAudio(gen){
@@ -3755,7 +3775,7 @@ const screenAudioBadge=document.createElement('span');screenAudioBadge.className
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
 function setRemoteScreenWatching(watching){const next=watching===true;if(remoteScreenWatchAnnounced===next)return;remoteScreenWatchAnnounced=next;try{send({t:'screen-watch',active:next})}catch{}}
 function watchDmShare(kind){const available=kind==='local'?!screenPreview.hidden:!remoteScreen.hidden;if(!available)return;if(kind==='remote'){remoteScreenSuppressed=false;setRemoteScreenWatching(true);try{remoteScreen.srcObject?.getTracks?.().forEach(track=>{track.enabled=true});nativeRemoteAudio?.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}if(remoteScreen.volume>0){remoteScreen.muted=false;if(nativeRemoteAudio)nativeRemoteAudio.muted=false}}else setRemoteScreenWatching(false);focusedScreen=kind;screenExpanded=true;updateScreenLayout()}
-function syncScreenPlayback(){const localAvailable=screenPreview.srcObject||nativeLocalPlayer,localSelected=screenExpanded&&focusedScreen==='local';nativeLocalPlayer?.setActive(localSelected);if(!screenPreview.hidden&&localAvailable&&screenPreview.readyState>=2){if(localSelected)screenPreview.play().catch(()=>{});else screenPreview.pause()}const remoteAvailable=remoteScreen.srcObject||nativeRemotePlayer;if(!remoteScreen.hidden&&remoteAvailable){const selected=screenExpanded&&focusedScreen==='remote'&&!remoteScreenSuppressed;nativeRemotePlayer?.setActive(selected);try{remoteScreen.srcObject?.getTracks?.().forEach(track=>{track.enabled=true});nativeRemoteAudio?.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}if(selected){if(remoteScreen.volume>0)remoteScreen.muted=false;remoteScreen.play().catch(()=>{});if(nativeRemoteAudio){nativeRemoteAudio.volume=remoteScreen.volume;nativeRemoteAudio.muted=remoteScreen.volume===0;if(!nativeRemoteAudio.muted)nativeRemoteAudio.play().catch(()=>{})}}else{remoteScreen.pause();remoteScreen.muted=true;if(nativeRemoteAudio){nativeRemoteAudio.pause();nativeRemoteAudio.muted=true}}}}
+function syncScreenPlayback(){const localAvailable=screenPreview.srcObject||nativeLocalPlayer,localSelected=screenExpanded&&focusedScreen==='local';nativeLocalPlayer?.setActive(localSelected);if(!screenPreview.hidden&&localAvailable&&screenPreview.readyState>=2){if(localSelected)screenPreview.play().catch(()=>{});else screenPreview.pause()}const remoteAvailable=remoteScreen.srcObject||nativeRemotePlayer;if(!remoteScreen.hidden&&remoteAvailable){const selected=screenExpanded&&focusedScreen==='remote'&&!remoteScreenSuppressed,hear=!remoteScreenSuppressed;nativeRemotePlayer?.setActive(selected||hear);try{remoteScreen.srcObject?.getTracks?.().forEach(track=>{track.enabled=true});nativeRemoteAudio?.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}if(hear){if(remoteScreen.volume>0)remoteScreen.muted=false;if(selected)remoteScreen.play().catch(()=>{});if(nativeRemoteAudio){nativeRemoteAudio.volume=remoteScreen.volume;nativeRemoteAudio.muted=remoteScreen.volume===0;if(!nativeRemoteAudio.muted)nativeRemoteAudio.play().catch(()=>{})}}else{remoteScreen.pause();remoteScreen.muted=true;if(nativeRemoteAudio){nativeRemoteAudio.pause();nativeRemoteAudio.muted=true}}}}
 function updateScreenLayout(){
   const hasLocal=!screenPreview.hidden,hasRemote=!remoteScreen.hidden,fullscreen=document.fullscreenElement===screenStage||screenStage.classList.contains('fs');if(!hasRemote&&focusedScreen==='remote')focusedScreen='local';if(!hasLocal&&focusedScreen==='local')focusedScreen='remote';if(!hasLocal&&!hasRemote)screenExpanded=false;if(focusedScreen==='remote'&&remoteScreenSuppressed)screenExpanded=false;
   document.body.classList.toggle('screen-share-active',hasLocal||hasRemote||!!document.querySelector('#serverVoiceStage.watching-share'));
