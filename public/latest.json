@@ -1,11 +1,11 @@
 {
-  "version": "1.1.98",
-  "notes": "Fixes joining a call crashing, and hides Watch Together until your friend is in the call.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.98/pair-p2p-1.1.98.tar.gz",
-  "linuxSha256": "1a82bda6e825beeae95aa9cd54122754c396572db639d6336d1a64789a526edc",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.98/Knot-1.1.98.AppImage",
-  "linuxAppImageSha256": "a75768c3d34628f9030dc784b883db1a8207cc0d16fad8ab7ef063e9a97785f3",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.98/Knot.Setup.1.1.98.exe",
-  "winSha256": "70df38020a01137099fedc330a9f47af720c78aef4813d936ed8dde2709a50ef",
-  "signature": "0lEwhcGSJXe9a+uGJSfSpGRal4V6BrS5hMb6lHJy91eC7IJQQKuHT9GbnzLfoQO2BcYizWjlVorM48cMC/uVCg=="
+  "version": "1.1.99",
+  "notes": "Cuts screen-share lag: native AV1 no longer starts at the GPU ceiling before a viewer budget, and stale GOPs are dropped instead of queued. Computer sound plays when a friend starts sharing.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.99/pair-p2p-1.1.99.tar.gz",
+  "linuxSha256": "7c240074a4b8940784fb6f24c4cc7f0b48c54b6b87d4b00a652c6580a3e6bf48",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.99/Knot-1.1.99.AppImage",
+  "linuxAppImageSha256": "3257d3f2cd7c9837826dfd7ab1a052a0a5ad89cc3f12fc0e05717901195ea1e2",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.99/Knot.Setup.1.1.99.exe",
+  "winSha256": "3a0aad9e0b68d9ece2fc8cc9e392ecfc2b6bf1a9666a6604dae8d44c2566b31d",
+  "signature": "Nyqztf6BX79YUoppEkRvsQ4bXCRzq4llojTt/4dAyK03KZdl1rb9Mi6FzBMLc4rq7A7dEU1g4CaOZPHs7qn6Dg=="
 }
