@@ -1,11 +1,11 @@
 {
-  "version": "1.1.99",
-  "notes": "Cuts screen-share lag: native AV1 no longer starts at the GPU ceiling before a viewer budget, and stale GOPs are dropped instead of queued. Computer sound plays when a friend starts sharing.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.99/pair-p2p-1.1.99.tar.gz",
-  "linuxSha256": "7c240074a4b8940784fb6f24c4cc7f0b48c54b6b87d4b00a652c6580a3e6bf48",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.99/Knot-1.1.99.AppImage",
-  "linuxAppImageSha256": "3257d3f2cd7c9837826dfd7ab1a052a0a5ad89cc3f12fc0e05717901195ea1e2",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.99/Knot.Setup.1.1.99.exe",
-  "winSha256": "3a0aad9e0b68d9ece2fc8cc9e392ecfc2b6bf1a9666a6604dae8d44c2566b31d",
-  "signature": "Nyqztf6BX79YUoppEkRvsQ4bXCRzq4llojTt/4dAyK03KZdl1rb9Mi6FzBMLc4rq7A7dEU1g4CaOZPHs7qn6Dg=="
+  "version": "1.1.100",
+  "notes": "Stops the small screen-share hitch after every 4K keyframe. Deltas now follow the key instead of dropping the rest of the GOP.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.100/pair-p2p-1.1.100.tar.gz",
+  "linuxSha256": "da2976da3f64a03f74b71f0092c56e075417657328d10f259e75e8c71b66c277",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.100/Knot-1.1.100.AppImage",
+  "linuxAppImageSha256": "25095f34a494b03fe927b461ed7318f2e450885442b04563d7b3a1d5c8616ae5",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.100/Knot.Setup.1.1.100.exe",
+  "winSha256": "6be1f4cebedb8f89f66d3535a7b7d4adb954d0993dc0ff1e90492026681ddd52",
+  "signature": "M0nUxWkf3j+wjqzuqFJGVxOa/iVpvWYpp28bQoDloLghgi/VEqiemwbATaespnnEZ37hJ3ZuNofqq8W4j+HrAA=="
 }
