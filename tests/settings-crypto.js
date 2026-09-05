@@ -32,6 +32,10 @@ function vault(machineKey) {
     const tampered = { ...envelope, data: Buffer.from('tampered').toString('base64') };
     await assert.rejects(afterRestart.reveal(tampered), /auth|authenticate|unsupported|invalid/i);
 
+    assert.strictEqual(fs.readFileSync(keyPath+'.bak').length,32,'unwrapping a wrapped key did not keep a raw backup');
+    const recovered = new LocalSettingsCipher(() => keyPath, { vault: vault(crypto.randomBytes(32)) });
+    assert.strictEqual(await recovered.reveal(envelope), secret, 'a raw settings.key.bak must recover when the OS vault cannot unwrap');
+    fs.unlinkSync(keyPath+'.bak');
     const copied = new LocalSettingsCipher(() => keyPath, { vault: vault(crypto.randomBytes(32)) });
     await assert.rejects(copied.reveal(envelope), /auth|authenticate|decrypt|invalid/i, 'copied app files decrypted without the OS vault');
     await assert.rejects(new LocalSettingsCipher(() => keyPath).reveal(envelope), /credential encryption is unavailable/i, 'wrapped keys must fail closed without the OS vault');
@@ -60,6 +64,22 @@ function vault(machineKey) {
       try{await assert.rejects(new LocalSettingsCipher(()=>insecurePath).protect('must fail'),/injected chmod failure/,'raw key permission failures must not be ignored')}
       finally{fs.promises.chmod=originalChmod}
     }
+
+    const bakRestoreDir=path.join(directory,'bak-restore');
+    fs.mkdirSync(bakRestoreDir,{recursive:true});
+    const bakRestoreKey=path.join(bakRestoreDir,'settings.key'),rawBackup=crypto.randomBytes(32);
+    fs.writeFileSync(bakRestoreKey+'.bak',rawBackup,{mode:0o600});
+    const fromBak=new LocalSettingsCipher(()=>bakRestoreKey,{vault:vault(machineKey)});
+    assert.strictEqual(await fromBak.reveal(await fromBak.protect('from-missing-primary')),'from-missing-primary','a raw settings.key.bak must restore a missing primary key');
+    assert.strictEqual(fs.existsSync(bakRestoreKey),true);
+
+    const missingKeyDir=path.join(directory,'missing-key');
+    fs.mkdirSync(missingKeyDir,{recursive:true});
+    fs.writeFileSync(path.join(missingKeyDir,'settings.json'),JSON.stringify({directoryToken:{format:FORMAT,iv:'x',tag:'y',data:'z'}}));
+    const missingKey=new LocalSettingsCipher(()=>path.join(missingKeyDir,'settings.key'),{vault:vault(machineKey)});
+    await assert.rejects(missingKey.protect('must-not-mint'),/encrypted settings still exist/,'a missing settings.key must not mint over remaining envelopes');
+    assert.strictEqual(fs.existsSync(path.join(missingKeyDir,'settings.key')),false,'minting a replacement key would make existing envelopes unreadable');
+
     console.log('PASS sensitive settings use persistent authenticated local encryption');
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

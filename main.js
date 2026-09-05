@@ -8,7 +8,7 @@ const { NativeScreenService } = require('./native-screen');
 const { measureCapacity, abortCapacityProbe } = require('./network-capacity');
 const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
 const { LanHouse, localIpv4, privateIpv4 } = require('./lan-house');
-const { SettingsStore, migrateSettingsCompanions } = require('./settings-store');
+const { SettingsStore, migrateSettingsCompanions, mergeMissingAccountIdentity, restoreMissingProfileAvatarSidecar, decodeProfileAvatarSidecar } = require('./settings-store');
 const { FORMAT: LOCAL_SETTINGS_FORMAT, LocalSettingsCipher } = require('./settings-crypto');
 const { EncryptedHistoryStore, validScope: validHistoryScope, MAX_ENTRY_BYTES: MAX_HISTORY_ENTRY_BYTES } = require('./history-store');
 const { LocalMetricsStore } = require('./local-metrics');
@@ -22,6 +22,7 @@ const PAIR_RENDERER_URL = pathToFileURL(path.join(__dirname, 'index.html')).href
 const emojiCatalog = require('./emoji-catalog');
 
 app.setName('Knot');
+try { app.setPath('userData', path.join(app.getPath('appData'), 'Knot')); } catch {}
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 app.on('second-instance', () => {
@@ -35,6 +36,7 @@ app.on('second-instance', () => {
 // validates image signatures, and owns the bounded on-demand cache.
 protocol.registerSchemesAsPrivileged([
   { scheme: 'emoji', privileges: { standard: false, secure: true, supportFetchAPI: true, stream: true } },
+  { scheme: 'knot-avatar', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
 
 let mainWin = null;
@@ -731,7 +733,19 @@ function sp() {
     const stableDir = path.join(appData, 'Knot');
     _sp = path.join(stableDir, 'settings.json');
     try {
-      migrateSettingsCompanions(stableDir, [app.getPath('userData'), path.join(appData, 'Pair'), path.join(appData, 'pair-p2p'), path.join(appData, 'pair')]);
+      const candidates = [app.getPath('userData'), path.join(appData, 'Pair'), path.join(appData, 'pair-p2p'), path.join(appData, 'pair'), path.join(appData, 'com.pair.p2p')];
+      migrateSettingsCompanions(stableDir, candidates);
+      mergeMissingAccountIdentity(stableDir, candidates);
+      if (restoreMissingProfileAvatarSidecar(stableDir, candidates)) {
+        try {
+          const current = JSON.parse(fs.readFileSync(_sp, 'utf8'));
+          if (current && typeof current === 'object' && !Array.isArray(current) && (current.profileAvatar == null || current.profileAvatar === '')) {
+            current.profileAvatar = 'file:v1';
+            if (current.profilePhotoMode == null || current.profilePhotoMode === 'none') current.profilePhotoMode = 'custom';
+            fs.writeFileSync(_sp, JSON.stringify(current), { encoding: 'utf8', mode: 0o600 });
+          }
+        } catch {}
+      }
     } catch {}
   }
   return _sp;
@@ -761,6 +775,14 @@ async function revealSetting(value) {
 function profileAvatarFile() {
   return path.join(path.dirname(sp()), 'profile-avatar');
 }
+async function profileAvatarSidecarPresent() {
+  try {
+    const st = await fs.promises.stat(profileAvatarFile());
+    return st.isFile() && st.size > 16;
+  } catch {
+    return false;
+  }
+}
 async function readProfileAvatarFile() {
   try {
     const data = await fs.promises.readFile(profileAvatarFile(), 'utf8');
@@ -769,12 +791,20 @@ async function readProfileAvatarFile() {
     return undefined;
   }
 }
+async function readProfileAvatarImage() {
+  try {
+    return decodeProfileAvatarSidecar(await fs.promises.readFile(profileAvatarFile()));
+  } catch {
+    return null;
+  }
+}
 async function writeProfileAvatarFile(value) {
   const file = profileAvatarFile();
   if (value == null || value === '') {
     await fs.promises.unlink(file).catch(() => {});
     return true;
   }
+  if (value === 'file:v1') return profileAvatarSidecarPresent();
   if (typeof value !== 'string' || value.length > MAX_SETTING_VALUE) return false;
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
@@ -797,25 +827,22 @@ ipcMain.handle('pair:hasSetting', async (event, key) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return false;
   const stored = await settingsStore.get(key);
   if (stored != null && stored !== '') return true;
-  return key === 'profileAvatar' ? !!(await readProfileAvatarFile()) : false;
+  return key === 'profileAvatar' ? profileAvatarSidecarPresent() : false;
 });
 ipcMain.handle('pair:getSetting', async (event, key) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return undefined;
   const stored = await settingsStore.get(key);
   const value = await revealSetting(stored);
-  if (value != null && ENCRYPTED_SETTING_KEYS.has(key) && stored?.format !== LOCAL_SETTINGS_FORMAT) {
-    try { await settingsStore.set(key, await settingsCipher.protect(value)); } catch {}
-  }
-  if (key === 'profileAvatar') {
-    const file = await readProfileAvatarFile();
-    if (file) return file;
-  }
+  if (key === 'profileAvatar' && await profileAvatarSidecarPresent()) return 'file:v1';
   return value;
 });
 ipcMain.handle('pair:setSetting', async (event, key, value) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return false;
   if (value != null && (typeof value !== 'string' || value.length > MAX_SETTING_VALUE)) return false;
+  if ((key === 'directoryToken' || key === 'directoryUserId') && (value == null || value === '')) return false;
   if (key === 'profileAvatar') {
+    if (value === 'file:v1') return settingsStore.set(key, 'file:v1');
+    if (value != null && value !== '' && !/^data:image\/(?:png|jpeg|gif|webp);base64,/i.test(value)) return false;
     if (!(await writeProfileAvatarFile(value))) return false;
     const saved = await settingsStore.set(key, value == null || value === '' ? value : 'file:v1');
     return saved;
@@ -934,6 +961,15 @@ app.whenReady().then(async () => {
       const asset=await emojiCatalog.assetForRequest(request.url);if(!asset)return new Response(null,{status:404});
       return new Response(asset.buffer,{headers:{'Content-Type':asset.mime,'Cache-Control':'private, max-age=86400'}});
     } catch { return new Response(null,{status:404}); }
+  });
+  protocol.handle('knot-avatar', async request => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname !== 'local' || (url.pathname !== '/profile' && url.pathname !== '/profile/')) return new Response(null, { status: 404 });
+      const image = await readProfileAvatarImage();
+      if (!image) return new Response(null, { status: 404 });
+      return new Response(new Uint8Array(image.buffer), { headers: { 'Content-Type': image.mime, 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } });
+    } catch { return new Response(null, { status: 404 }); }
   });
   ipcMain.handle('pair:emojiSearch', async (event, params) => {
     if(!isPairRenderer(event))return {items:[],nextCursor:null,total:0,stale:true};

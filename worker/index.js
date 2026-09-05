@@ -639,8 +639,10 @@ export class PairDirectory {
       if (user.username && legacyValid) { matchedSession = { hash, expiresAt: now + ACCOUNT_SESSION_TTL_MS, accountLogin: true }; sessions.push(matchedSession); delete user.tokenHash; }
       // Upgrade sessions issued by older Worker versions as they reconnect.
       // Account handshakes are authentication, not profile-write operations.
-      if (user.username && matchedSession) matchedSession.accountLogin = true;
-      user.sessions = [...new Map(sessions.map(session => [session.hash, session])).values()].slice(-8);
+      if (user.username && matchedSession) { matchedSession.accountLogin = true; matchedSession.expiresAt = now + ACCOUNT_SESSION_TTL_MS; }
+      const unique=[...new Map(sessions.map(session => [session.hash, session])).values()];
+      user.sessions = unique.slice(-8);
+      if (matchedSession && !user.sessions.some(session => session.hash === matchedSession.hash)) user.sessions = [...user.sessions.slice(Math.max(0, user.sessions.length-7)), matchedSession];
     }
     if (!user) user = { id, tokenHash: hash, name: cleanText(value.name, 32, 'Knot user'), image: await this.storeMedia(value.image), frame: cleanFrame(value.frame), deviceKey: cleanDeviceKey(value.deviceKey), friends: [], servers: [], groupDms: [] };
     else {
