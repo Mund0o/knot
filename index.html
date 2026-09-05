@@ -97,7 +97,9 @@
             <div class="screen-share-quality-controls">
               <fieldset><legend id="screenShareQualityHeading">Resolution</legend><div class="screen-share-choice-grid resolution-choices" role="radiogroup" aria-labelledby="screenShareQualityHeading"><button type="button" data-share-resolution="source">Source</button><button type="button" data-share-resolution="2160"><strong>4K</strong><small>2160p</small></button><button type="button" data-share-resolution="1440">1440p</button><button type="button" data-share-resolution="1080">1080p</button><button type="button" data-share-resolution="720">720p</button></div></fieldset>
               <fieldset><legend id="screenShareFpsHeading">Frame Rate</legend><div class="screen-share-choice-grid fps-choices" role="radiogroup" aria-labelledby="screenShareFpsHeading"><button type="button" data-share-fps="60"><strong>60</strong><small>FPS</small></button><button type="button" data-share-fps="30"><strong>30</strong><small>FPS</small></button></div></fieldset>
+              <fieldset><legend id="screenShareContentHeading">Optimize for</legend><div class="screen-share-choice-grid content-choices" role="radiogroup" aria-labelledby="screenShareContentHeading"><button type="button" data-share-content="motion"><strong>Game</strong><small>Smooth motion</small></button><button type="button" data-share-content="detail"><strong>Desktop</strong><small>Sharp text</small></button></div></fieldset>
             </div>
+            <p id="screenShareCapacityHint" class="screen-share-capacity-hint" hidden></p>
             <label class="screen-share-audio-switch" for="screenShareAudio"><span><strong>Share computer sound</strong><small>Desktop apps and games are included; Knot voice stays separate.</small></span><input id="screenShareAudio" type="checkbox" role="switch" /></label>
           </section>
           <footer class="screen-share-footer"><button id="screenShareBack" type="button" class="text-button" hidden>Back</button><span></span><button id="screenShareCancel" type="button" class="text-button">Cancel</button><button id="screenShareContinue" type="submit" class="primary" disabled>Continue</button><button id="screenShareGoLive" type="submit" class="primary" hidden>Go Live</button></footer>
@@ -277,6 +279,7 @@
       </div>
     </main>
     <script src="native-video.js"></script>
+    <script src="network-capacity.js"></script>
     <script src="watch-together.js"></script>
     <script src="file-transfer-protocol.js"></script>
     <script src="realtime-sfu.js"></script>

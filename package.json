@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.95",
+  "version": "1.1.96",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -26,7 +26,7 @@
     "test:worker": "node tests/worker-offline-mailbox.js && wrangler deploy --dry-run",
     "test:sfu": "node tests/realtime-sfu.js",
     "test:network": "node tests/network-conditioned-benchmarks.js",
-    "test:core": "node tests/settings-store.js && node tests/settings-crypto.js && node tests/history-store.js && node tests/local-metrics.js && node tests/save-streams.js && node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/watch-together.js && node tests/lan-house.js && node tests/file-transfer-preload-ipc.js && node tests/run-electron-smoke.js tests/preload-sandbox-smoke.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js && node tests/signaling-policy.js && node tests/updater-security.js && node tests/publish-update.js && node tests/realtime-sfu.js",
+    "test:core": "node tests/settings-store.js && node tests/settings-crypto.js && node tests/history-store.js && node tests/local-metrics.js && node tests/save-streams.js && node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/watch-together.js && node tests/lan-house.js && node tests/network-capacity.js && node tests/file-transfer-preload-ipc.js && node tests/run-electron-smoke.js tests/preload-sandbox-smoke.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js && node tests/signaling-policy.js && node tests/updater-security.js && node tests/publish-update.js && node tests/realtime-sfu.js",
     "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-service.js && node tests/run-electron-smoke.js tests/linux-gpu-runtime.js",
     "test": "npm run test:core && npm run test:emoji && npm run test:network && npm run test:worker && npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
     "test:emoji": "node tests/emoji-catalog.js && node tests/emoji-catalog-worker.js && node tests/emoji-packaging-readonly.js",
@@ -71,6 +71,7 @@
       "gpu-acceleration.js",
       "native-video.js",
       "watch-together.js",
+      "network-capacity.js",
       "lan-house.js",
       "native-screen.js",
       "settings-store.js",

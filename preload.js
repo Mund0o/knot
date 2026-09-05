@@ -112,7 +112,8 @@ contextBridge.exposeInMainWorld('pairDirectFile', {
 // localStorage automatically when running in a browser (no IPC available).
 contextBridge.exposeInMainWorld('pairSettings', {
   get: key => ipcRenderer.invoke('pair:getSetting', key),
-  set: (key, value) => ipcRenderer.invoke('pair:setSetting', key, value)
+  set: (key, value) => ipcRenderer.invoke('pair:setSetting', key, value),
+  has: key => ipcRenderer.invoke('pair:hasSetting', key),
 });
 
 // Read-only, allowlisted DeepFilterNet assets.  Keeping model access here
@@ -147,6 +148,8 @@ contextBridge.exposeInMainWorld('pairEnv', {
   useSystemPicker: process.platform === 'linux' && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY),
   isApp: true,
   iceServers: turnServersFromEnvironment(),
+  networkProbe: () => ipcRenderer.invoke('pair:networkProbe'),
+  abortNetworkProbe: () => ipcRenderer.invoke('pair:abortNetworkProbe'),
   getSystemAvatar: () => ipcRenderer.invoke('pair:getSystemAvatar'),
   getSources: () => ipcRenderer.invoke('pair:getSources'),
   setPendingSource: source => ipcRenderer.invoke('pair:setPendingSource', source),

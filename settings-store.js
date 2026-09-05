@@ -1,6 +1,25 @@
 const fs = require('fs');
 const path = require('path');
+const SETTINGS_COMPANION_FILES = ['settings.json', 'settings.json.bak', 'settings.key', 'settings.key.bak', 'history.db', 'profile-avatar'];
 function settingsObject(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
+function migrateSettingsCompanions(stableDir, candidateDirs) {
+  if (!stableDir) return [];
+  fs.mkdirSync(stableDir, { recursive: true, mode: 0o700 });
+  const copied = [];
+  for (const dir of [...new Set((candidateDirs || []).filter(Boolean))]) {
+    if (path.resolve(dir) === path.resolve(stableDir)) continue;
+    for (const name of SETTINGS_COMPANION_FILES) {
+      const from = path.join(dir, name), to = path.join(stableDir, name);
+      try {
+        if (fs.existsSync(from) && !fs.existsSync(to)) {
+          fs.copyFileSync(from, to);
+          copied.push(name);
+        }
+      } catch {}
+    }
+  }
+  return copied;
+}
 function parseSettings(contents) { const parsed=JSON.parse(contents);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new SyntaxError('settings root must be an object');return parsed; }
 async function readSettings(file) { return parseSettings(await fs.promises.readFile(file,'utf8')); }
 async function syncDirectory(directory) { let handle;try{handle=await fs.promises.open(directory,'r');await handle.sync()}catch{}finally{await handle?.close().catch(()=>{})} }
@@ -14,4 +33,4 @@ class SettingsStore {
   async flush(){await this.load();if(this.loadError){this.resolveWaiters(this.version,false);return false}if(this.writeTimer){clearTimeout(this.writeTimer);this.writeTimer=null}if(this.writePromise){const requestedVersion=this.version;await this.writePromise;if(this.attemptedVersion<requestedVersion)return this.flush();return this.persistedVersion>=requestedVersion}if(this.persistedVersion>=this.version)return true;const version=this.version;this.attemptedVersion=version;const target=this.resolvePath(),directory=path.dirname(target),backup=`${target}.bak`,nonce=`${process.pid}.${Date.now()}`,temporary=`${target}.${nonce}.tmp`,backupTemporary=`${backup}.${nonce}.tmp`;let serialized;try{serialized=JSON.stringify(this.data)}catch{this.resolveWaiters(version,false);return false}this.writePromise=(async()=>{try{await fs.promises.mkdir(directory,{recursive:true,mode:0o700});await durableWrite(temporary,serialized);try{const previous=await fs.promises.readFile(target,'utf8');parseSettings(previous);await durableWrite(backupTemporary,previous);await fs.promises.rename(backupTemporary,backup)}catch(error){if(error?.code!=='ENOENT'&&!(error instanceof SyntaxError))throw error}await fs.promises.rename(temporary,target);await fs.promises.chmod(target,0o600);await syncDirectory(directory);this.persistedVersion=Math.max(this.persistedVersion,version);this.resolveWaiters(version,true);return true}catch{await fs.promises.unlink(temporary).catch(()=>{});await fs.promises.unlink(backupTemporary).catch(()=>{});this.resolveWaiters(version,false);return false}finally{this.writePromise=null}})();const ok=await this.writePromise;if(this.version>version)this.scheduleWrite(0);return ok}
   resolveWaiters(version,result){const pending=[];for(const waiter of this.waiters){if(waiter.version<=version)waiter.resolve(result);else pending.push(waiter)}this.waiters=pending}
 }
-module.exports={SettingsStore,settingsObject};
+module.exports={SettingsStore,settingsObject,migrateSettingsCompanions,SETTINGS_COMPANION_FILES};

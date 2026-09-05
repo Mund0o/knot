@@ -41,6 +41,9 @@ function vault(machineKey) {
     const migrated=new LocalSettingsCipher(()=>legacyPath,{vault:vault(machineKey)});
     await migrated.protect('migration');
     assert.strictEqual(JSON.parse(fs.readFileSync(legacyPath,'utf8')).format,WRAPPED_KEY_FORMAT,'raw key did not migrate');
+    assert.strictEqual(fs.readFileSync(legacyPath+'.bak').length,32,'wrapping the settings key did not keep a raw backup');
+    const wrappedGone=new LocalSettingsCipher(()=>legacyPath);
+    assert.strictEqual(await wrappedGone.reveal(await migrated.protect('from-bak')),'from-bak');
 
     const fallbackPath=path.join(directory,'fallback.key'),fallback=new LocalSettingsCipher(()=>fallbackPath);
     const fallbackEnvelope=await fallback.protect('bounded fallback');

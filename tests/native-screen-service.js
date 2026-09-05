@@ -104,6 +104,7 @@ if (live.supported) {
   service.infoAsync = async () => supported;
   const first = service.start({bitrateKbps:100}, supported);
   assert.strictEqual(children[0].args[children[0].args.indexOf('-q')+1],'350','native group bitrate floor ignored the aggregate upload budget');
+  assert.strictEqual(children[0].args[children[0].args.indexOf('-bm')+1],'cbr','native capture left constant bitrate, which is the only GPU Screen Recorder mode that honors a kbps ceiling');
   assert.strictEqual(children[0].args[children[0].args.indexOf('-fm')+1],'content','native capture stopped synchronizing encode work to changing content');
   assert.strictEqual(children[0].args[children[0].args.indexOf('-ffmpeg-video-opts')+1],'spatial-aq=1;aq-strength=8;rc-lookahead=0;strict_gop=1','NVENC perceptual quality, zero-lookahead, or bounded-GOP tuning was lost');
   assert.strictEqual(children[0].args[children[0].args.indexOf('-ffmpeg-opts')+1],'cluster_time_limit=0','native WebM muxing reintroduced multi-frame latency bursts');

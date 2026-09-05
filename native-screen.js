@@ -7,7 +7,7 @@ const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 // Always drain the recorder and discard stale GOP data instead of pausing its
 // stdout. Pausing back-pressures the capture/encoder pipeline and makes the
 // desktop and Knot compositor visibly stutter when a WAN peer cannot keep up.
-const MAX_QUEUE_BYTES = 512 * 1024;
+const MAX_QUEUE_BYTES = 8 * 1024 * 1024;
 const MAX_SEGMENT_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_READ_WAITERS = 4;
 const STOP_TERM_DELAY_MS = 1500;
@@ -276,7 +276,9 @@ class NativeScreenService {
     // A native group share encodes once but fans the same stream to every peer.
     // Allow the renderer's total-upload budget to fall below 2 Mbps per viewer;
     // the old floor multiplied into an 18+ Mbps minimum for a full group.
-    const bitrateKbps = Math.max(350, Math.min(40000, Math.round(Number(options.bitrateKbps) || 6000)));
+    const maxKbps = info.vendor === 'amd' ? 150000 : 250000;
+    const bitrateKbps = Math.max(350, Math.min(maxKbps, Math.round(Number(options.bitrateKbps) || 6000)));
+    const bitrateMode = 'cbr';
     const cursor = options.cursor === 'never' ? 'no' : 'yes';
     const testCapture = process.env.KNOT_NATIVE_SCREEN_TEST === '1' && /^[A-Za-z0-9_.-]{1,64}$/.test(options.captureSource || '') ? options.captureSource : '';
     // FFmpeg's streaming WebM default may retain several encoded frames in one
@@ -290,7 +292,7 @@ class NativeScreenService {
     // work does not add frames of latency. These are NVENC-specific options;
     // AMD VA-API keeps its proven low-latency defaults.
     const videoOptions=info.vendor==='nvidia'?['-ffmpeg-video-opts','spatial-aq=1;aq-strength=8;rc-lookahead=0;strict_gop=1']:[];
-    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'content', '-bm', 'cbr', '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '0.15', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm', ...videoOptions, '-ffmpeg-opts', 'cluster_time_limit=0'];
+    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'content', '-bm', bitrateMode, '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '0.15', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm', ...videoOptions, '-ffmpeg-opts', 'cluster_time_limit=0'];
     const child = this.spawnRecorder(runner, args);
     const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', errorReported: false, active: true, stopping: false, stderr: '', seq: 0, discontinuity: false, droppedSegments: 0, segmenter: new WebmClusterSegmenter() };
     this.session = session;
@@ -301,12 +303,17 @@ class NativeScreenService {
       const item = { kind: segment.kind, key: !!meta.key, frameCount: meta.frameCount || 0, seq: session.seq++, capturedAt: Date.now(), data };
       const waiter = session.waiters.shift();if (waiter) waiter(item);else { session.queue.push(item);session.queueBytes += item.data.length; }
       if (session.queueBytes > MAX_QUEUE_BYTES && session.queue.length > 1) {
-        const original=session.queue,latestInit=original.findLast(value=>value.kind==='init'),latestKey=original.findLastIndex(value=>value.kind==='cluster'&&value.key);let keep=[];
+        const original=session.queue,latestInit=original.findLast(value=>value.kind==='init'),latestKey=original.findLastIndex(value=>value.kind==='cluster'&&value.key);
+        let keep=[];
         if(latestInit)keep.push(latestInit);
-        if(latestKey>0)keep.push(...original.slice(latestKey));
-        else if(latestKey===0&&original.length===1)keep.push(original[0]);
+        if(latestKey>=0)for(const value of original.slice(latestKey))if(value!==latestInit)keep.push(value);
         let keepBytes=keep.reduce((total,value)=>total+value.data.length,0);
-        if(keepBytes>MAX_QUEUE_BYTES&&keep.filter(value=>value.kind==='cluster').length>1){keep=latestInit?[latestInit]:[];keepBytes=keep.reduce((total,value)=>total+value.data.length,0)}
+        if(keepBytes>MAX_QUEUE_BYTES){
+          const keyItem=latestKey>=0?original[latestKey]:null;
+          keep=[latestInit,keyItem].filter(Boolean);
+          keep=[...new Set(keep)];
+          keepBytes=keep.reduce((total,value)=>total+value.data.length,0);
+        }
         const retained=new Set(keep);for(const stale of original)if(!retained.has(stale))session.droppedSegments++;
         session.queue=keep;session.queueBytes=keepBytes;
         session.discontinuity = true;

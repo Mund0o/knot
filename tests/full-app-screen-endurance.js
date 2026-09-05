@@ -227,7 +227,7 @@ async function main() {
   assert.strictEqual(sender.localDecodeDisabled,true,'sender preview decode was not disabled');
   assert.strictEqual(sender.channelOrdered,false,'full-app AV1 channel retained cross-frame head-of-line blocking');
   assert.strictEqual(sender.channelLifetime,null,'full-app AV1 channel unexpectedly uses a wall-clock packet lifetime');
-  const segmentAwareBudget=Math.min(4*1024*1024+1024*1024,Math.max(1024*1024,maxSegmentBytes*3+192*1024));
+  const segmentAwareBudget=Math.min(8*1024*1024+2*1024*1024,Math.max(1024*1024,maxSegmentBytes*3+192*1024));
   assert(sender.maxBufferedAmount<=segmentAwareBudget+2*60*1024,`bounded AV1 uplink queued ${(sender.maxBufferedAmount/1024).toFixed(0)} KiB for a ${(maxSegmentBytes/1024).toFixed(0)} KiB segment`);
   assert(sourceFrames>=Math.floor(durationMs/1000*55),`content-synchronized capture produced only ${(sourceFrames/(durationMs/1000)).toFixed(1)} source fps`);
   assert.strictEqual(sender.sourceFrames,sourceFrames,`sender accounted for ${sender.sourceFrames} of ${sourceFrames} captured frames`);

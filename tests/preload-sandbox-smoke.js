@@ -38,6 +38,9 @@ app.whenReady().then(async () => {
   const exposed = await window.webContents.executeJavaScript(`({
     version: window.pairEnv?.version,
     platform: window.pairEnv?.platform,
+    networkProbe: typeof window.pairEnv?.networkProbe,
+    abortNetworkProbe: typeof window.pairEnv?.abortNetworkProbe,
+    settingsHas: typeof window.pairSettings?.has,
     bridges: [
       'pairSave', 'pairDirectFile', 'pairSettings', 'pairDeepFilter',
       'pairUpdates', 'pairEnv', 'pairCapture', 'pairEmojiCatalog',
@@ -48,6 +51,9 @@ app.whenReady().then(async () => {
   assert.strictEqual(exposed.bridges, true, 'production preload did not expose every IPC bridge');
   assert.strictEqual(exposed.version, EXPECTED_VERSION, 'sandboxed preload did not receive the trusted app version');
   assert.strictEqual(exposed.platform, process.platform);
+  assert.strictEqual(exposed.networkProbe, 'function', 'sandboxed preload did not expose the free speed probe');
+  assert.strictEqual(exposed.abortNetworkProbe, 'function', 'sandboxed preload did not expose probe abort for live shares');
+  assert.strictEqual(exposed.settingsHas, 'function', 'sandboxed preload did not expose settings existence checks');
   assert.match(bridgeDocumentId, /^[a-f0-9]{32}$/, 'bridge document nonce was not registered');
   clearTimeout(timeout);
   window.destroy();

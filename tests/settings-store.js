@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { SettingsStore, settingsObject } = require('../settings-store');
+const { SettingsStore, settingsObject, migrateSettingsCompanions } = require('../settings-store');
 
 (async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'knot-settings-'));
@@ -73,6 +73,19 @@ const { SettingsStore, settingsObject } = require('../settings-store');
       assert.strictEqual(await transient.set('mustNotOverwrite', 'value'), false, 'transient primary I/O errors must not promote stale backups');
     } finally { fs.promises.readFile = originalReadFile; }
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(transientFile, 'utf8')), { newest: true });
+    const legacyDir=path.join(directory,'legacy'),stableDir=path.join(directory,'Knot');
+    fs.mkdirSync(legacyDir,{recursive:true});
+    fs.writeFileSync(path.join(legacyDir,'settings.json'),JSON.stringify({profileAvatar:'keep-me'}));
+    fs.writeFileSync(path.join(legacyDir,'settings.key'),Buffer.alloc(32,7));
+    fs.writeFileSync(path.join(legacyDir,'profile-avatar'),'data:image/png;base64,aaa');
+    fs.mkdirSync(stableDir,{recursive:true});
+    fs.writeFileSync(path.join(stableDir,'settings.json'),JSON.stringify({theme:'dark'}));
+    const copied=migrateSettingsCompanions(stableDir,[legacyDir]);
+    assert(copied.includes('settings.key')&&copied.includes('profile-avatar')&&!copied.includes('settings.json'),'existing Knot settings.json must not be clobbered while the encryption key and photo sidecar still migrate');
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(stableDir,'settings.json'),'utf8')).theme,'dark');
+    assert.strictEqual(fs.readFileSync(path.join(stableDir,'settings.key')).equals(Buffer.alloc(32,7)),true);
+    assert.strictEqual(fs.readFileSync(path.join(stableDir,'profile-avatar'),'utf8'),'data:image/png;base64,aaa');
+
     console.log('PASS async atomic settings store concurrency, deletion, and permissions');
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });

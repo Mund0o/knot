@@ -5,9 +5,10 @@ const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
+const { measureCapacity, abortCapacityProbe } = require('./network-capacity');
 const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
 const { LanHouse, localIpv4, privateIpv4 } = require('./lan-house');
-const { SettingsStore } = require('./settings-store');
+const { SettingsStore, migrateSettingsCompanions } = require('./settings-store');
 const { FORMAT: LOCAL_SETTINGS_FORMAT, LocalSettingsCipher } = require('./settings-crypto');
 const { EncryptedHistoryStore, validScope: validHistoryScope, MAX_ENTRY_BYTES: MAX_HISTORY_ENTRY_BYTES } = require('./history-store');
 const { LocalMetricsStore } = require('./local-metrics');
@@ -301,7 +302,7 @@ function stopLinuxShareAudio() {
 function isPairRenderer(event) {
   return event.sender === mainWin?.webContents && event.senderFrame === event.sender?.mainFrame && event.senderFrame?.url === PAIR_RENDERER_URL;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'directoryRosterCache', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'networkCapacity', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'directoryRosterCache', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
@@ -367,6 +368,18 @@ async function systemAccountAvatar() {
   } catch { return null; }
 }
 
+let networkProbeTask = null;
+ipcMain.handle('pair:networkProbe', async event => {
+  if (!isPairRenderer(event)) return null;
+  if (networkProbeTask) return networkProbeTask;
+  networkProbeTask = measureCapacity().catch(() => null).finally(() => { networkProbeTask = null; });
+  return networkProbeTask;
+});
+ipcMain.handle('pair:abortNetworkProbe', event => {
+  if (!isPairRenderer(event)) return false;
+  abortCapacityProbe();
+  return true;
+});
 ipcMain.handle('pair:getSources', async event => {
   if (!isPairRenderer(event)) return [];
   pendingSources = (await desktopCapturer.getSources({ types: ['screen', 'window'], fetchWindowIcons: false, thumbnailSize: { width: 240, height: 180 } })).filter(source => !isExcludedShareSource(source)).slice(0,MAX_SHARE_SOURCES);
@@ -718,12 +731,7 @@ function sp() {
     const stableDir = path.join(appData, 'Knot');
     _sp = path.join(stableDir, 'settings.json');
     try {
-      fs.mkdirSync(stableDir, { recursive: true, mode: 0o700 });
-      if (!fs.existsSync(_sp)) {
-        const candidates = [app.getPath('userData'), path.join(appData, 'Pair'), path.join(appData, 'pair-p2p'), path.join(appData, 'pair')];
-        const legacy = [...new Set(candidates)].map(dir => path.join(dir, 'settings.json')).find(file => file !== _sp && fs.existsSync(file));
-        if (legacy) fs.copyFileSync(legacy, _sp);
-      }
+      migrateSettingsCompanions(stableDir, [app.getPath('userData'), path.join(appData, 'Pair'), path.join(appData, 'pair-p2p'), path.join(appData, 'pair')]);
     } catch {}
   }
   return _sp;
@@ -750,6 +758,47 @@ async function revealSetting(value) {
   }
   return undefined;
 }
+function profileAvatarFile() {
+  return path.join(path.dirname(sp()), 'profile-avatar');
+}
+async function readProfileAvatarFile() {
+  try {
+    const data = await fs.promises.readFile(profileAvatarFile(), 'utf8');
+    return typeof data === 'string' && data.length > 0 && data.length <= MAX_SETTING_VALUE ? data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+async function writeProfileAvatarFile(value) {
+  const file = profileAvatarFile();
+  if (value == null || value === '') {
+    await fs.promises.unlink(file).catch(() => {});
+    return true;
+  }
+  if (typeof value !== 'string' || value.length > MAX_SETTING_VALUE) return false;
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    const handle = await fs.promises.open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(value, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.promises.rename(temporary, file);
+    await fs.promises.chmod(file, 0o600);
+    return true;
+  } catch {
+    await fs.promises.unlink(temporary).catch(() => {});
+    return false;
+  }
+}
+ipcMain.handle('pair:hasSetting', async (event, key) => {
+  if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return false;
+  const stored = await settingsStore.get(key);
+  if (stored != null && stored !== '') return true;
+  return key === 'profileAvatar' ? !!(await readProfileAvatarFile()) : false;
+});
 ipcMain.handle('pair:getSetting', async (event, key) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return undefined;
   const stored = await settingsStore.get(key);
@@ -757,11 +806,20 @@ ipcMain.handle('pair:getSetting', async (event, key) => {
   if (value != null && ENCRYPTED_SETTING_KEYS.has(key) && stored?.format !== LOCAL_SETTINGS_FORMAT) {
     try { await settingsStore.set(key, await settingsCipher.protect(value)); } catch {}
   }
+  if (key === 'profileAvatar') {
+    const file = await readProfileAvatarFile();
+    if (file) return file;
+  }
   return value;
 });
 ipcMain.handle('pair:setSetting', async (event, key, value) => {
   if (!isPairRenderer(event) || !SETTING_KEYS.has(key)) return false;
   if (value != null && (typeof value !== 'string' || value.length > MAX_SETTING_VALUE)) return false;
+  if (key === 'profileAvatar') {
+    if (!(await writeProfileAvatarFile(value))) return false;
+    const saved = await settingsStore.set(key, value == null || value === '' ? value : 'file:v1');
+    return saved;
+  }
   let stored = value;
   if (value != null && ENCRYPTED_SETTING_KEYS.has(key)) {
     try { stored = await settingsCipher.protect(value); } catch { return false; }
