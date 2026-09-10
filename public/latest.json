@@ -1,11 +1,11 @@
 {
-  "version": "1.1.100",
-  "notes": "Stops the small screen-share hitch after every 4K keyframe. Deltas now follow the key instead of dropping the rest of the GOP.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.100/pair-p2p-1.1.100.tar.gz",
-  "linuxSha256": "da2976da3f64a03f74b71f0092c56e075417657328d10f259e75e8c71b66c277",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.100/Knot-1.1.100.AppImage",
-  "linuxAppImageSha256": "25095f34a494b03fe927b461ed7318f2e450885442b04563d7b3a1d5c8616ae5",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.100/Knot.Setup.1.1.100.exe",
-  "winSha256": "6be1f4cebedb8f89f66d3535a7b7d4adb954d0993dc0ff1e90492026681ddd52",
-  "signature": "M0nUxWkf3j+wjqzuqFJGVxOa/iVpvWYpp28bQoDloLghgi/VEqiemwbATaespnnEZ37hJ3ZuNofqq8W4j+HrAA=="
+  "version": "1.1.101",
+  "notes": "Stops 4K screen-share hitching every GOP. Keys send in 60 KB parts and skip to the latest picture instead of waiting on a full IDR.\nComputer sound retries a silent PipeWire start, and share tiles stay dark instead of flashing white.\nThe bitrate slider now tops out at the safe rate for your measured connection.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.101/pair-p2p-1.1.101.tar.gz",
+  "linuxSha256": "c5b0d03969c095b5ff1480fb5462faf5449c7f0767dc9403caa3ab4240302f42",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.101/Knot-1.1.101.AppImage",
+  "linuxAppImageSha256": "5a3125e2ceb5b4afa1da040466bf6d3ec24533ecdabc7b458a251aecd9740374",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.101/Knot.Setup.1.1.101.exe",
+  "winSha256": "117e8aede519c64b629bbcb17ec85c7263217a34ff739ae88bea7dba179ae8df",
+  "signature": "V2K7TTRoVB7ZemmggsZh5fDubsWBEbsb2+3tnHnj2TirvJRiqWv5qLC6TZ1mNRlLap8NZQJW1/uBxSmmN73IDQ=="
 }
