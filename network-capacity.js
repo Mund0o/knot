@@ -11,6 +11,7 @@
   const MAX_NATIVE_SHARE_MBPS = 250;
   const MAX_HARDWARE_WEBRTC_SHARE_MBPS = 80;
   const MAX_SLIDER_MBPS = 250;
+  const MAX_SHARE_LATENCY_MS = 260;
   const PROBE_WINDOW_MS = 800;
   const PROBE_MIN_BYTES = 2 * 1024 * 1024;
   const PROBE_MAX_BYTES = 96 * 1024 * 1024;
@@ -65,6 +66,50 @@
     if (!Number.isFinite(cap)) return clamp(slider, 2, MAX_SLIDER_MBPS);
     if (cap > 20) return Math.min(MAX_NATIVE_SHARE_MBPS, cap);
     return Math.min(20, Math.max(2, cap));
+  }
+
+  // Settings slider ceiling. 250 Mbps remains the GPU/encoder max; a measured
+  // 40 Mbps path only offers the derated safe rate (~30 Mbps), not 250.
+  function sliderBitrateMaxMbps(uploadMbps, downloadMbps) {
+    const up = effectiveUploadCapMbps(uploadMbps, Infinity);
+    const down = effectiveUploadCapMbps(downloadMbps, Infinity);
+    const path = Math.min(up, down);
+    if (!Number.isFinite(path) || path <= 0) return MAX_SLIDER_MBPS;
+    return Math.max(2, Math.min(MAX_SLIDER_MBPS, Math.round(path)));
+  }
+
+  // Viewer buffering: path (loss/gaps/under-run) vs decode (queue/software).
+  // Path pressure wins when both are present so the sender can skip stale
+  // pictures instead of presenting late. Native encode bitrate stays put.
+  function classifyShareBuffering({
+    freezeDelta = 0, packetsLostDelta = 0, framesDroppedDelta = 0, decodeQueue = 0,
+    receiveMbps, expectedMbps, softwareFallback = false, gapRecoveries = 0, jitter = 0,
+  } = {}) {
+    const decodePressure = softwareFallback === true || Number(decodeQueue) >= 8;
+    const expected = Number(expectedMbps), received = Number(receiveMbps);
+    const underRun = Number.isFinite(expected) && expected > 2 && Number.isFinite(received) && received < expected * 0.72;
+    const pathPressure = Number(freezeDelta) > 0 || Number(packetsLostDelta) > 0 || Number(gapRecoveries) > 0
+      || Number(jitter) > 0.03 || underRun;
+    if (pathPressure) return 'path';
+    if (decodePressure || Number(framesDroppedDelta) > 8) return 'decode';
+    return '';
+  }
+
+  // How long SCTP may need to accept a 4K key. This is socket backpressure, not
+  // viewer latency — presenting a frame older than MAX_SHARE_LATENCY_MS is
+  // enforced separately so a fat key does not hitch every GOP.
+  function nativeKeyWaitMs(segmentBytes, pathMbps) {
+    const bytes = Math.max(0, Number(segmentBytes) || 0);
+    const path = Number(pathMbps);
+    const mbps = Number.isFinite(path) && path > 0 ? path : 16;
+    const sendMs = (bytes * 8) / (mbps * 1e6) * 1000;
+    return Math.max(100, Math.min(800, Math.ceil(sendMs) + 40));
+  }
+
+  function nativeShareRemainingMs(capturedAt, now = Date.now()) {
+    const captured = Number(capturedAt), at = Number(now);
+    if (!Number.isFinite(captured) || captured <= 0) return MAX_SHARE_LATENCY_MS;
+    return Math.max(0, MAX_SHARE_LATENCY_MS - Math.max(0, at - captured));
   }
 
   function encoderShareCapMbps({ native = false, hardware = false, width = 1920, height = 1080, fps = 60 } = {}) {
@@ -346,6 +391,7 @@
     MAX_NATIVE_SHARE_MBPS,
     MAX_HARDWARE_WEBRTC_SHARE_MBPS,
     MAX_SLIDER_MBPS,
+    MAX_SHARE_LATENCY_MS,
     clamp,
     mbpsFrom,
     effectiveUploadCapMbps,
@@ -353,6 +399,10 @@
     preferAudioRed,
     recommendShareBudgetMbps,
     autoShareCeilingMbps,
+    sliderBitrateMaxMbps,
+    classifyShareBuffering,
+    nativeKeyWaitMs,
+    nativeShareRemainingMs,
     encoderShareCapMbps,
     viewerReceiveCapMbps,
     minViewerReceiveCapMbps,

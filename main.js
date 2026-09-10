@@ -143,9 +143,26 @@ function startLinuxShareAudio(webContents) {
   if (linuxShareAudioStopping) return linuxShareAudioStopping.then(()=>startLinuxShareAudio(webContents));
   if (linuxShareAudio) return Promise.resolve({ label: linuxShareAudio.label, source: linuxShareAudio.source });
   if (linuxShareAudioStart) return linuxShareAudioStart;
-  const generation=linuxShareAudioGeneration;
-  linuxShareAudioStart=startLinuxShareAudioInner(webContents,generation).finally(()=>{linuxShareAudioStart=null});
+  linuxShareAudioStart=startLinuxShareAudioWithRetry(webContents).finally(()=>{linuxShareAudioStart=null});
   return linuxShareAudioStart;
+}
+async function startLinuxShareAudioWithRetry(webContents) {
+  // pactl info, module-null-sink, and parec can lose a one-shot startup race.
+  // Retry that creation only; a later live capture death still tears the route
+  // down through failCaptureRoute without coming back through this loop.
+  for (let attempt=1; attempt<=3; attempt++) {
+    const generation=linuxShareAudioGeneration;
+    let result=null;
+    try { result=await startLinuxShareAudioInner(webContents,generation); } catch { result=null; }
+    if (result) return result;
+    if (generation!==linuxShareAudioGeneration) return null;
+    if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source };
+    if (attempt===3) return null;
+    const waitUntil=Date.now()+80*attempt;
+    while (Date.now()<waitUntil && generation===linuxShareAudioGeneration) await new Promise(r=>setTimeout(r,20));
+    if (generation!==linuxShareAudioGeneration) return null;
+  }
+  return null;
 }
 function trimLinuxShareAudio(state, targetBytes = LINUX_AUDIO_MAX_BUFFER_BYTES) {
   let discard = Math.max(0, state.pcmBytes - targetBytes);
@@ -190,7 +207,9 @@ async function startLinuxShareAudioInner(webContents,generation) {
   const module = await pipewireAsync('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Knot_Share_Audio']);
   if (!module) return null;
   if(generation!==linuxShareAudioGeneration){await pipewireAsync('pactl',['unload-module',module]);return null}
-  const capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let capture;
+  try { capture = spawn('parec', ['--device', `${sink}.monitor`, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40'], { stdio: ['ignore', 'pipe', 'pipe'] }); }
+  catch { await pipewireAsync('pactl',['unload-module',module]); return null; }
   if(generation!==linuxShareAudioGeneration){
     try { capture.kill('SIGKILL'); } catch {}
     await pipewireAsync('pactl',['unload-module',module]);

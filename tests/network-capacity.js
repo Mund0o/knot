@@ -3,11 +3,11 @@
 const assert = require('assert');
 const {
   mbpsFrom, effectiveUploadCapMbps, voiceBitrateBps, preferAudioRed,
-  recommendShareBudgetMbps, autoShareCeilingMbps, encoderShareCapMbps,
+  recommendShareBudgetMbps, autoShareCeilingMbps, sliderBitrateMaxMbps, classifyShareBuffering, nativeKeyWaitMs, nativeShareRemainingMs, encoderShareCapMbps,
   viewerReceiveCapMbps, minViewerReceiveCapMbps, normalizeNetBudget,
   nextShareBudgetMbps, shouldAdoptShareBudget, abortCapacityProbe,
   cachedCapacityFresh, shouldStopProbe, CACHE_MS, PROBE_VERSION,
-  MAX_NATIVE_SHARE_MBPS, MAX_HARDWARE_WEBRTC_SHARE_MBPS, MAX_SLIDER_MBPS,
+  MAX_NATIVE_SHARE_MBPS, MAX_HARDWARE_WEBRTC_SHARE_MBPS, MAX_SLIDER_MBPS, MAX_SHARE_LATENCY_MS,
   PROBE_WINDOW_MS, PROBE_MIN_BYTES, PROBE_MAX_BYTES,
 } = require('../network-capacity');
 
@@ -74,4 +74,20 @@ assert.strictEqual(cachedCapacityFresh({ uploadMbps: 20, downloadMbps: 80, at: n
 assert.strictEqual(cachedCapacityFresh({ uploadMbps: 20, downloadMbps: 80, at: now - CACHE_MS - 1, probeVersion: PROBE_VERSION }), false);
 assert.strictEqual(cachedCapacityFresh({ uploadMbps: 0, downloadMbps: 80, at: now, probeVersion: PROBE_VERSION }), false);
 assert.ok(MAX_SLIDER_MBPS >= MAX_NATIVE_SHARE_MBPS);
+assert.strictEqual(MAX_NATIVE_SHARE_MBPS, 250, 'GPU encoder ceiling must stay 250 Mbps');
+assert.strictEqual(sliderBitrateMaxMbps(), 250, 'an unmeasured path must still expose the 250 Mbps ceiling');
+assert.strictEqual(sliderBitrateMaxMbps(40, 40), 30, 'a 40 Mbps path must not offer the 250 Mbps slider');
+assert.ok(sliderBitrateMaxMbps(40, 40) < 40, 'the settings slider must stay at the derated safe rate');
+assert.strictEqual(sliderBitrateMaxMbps(2000, 2000), 250, 'gigabit paths must still be allowed the 250 Mbps GPU ceiling');
+assert.strictEqual(classifyShareBuffering({ freezeDelta: 1 }), 'path');
+assert.strictEqual(classifyShareBuffering({ packetsLostDelta: 4 }), 'path');
+assert.strictEqual(classifyShareBuffering({ softwareFallback: true, decodeQueue: 12 }), 'decode');
+assert.strictEqual(classifyShareBuffering({ freezeDelta: 1, softwareFallback: true }), 'path', 'internet under-run must win when decode is also unhappy');
+assert.strictEqual(classifyShareBuffering({}), '');
+assert.strictEqual(MAX_SHARE_LATENCY_MS, 260, 'live share latency must stay at or under 260 ms');
+assert.strictEqual(nativeShareRemainingMs(Date.now()), 260);
+assert.strictEqual(nativeShareRemainingMs(Date.now() - 260), 0, 'a picture older than 260 ms must not be presented');
+assert.ok(nativeKeyWaitMs(2 * 1024 * 1024, 16) >= 800, 'SCTP admit for a 4K key is socket drain time, not viewer delay');
+assert.strictEqual(nativeKeyWaitMs(40 * 1024, 40), 100);
+assert.ok(Math.min(nativeKeyWaitMs(2 * 1024 * 1024, 16), nativeShareRemainingMs(Date.now())) <= 260, 'a live 4K key may only wait the leftover 260 ms budget');
 console.log('PASS network capacity math');

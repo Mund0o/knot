@@ -8,10 +8,16 @@ const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
 // stdout. Pausing back-pressures the capture/encoder pipeline and makes the
 // desktop and Knot compositor visibly stutter when a WAN peer cannot keep up.
 const MAX_QUEUE_BYTES = 8 * 1024 * 1024;
-// Encoder keyint is 0.15s. Trim after two GOPs so a pump that is one key
-// behind still sends a complete picture, instead of dropping the live GOP
-// and freezing until the next IDR. 8 MiB overflow still force-trims.
-const GOP_STALE_MS = 280;
+// One IPC drain should empty a live 4K GOP: a key is routinely >1 MiB, and
+// 0.15s keyint at 60 fps is ~9–16 clusters plus init. Cap at the capture
+// queue so a 4K key is not split from its deltas.
+const READ_MANY_MAX_ITEMS = 32;
+const READ_MANY_MAX_BYTES = MAX_QUEUE_BYTES;
+// Encoder keyint is 0.15s. Trim at the 260 ms live-latency cap so a queued
+// GOP cannot be older than the viewer will present. A pump that is one key
+// behind (150 ms) still sends a complete picture. 8 MiB overflow still
+// force-trims.
+const GOP_STALE_MS = 260;
 const MAX_SEGMENT_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_READ_WAITERS = 4;
 const STOP_TERM_DELAY_MS = 1500;
@@ -330,15 +336,32 @@ class NativeScreenService {
     const videoOptions=info.vendor==='nvidia'?['-ffmpeg-video-opts','spatial-aq=1;aq-strength=8;rc-lookahead=0;strict_gop=1']:[];
     const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'content', '-bm', bitrateMode, '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '0.15', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm', ...videoOptions, '-ffmpeg-opts', 'cluster_time_limit=0'];
     const child = this.spawnRecorder(runner, args);
-    const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', errorReported: false, active: true, stopping: false, stderr: '', seq: 0, discontinuity: false, droppedSegments: 0, segmenter: new WebmClusterSegmenter() };
+    const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', errorReported: false, active: true, stopping: false, stderr: '', seq: 0, discontinuity: false, droppedSegments: 0, segmenter: new WebmClusterSegmenter(), pending: [], haveInit: false, haveKey: false };
     this.session = session;
     const reportSessionError=()=>{if(session.error&&!session.errorReported){session.errorReported=true;this.onError(session.error)}};
+    const deliver = item => {
+      const waiter = session.waiters.shift();if (waiter) waiter(item);else { session.queue.push(item);session.queueBytes += item.data.length; }
+      trimNativeCaptureQueue(session);
+    };
     const enqueue = segment => {
       const data = Buffer.isBuffer(segment.data) ? segment.data : Buffer.from(segment.data);
       const meta = segment.kind === 'cluster' ? webmAv1FrameMeta(data, fps) : { key: false, frameCount: 0 };
       const item = { kind: segment.kind, key: !!meta.key, frameCount: meta.frameCount || 0, seq: session.seq++, capturedAt: Date.now(), data };
-      const waiter = session.waiters.shift();if (waiter) waiter(item);else { session.queue.push(item);session.queueBytes += item.data.length; }
-      trimNativeCaptureQueue(session);
+      // Recorders emit WebM init as soon as the first Cluster ID appears, before a key picture exists.
+      if (!session.haveInit || !session.haveKey) {
+        if (item.kind === 'init' && item.data.length) session.haveInit = true;
+        if (item.kind === 'cluster' && item.key) session.haveKey = true;
+        session.pending.push(item);
+        if (!session.haveInit || !session.haveKey) return;
+        const pending = session.pending.splice(0);let seenKey = false;
+        for (const held of pending) {
+          if (held.kind === 'init') deliver(held);
+          else if (held.key) { seenKey = true;deliver(held); }
+          else if (seenKey) deliver(held);
+        }
+        return;
+      }
+      deliver(item);
     };
     child.stdout.on('data', chunk => {
       if(!session.active||session.stopping)return;
@@ -382,7 +405,7 @@ class NativeScreenService {
   readMany(id, options={}) {
     const session = this.session;if (!session || session.id !== id) return { active: false, items: [] };
     trimNativeCaptureQueue(session);
-    const maxItems=Math.max(1,Math.min(8,Number(options.maxItems)||4)),maxBytes=Math.max(1,Math.min(2*1024*1024,Number(options.maxBytes)||1024*1024));
+    const maxItems=Math.max(1,Math.min(READ_MANY_MAX_ITEMS,Number(options.maxItems)||READ_MANY_MAX_ITEMS)),maxBytes=Math.max(1,Math.min(READ_MANY_MAX_BYTES,Number(options.maxBytes)||READ_MANY_MAX_BYTES));
     const items=[];let bytes=0;
     while (session.queue.length && items.length<maxItems && bytes<maxBytes) {
       const item=session.queue.shift();session.queueBytes-=item.data.length;bytes+=item.data.length;items.push(this.packQueueItem(session, item));
@@ -392,7 +415,7 @@ class NativeScreenService {
 
   stop(id) {
     const session = this.session;if (!session || (id && session.id !== id) || session.stopping) return false;session.active = false;session.stopping = true;
-    while (session.waiters.length) session.waiters.shift()(null);session.queue.length=0;session.queueBytes=0;session.segmenter.queue.clear();
+    while (session.waiters.length) session.waiters.shift()(null);session.queue.length=0;session.queueBytes=0;session.pending.length=0;session.segmenter.queue.clear();
     const stopped=new Promise(resolve=>{session.resolveStopped=resolve});
     const retiring=stopped.finally(()=>{if(this.retiring===retiring)this.retiring=null});
     this.retiring=retiring;
@@ -409,4 +432,4 @@ class NativeScreenService {
   }
 }
 
-module.exports = { gpuScreenRecorderCommand, gpuScreenRecorderCommandAsync, parseInfo, validateNativeScreenInfo, nativeScreenInfo, nativeScreenInfoAsync, ByteQueue, WebmClusterSegmenter, NativeScreenService, GOP_STALE_MS, trimNativeCaptureQueue };
+module.exports = { gpuScreenRecorderCommand, gpuScreenRecorderCommandAsync, parseInfo, validateNativeScreenInfo, nativeScreenInfo, nativeScreenInfoAsync, ByteQueue, WebmClusterSegmenter, NativeScreenService, GOP_STALE_MS, MAX_QUEUE_BYTES, READ_MANY_MAX_ITEMS, READ_MANY_MAX_BYTES, trimNativeCaptureQueue };

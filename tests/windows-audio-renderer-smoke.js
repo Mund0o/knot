@@ -77,7 +77,27 @@ app.whenReady().then(async () => {
       let inboundAudio=0;for(const report of (await receiver.getStats()).values())if(report.type==='inbound-rtp'&&(report.kind==='audio'||report.mediaType==='audio'))inboundAudio+=Number(report.bytesReceived)||0;
       assert(inboundAudio>0,'the receiver did not receive cross-platform call/screen audio RTP');
       sender.close();receiver.close();pc=null;voice.oscillator.stop();screen.oscillator.stop();voice.track.stop();screen.track.stop();voice.context.close().catch(()=>{});screen.context.close().catch(()=>{});senderSilentContext.close().catch(()=>{});cleanupRemoteNativeScreen();remoteScreenExpected=false;remoteNativeScreenExpected=false;remoteScreen.hidden=true;screenExpanded=false;callActive=false;
-      return{peak,trim,calls,inboundAudio};
+
+      const savedLinux=linuxShareAudioTrack,savedWin=setupNativeScreenCapture;let captureAttempts=0,fakeCleanup=null;
+      const fakeTrack=async()=>{
+        captureAttempts++;
+        if(captureAttempts===1)return null;
+        const context=new AudioContext({sampleRate:48000}),destination=context.createMediaStreamDestination(),track=destination.stream.getAudioTracks()[0];
+        fakeCleanup=()=>{try{track.stop()}catch{};try{context.close()}catch{}};
+        return track;
+      };
+      linuxShareAudioTrack=fakeTrack;setupNativeScreenCapture=fakeTrack;
+      const recovered=await acquireIsolatedShareAudioTrack();
+      assert(captureAttempts===2&&recovered?.readyState==='live','isolated share audio gave up after a single startup race');
+      fakeCleanup?.();
+      let createAfterCancel=0;
+      linuxShareAudioTrack=async()=>{createAfterCancel++;return null};
+      setupNativeScreenCapture=async()=>{createAfterCancel++;return null};
+      const cancelled=await acquireIsolatedShareAudioTrack(()=>createAfterCancel<1);
+      assert(!cancelled&&createAfterCancel===1,'capture retry continued after the share was torn down');
+      linuxShareAudioTrack=savedLinux;setupNativeScreenCapture=savedWin;
+
+      return{peak,trim,calls,inboundAudio,captureAttempts};
     })()`, true);
     console.log('PASS Windows audio renderer packet flow and output routing', JSON.stringify(result));
     window.destroy();

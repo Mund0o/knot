@@ -1,7 +1,7 @@
 const assert = require('assert');
 const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
-const { parseInfo, validateNativeScreenInfo, WebmClusterSegmenter, nativeScreenInfo, nativeScreenInfoAsync, NativeScreenService, GOP_STALE_MS, trimNativeCaptureQueue } = require('../native-screen');
+const { parseInfo, validateNativeScreenInfo, WebmClusterSegmenter, nativeScreenInfo, nativeScreenInfoAsync, NativeScreenService, GOP_STALE_MS, MAX_QUEUE_BYTES, READ_MANY_MAX_ITEMS, READ_MANY_MAX_BYTES, trimNativeCaptureQueue } = require('../native-screen');
 
 const parsed = parseInfo('section=gpu_info\nvendor|nvidia\ncard_path|/dev/dri/card1\nsection=video_codecs\nh264\nav1\nav1_10bit\n');
 assert.deepStrictEqual(parsed, { vendor: 'nvidia', cardPath: '/dev/dri/card1', codecs: ['h264', 'av1', 'av1_10bit'] });
@@ -142,6 +142,42 @@ if (live.supported) {
   assert.strictEqual(drained.items[1].kind,'cluster');
   assert.strictEqual(drained.items[1].key,true,'native enqueue no longer classifies AV1 key clusters without copying payloads');
   assert.strictEqual(drained.items[1].frameCount,1);
+  assert.ok(READ_MANY_MAX_ITEMS >= 16 && READ_MANY_MAX_ITEMS > 8, 'readMany item cap cannot drain a 60 fps GOP');
+  assert.ok(READ_MANY_MAX_BYTES >= MAX_QUEUE_BYTES && READ_MANY_MAX_BYTES > 2*1024*1024, 'readMany byte cap is below the capture queue and splits 4K keys from their deltas');
+  const keyBytes=Buffer.alloc(1536*1024,0x11),deltaBytes=Buffer.alloc(48*1024,0x22),now=Date.now();
+  const gopItems=[{kind:'init',key:false,frameCount:0,seq:100,capturedAt:now,data:Buffer.from('4k-init')},{kind:'cluster',key:true,frameCount:1,seq:101,capturedAt:now,data:keyBytes}];
+  for(let i=0;i<12;i++)gopItems.push({kind:'cluster',key:false,frameCount:1,seq:102+i,capturedAt:now,data:deltaBytes});
+  classify.session.queue.push(...gopItems);
+  classify.session.queueBytes=gopItems.reduce((n,item)=>n+item.data.length,0);
+  const gop=classify.readMany(live.id);
+  assert.strictEqual(gop.items.length,gopItems.length,'4K GOP drain left live clusters sitting in the capture queue');
+  assert.ok(gop.items[1].data.length>1024*1024,'4K key cluster was not returned in the same drain as its deltas');
+  assert.strictEqual(classify.session.queue.length,0,'readMany left clusters in the capture queue after a 4K GOP drain');
+  assert.deepStrictEqual(classify.readMany(live.id).items,[],'follow-up 4K drain invented extra clusters');
+
+  const startup = new NativeScreenService({
+    _spawnRecorder: spawnFake,
+    _recorderRunner: () => ({ command: '/fixture/recorder', prefix: [], source: 'fixture' }),
+    _stopDelays: { term: 10, kill: 20 }
+  });
+  startup.infoAsync = async () => supported;
+  const startupLive = startup.start({bitrateKbps:100}, supported);
+  const deltaBlock=Buffer.concat([Buffer.from([0x81,0x00,0x02,0x00]),payload]);
+  const deltaBody=Buffer.concat([Buffer.from([0xe7,0x81,0x05,0xa3,0x80|deltaBlock.length]),deltaBlock]);
+  children.at(-1).stdout.write(Buffer.concat([Buffer.from('init-bytes'), Buffer.from([0x1f, 0x43, 0xb6, 0x75])]));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepStrictEqual(startup.readMany(startupLive.id).items, [], 'native enqueue published an init before a complete key cluster');
+  children.at(-1).stdout.write(Buffer.concat([Buffer.from([0x80|deltaBody.length]), deltaBody]));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepStrictEqual(startup.readMany(startupLive.id).items, [], 'native enqueue published a delta cluster before the first key picture');
+  children.at(-1).stdout.write(cluster);
+  await new Promise(resolve=>setImmediate(resolve));
+  const started=startup.readMany(startupLive.id);
+  assert.strictEqual(started.items.length,2,'native enqueue dropped the init or first key after the picture was complete');
+  assert.strictEqual(started.items[0].kind,'init');
+  assert.strictEqual(started.items[1].kind,'cluster');
+  assert.strictEqual(started.items[1].key,true,'native enqueue released a non-key cluster as the first picture');
+  await startup.stopAsync(startupLive.id);
 
   const lag = new NativeScreenService({
     _spawnRecorder: spawnFake,
@@ -155,6 +191,7 @@ if (live.supported) {
   const staleKey = lag.session.queue.find(item => item.key);
   assert(staleKey, 'fixture cluster was not classified as a key');
   assert.ok(GOP_STALE_MS > 150, 'capture GOP trim is tighter than one keyint and freezes the live picture');
+  assert.strictEqual(GOP_STALE_MS, 260, 'capture queue must match the 260 ms live latency cap');
   staleKey.capturedAt = Date.now() - 200;
   const queuedBefore = lag.session.queue.length;
   trimNativeCaptureQueue(lag.session);

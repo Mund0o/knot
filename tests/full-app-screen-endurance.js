@@ -237,7 +237,7 @@ async function main() {
   assert.strictEqual(sender.fallbacks,0,'healthy full-app sender requested fallback: '+JSON.stringify({messages:sender.fallbackMessages,decodeErrors:receiver.decodeErrors}));
   assert(receiver.decoderLive,'receiver AV1 player stopped');
   assert(['track','video'].includes(receiver.presentationMode),'receiver copied every 4K frame through the app renderer');
-  assert.strictEqual(receiver.latencyExceeded,false,'receiver remained above the AV1 180ms processing ceiling');
+  assert.strictEqual(receiver.latencyExceeded,false,'receiver remained above the AV1 260ms processing ceiling');
   if(receiver.backend==='webcodecs'&&!receiver.softwareFallback&&receiver.steadyStateP95Ms)assert(receiver.steadyStateP95Ms<=110,`receiver AV1 processing p95 reached ${receiver.steadyStateP95Ms.toFixed(0)}ms`);
   assert(receiver.decodedFrames>=Math.floor(durationMs/1000*45),`receiver decoded only ${receiver.decodedFrames} frames`);
   assert(receiver.paintedFrames>=Math.floor(durationMs/1000*45),`receiver displayed only ${receiver.paintedFrames} frames`);
@@ -247,7 +247,7 @@ async function main() {
   assert(receiver.presentationDroppedFrames/receiver.decodedFrames<.08,`receiver presentation dropped ${(receiver.presentationDroppedFrames/receiver.decodedFrames*100).toFixed(1)}% of frames`);
   if(cadenceReceiver.renderFps)assert(cadenceReceiver.renderFps>=50,`receiver live presentation averaged only ${cadenceReceiver.renderFps.toFixed(1)} fps`);
   if(cadenceReceiver.renderCadenceP95Ms)assert(cadenceReceiver.renderCadenceP95Ms<=40,`receiver live presentation cadence p95 was ${cadenceReceiver.renderCadenceP95Ms.toFixed(1)}ms`);
-  if(cadenceReceiver.backend==='mse'&&cadenceReceiver.steadyStateP95Ms)assert(cadenceReceiver.steadyStateP95Ms<=180.000001,`MediaSource live latency exceeded the 180ms ceiling: ${cadenceReceiver.steadyStateP95Ms.toFixed(0)}ms`);
+  if(cadenceReceiver.backend==='mse'&&cadenceReceiver.steadyStateP95Ms)assert(cadenceReceiver.steadyStateP95Ms<=260.000001,`MediaSource live latency exceeded the 260ms ceiling: ${cadenceReceiver.steadyStateP95Ms.toFixed(0)}ms`);
   assert.deepStrictEqual({width:receiver.width,height:receiver.height},{width:3840,height:2160});
   assert(sender.audioPackets>=Math.floor(durationMs/1000*30),`sender voice produced only ${sender.audioPackets} packets`);
   assert(receiver.audioPackets>=Math.floor(durationMs/1000*30),`receiver voice received only ${receiver.audioPackets} packets`);
