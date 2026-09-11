@@ -129,7 +129,7 @@ function publishCallState(active){
 }
 function applyRemoteCallState(active,session=''){
   if(friendHeartbeatTimer){clearTimeout(friendHeartbeatTimer);friendHeartbeatTimer=null}
-  if(active){const wasPresent=friendInCall;remoteCallSessionId=String(session||remoteCallSessionId||'legacy');friendLeftNotified=false;setFriendPresence(true,{animate:true,sound:callActive});renderCallPeerProfile();setRemoteCallAudio(callActive);if(callActive){stopCallTone();ensureRemoteSpeakingMonitor()}else if(!wasPresent)startCallTone('ring',6);friendHeartbeatTimer=setTimeout(()=>{friendHeartbeatTimer=null;if(friendInCall)applyRemoteCallState(false,'heartbeat-expired')},12000);return}
+  if(active){const wasPresent=friendInCall;remoteCallSessionId=String(session||remoteCallSessionId||'legacy');friendLeftNotified=false;setFriendPresence(true,{animate:true,sound:callActive});renderCallPeerProfile();if(callActive){if(!audioCtx?.audioSink||remoteAudio.paused)setRemoteCallAudio(true);else{try{audioCtx.resume()}catch{};ensureRemoteSpeakingMonitor()}stopCallTone();ensureRemoteSpeakingMonitor()}else if(!wasPresent)startCallTone('ring',6);friendHeartbeatTimer=setTimeout(()=>{friendHeartbeatTimer=null;if(friendInCall)applyRemoteCallState(false,'heartbeat-expired')},12000);return}
   const wasPresent=friendInCall;remoteCallSessionId='';stopCallTone();setFriendPresence(false,{animate:true,sound:false});stopSpeakingMonitor('dm-friend');clearRemoteScreenShare('Friend left the call');if(!callActive)dmCallPeerId='';if(wasPresent&&!friendLeftNotified){friendLeftNotified=true;playSound(callActive?'friend-leave':'leave')}if(callActive){callStatus.textContent='Waiting for your friend';callStatus.className='call-status ringing';startCallTone('calling',3)}else{callStatus.textContent='Friend left the call';callStatus.className='call-status'}renderDmVoiceUI();renderFriends();
 }
 function logCallEvent(text){const e=document.createElement('div'),time=document.createElement('span');e.className='log-entry';time.className='log-time';time.textContent=new Date().toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});e.append(time,document.createTextNode(String(text)));voiceLog.append(e)}
@@ -170,10 +170,11 @@ function setupPermanentAudioSink(){
       return
     }
     if(ctx._pairSinkArmed)ctx._pairSinkArmed=false;
+    if(ctx.audioSink&&ctx.audioSinkStream===st){if(ctx.state==='suspended')try{ctx.resume()}catch{};return}
     if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}
     if(!ctx.audioGain){ctx.audioGain=ctx.createGain();ctx.audioGain.connect(ctx.destination)}
     let routed=false;
-    try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.audioGain);ctx.audioSink=src;routed=true}catch{}
+    try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.audioGain);ctx.audioSink=src;ctx.audioSinkStream=st;routed=true}catch{}
     ctx.audioUsesElement=!routed;
     if(!routed){const value=Math.max(0,Math.min(1,(Number(volumeSlider.value)||100)/100));remoteAudio.volume=value;remoteAudio.muted=false}
     (async()=>{try{const saved=parseFloat(await ss('volume'));setCallVolume(saved>0&&saved<=1?Math.round(saved*100):100,false)}catch{setCallVolume(Number(volumeSlider.value)||100,false)}})()
@@ -877,7 +878,7 @@ const ICE_SERVERS=CONFIGURED_ICE_SERVERS.length?CONFIGURED_ICE_SERVERS:DEFAULT_I
 function iceUrls(item){return Array.isArray(item?.urls)?item.urls:[item?.urls]}
 function hasTurnUrl(item){return iceUrls(item).some(url=>typeof url==='string'&&/^(?:turn|turns):/i.test(url))}
 function directIceServers(){const stun=ICE_SERVERS.map(item=>{const urls=iceUrls(item).filter(url=>typeof url==='string'&&/^stun:/i.test(url));return urls.length?{urls}:null}).filter(Boolean);return stun.length?stun:DEFAULT_ICE_SERVERS}
-let dmIceServers=directIceServers(),turnIceServers=CONFIGURED_ICE_SERVERS.filter(hasTurnUrl),turnCredentialWaiter=null,turnCredentialPending=null,relayVoiceMode=false,dmMediaPlan=null;
+let dmIceServers=directIceServers(),turnIceServers=CONFIGURED_ICE_SERVERS.filter(hasTurnUrl),turnIssuedAt=0,turnCredentialWaiter=null,turnCredentialPending=null,relayVoiceMode=false,dmMediaPlan=null;
 function viableScreenPeer(target=pc){return !!target&&target===pc&&!['failed','disconnected','closed'].includes(String(target.connectionState||''))&&target.signalingState!=='closed'}
 function setupPeer(){
   abortCurrentFileSession('Connection replaced');
@@ -898,7 +899,7 @@ function setupPeer(){
     try{oldPc.close()}catch{}
   }
   pc=new RTCPeerConnection({iceServers:dmIceServers,iceTransportPolicy:relayVoiceMode?'relay':'all'});const peer=pc;peer.onicecandidate=()=>{};let wasEverConnected=false;
-  peer.onconnectionstatechange=()=>{if(pc!==peer)return;const state=peer.connectionState;if(state==='connected'){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=relayVoiceMode;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}if(callActive)publishCallState(true);if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;releaseCallMicrophone();callActive=false;startCall()}}else{setStatus(relayVoiceMode?'Voice relay active · files and screen share stay P2P':'Connected directly',true);friendLeftNotified=false}}if(state==='disconnected'){if(!peer._disconnectGrace)peer._disconnectGrace=setTimeout(()=>{if(pc===peer&&['disconnected','failed'].includes(peer.connectionState))setStatus('disconnected')},6000);return}if(['failed','closed'].includes(state)){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(callActive)publishCallState(false);if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=true;abortScreenSharePicker();if(screenActive||screenStarting||screenStream||nativeScreenSession)void stopScreenShare(true);else screenGen++;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}applyRemoteCallState(false);if(directFileId)closeTcpLane();setStatus(state)}if(state==='connecting'){pairHint.textContent=(relayVoiceMode?'Connecting low-bandwidth voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…';armConnectTimeout()}};peer.oniceconnectionstatechange=()=>{if(pc!==peer)return;if(peer.iceConnectionState==='failed'){pairHint.textContent=relayVoiceMode?'Voice relay failed. Text will keep working, but this network cannot reach the relay.':'Direct peer connection failed; retrying before the low-bandwidth voice relay.'}else if(peer.iceConnectionState==='checking'||peer.iceConnectionState==='connected'){pairHint.textContent=(relayVoiceMode?'Connecting voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…'}};peer.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else if(!relayVoiceMode)files=e.channel;wire()};
+  peer.onconnectionstatechange=()=>{if(pc!==peer)return;const state=peer.connectionState;if(state==='connected'){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=relayVoiceMode;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}if(callActive)publishCallState(true);if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;releaseCallMicrophone();callActive=false;startCall()}}else{setStatus(relayVoiceMode?'Voice relay active · files and screen share stay P2P':'Connected directly',true);friendLeftNotified=false}}if(state==='disconnected'){if(!peer._disconnectGrace)peer._disconnectGrace=setTimeout(()=>{if(pc!==peer)return;if(callActive&&['disconnected','failed'].includes(peer.connectionState))void restartDirectIce();else if(['disconnected','failed'].includes(peer.connectionState))setStatus('disconnected')},4000);return}if(state==='failed'&&callActive){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}void restartDirectIce();return}if(['failed','closed'].includes(state)){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(callActive)publishCallState(false);if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=true;abortScreenSharePicker();if(screenActive||screenStarting||screenStream||nativeScreenSession)void stopScreenShare(true);else screenGen++;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}applyRemoteCallState(false);if(directFileId)closeTcpLane();setStatus(state)}if(state==='connecting'){pairHint.textContent=(relayVoiceMode?'Connecting low-bandwidth voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…';armConnectTimeout()}};peer.oniceconnectionstatechange=()=>{if(pc!==peer)return;if(peer.iceConnectionState==='failed'){pairHint.textContent=relayVoiceMode?'Voice relay failed. Text will keep working, but this network cannot reach the relay.':'Direct peer connection failed; retrying before the low-bandwidth voice relay.'}else if(peer.iceConnectionState==='checking'||peer.iceConnectionState==='connected'){pairHint.textContent=(relayVoiceMode?'Connecting voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…'}};peer.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else if(!relayVoiceMode)files=e.channel;wire()};
   peer.addEventListener('connectionstatechange',()=>{if(pc!==peer||peer.connectionState!=='connected'||callActive||callStarting||pendingVoiceStartPeerId!==dmPeerId)return;pendingVoiceStartPeerId='';startCall()});
   const baseDirectDataChannel=pc.ondatachannel;pc.ondatachannel=event=>{if(event.channel.label==='knot-screen-native'){wireNativeScreenChannel(event.channel,{remote:true});return}baseDirectDataChannel(event)};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
@@ -950,13 +951,14 @@ function setupPeer(){
       // after its video track is replaced, leaving Windows standard shares
       // visibly live but silent. The dedicated element gives standard and AV1
       // shares the same reliable playback, output-device, and volume route.
-      const audio=ensureNativeRemoteAudio();audio.srcObject=stream;applyMediaElementOutput(audio).catch(()=>{});audio.volume=remoteScreen.volume;audio.muted=remoteScreenSuppressed||audio.volume===0;e.track.enabled=true;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
+      const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio.volume=remoteScreen.volume;audio.muted=remoteScreenSuppressed||audio.volume===0;e.track.enabled=true;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
+      applyMediaElementOutput(audio).catch(()=>{});
       const play=()=>{if(!remoteScreenSuppressed&&audio.srcObject===stream){e.track.enabled=true;audio.volume=remoteScreen.volume;audio.muted=audio.volume===0;if(!audio.muted)audio.play().catch(()=>{})}};
       logCallEvent((remoteNativeScreenExpected||nativeRemotePlayer||remoteNativeScreenChannel)?'Native screen audio received':'Screen audio received');screenAudioDebug=' · audio received';screenStatus.textContent='Friend sharing'+screenAudioDebug;updateScreenLayout();play();
       if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
-    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){const receiver=pc.getReceivers().find(value=>value.track===e.track);remoteScreenDecodeStop?.();remoteScreenDecodeStop=receiver?monitorRemoteScreenDecode(receiver,e.track,null,()=>!remoteScreen.hidden&&!remoteScreenSuppressed&&!remoteScreen.paused):null;prepareShareSurface(remoteScreen);remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};watchDmShare('remote');e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
+    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){const receiver=pc.getReceivers().find(value=>value.track===e.track);remoteScreenDecodeStop?.();remoteScreenDecodeStop=receiver?monitorRemoteScreenDecode(receiver,e.track,null,()=>!remoteScreen.hidden&&!remoteScreenSuppressed&&!remoteScreen.paused):null;prepareShareSurface(remoteScreen);remoteScreen.hidden=false;try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};prepareShareSurface(remoteScreen);watchDmShare('remote');e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
 }
 function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
   let latencyTargetMs=45;const applyLatencyTarget=value=>{latencyTargetMs=Math.min(NATIVE_SCREEN_LATENCY_CEILING_MS,value);try{receiver.playoutDelayHint=latencyTargetMs/1000}catch{}try{if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=latencyTargetMs}catch{}};applyLatencyTarget(latencyTargetMs);
@@ -1237,7 +1239,7 @@ function unbundleOpusCollision(sdp){
   }).join('');
 }
 function patchOpusSection(section,kind){
-  const voice=kind==='voice',bitrate=relayVoiceMode?24000:voice?targetVoiceBitrate():256000,playback=relayVoiceMode?16000:48000,stereo=relayVoiceMode||voice?0:1,dtx=relayVoiceMode||voice?1:0;
+  const voice=kind==='voice',bitrate=relayVoiceMode?24000:voice?targetVoiceBitrate():256000,playback=relayVoiceMode?16000:48000,stereo=relayVoiceMode||voice?0:1,dtx=0;
   const pt=(section.match(/a=rtpmap:(\d+) opus\//i)||[])[1]||'111';
   const patched=section.replace(new RegExp('a=fmtp:'+pt+'[^\\r\\n]*','g'),m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate='+bitrate;else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate='+bitrate);if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate='+playback;else m=m.replace(/maxplaybackrate=\d+/,'maxplaybackrate='+playback);if(!m.includes('maxptime'))m+='; maxptime=20';else m=m.replace(/maxptime=\d+/,'maxptime=20');if(!m.includes('minptime'))m+='; minptime=10';else m=m.replace(/minptime=\d+/,'minptime=10');if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx='+dtx;else m=m.replace(/usedtx=[01]/,'usedtx='+dtx);if(!m.includes('cbr'))m+='; cbr=1';if(!m.includes('stereo'))m+='; stereo='+stereo;else m=m.replace(/stereo=[01]/,'stereo='+stereo);if(!m.includes('sprop-stereo'))m+='; sprop-stereo='+stereo;else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo='+stereo);return m});
   return /a=fmtp:/.test(patched)?patched:patched.replace(new RegExp('(a=rtpmap:'+pt+' opus/[^\\r\\n]*)'),'$1\r\na=fmtp:'+pt+' minptime=10;useinbandfec=1;maxaveragebitrate='+bitrate+';maxplaybackrate='+playback+';maxptime=20;usedtx='+dtx+';cbr=1;stereo='+stereo+';sprop-stereo='+stereo);
@@ -1564,7 +1566,7 @@ async function createDeepFilterMicrophone(rawStream){
     urls=[URL.createObjectURL(new Blob([wasmBytes],{type:'application/wasm'})),URL.createObjectURL(new Blob([modelBytes],{type:'application/gzip'}))];
     const {DeepFilterNet3Core}=await deepFilterLibrary(),processor=new DeepFilterNet3Core({sampleRate:48000,noiseReductionLevel:80});
     processor.assetLoader.getAssetUrls=()=>({wasm:urls[0],model:urls[1]});await processor.initialize();
-    const source=context.createMediaStreamSource(rawStream),node=await processor.createAudioWorkletNode(context),destination=context.createMediaStreamDestination();source.connect(node).connect(destination);
+    const source=context.createMediaStreamSource(rawStream),node=await processor.createAudioWorkletNode(context),destination=context.createMediaStreamDestination(),keepAlive=context.createGain();keepAlive.gain.value=0;keepAlive.connect(context.destination);source.connect(node).connect(destination);
     const track=destination.stream.getAudioTracks()[0];if(!track)throw new Error('DeepFilterNet3 did not create a microphone track');
     return {context,source,node,destination,processor,urls,stream:new MediaStream([track])};
   }catch(error){for(const url of urls)try{URL.revokeObjectURL(url)}catch{}try{await context.close()}catch{}throw error}
@@ -1575,7 +1577,7 @@ async function createRnnoiseMicrophone(rawStream){
   try{
     await context.resume();const {module,root}=await rnnoiseLibrary(),assets=module.rnnoise_loadAssets({scriptSrc:new URL('rnnoise.worklet.js',root).href,moduleSrc:new URL('rnnoise.wasm',root).href});
     await module.RNNoiseNode.register(context,assets);
-    const source=context.createMediaStreamSource(rawStream),node=new module.RNNoiseNode(context),destination=context.createMediaStreamDestination();source.connect(node).connect(destination);
+    const source=context.createMediaStreamSource(rawStream),node=new module.RNNoiseNode(context),destination=context.createMediaStreamDestination(),keepAlive=context.createGain();keepAlive.gain.value=0;keepAlive.connect(context.destination);source.connect(node).connect(destination);
     const track=destination.stream.getAudioTracks()[0];if(!track)throw new Error('RNNoise did not create a microphone track');
     return {context,source,node,destination,stream:new MediaStream([track])};
   }catch(error){try{await context.close()}catch{}throw error}
@@ -1598,13 +1600,13 @@ function suspendDirectCallForPeerReplacement(){
 }
 function screenShareOutputElements(){const elements=[remoteScreen,nativeRemoteAudio];for(const state of serverPeers.values())elements.push(state.screen,state.screenAudio);return[...new Set(elements.filter(Boolean))]}
 function mediaOutputElements(){const elements=[remoteAudio,...screenShareOutputElements()];for(const state of serverPeers.values())elements.push(...(state.audios||[]));return[...new Set(elements.filter(Boolean))]}
-async function applyMediaElementOutput(element,sinkId=outputDeviceId||'default'){if(!element||typeof element.setSinkId!=='function')return false;await element.setSinkId(sinkId);return true}
+async function applyMediaElementOutput(element,sinkId=outputDeviceId||'default'){if(!element)return false;try{if(typeof element.setSinkId==='function')await element.setSinkId(sinkId)}finally{if(element.srcObject&&!element.muted)element.play().catch(()=>{})}return true}
 async function applyOutputDevice(){const sinkId=outputDeviceId||'default',tasks=[];if(audioCtx&&typeof audioCtx.setSinkId==='function')tasks.push(audioCtx.setSinkId(sinkId));for(const element of mediaOutputElements())if(typeof element.setSinkId==='function')tasks.push(element.setSinkId(sinkId));if(!tasks.length){deviceHint.textContent='Speaker selection is not supported on this system.';return}const results=await Promise.allSettled(tasks),failed=results.filter(result=>result.status==='rejected').length;if(failed===results.length)deviceHint.textContent='Could not use that speaker. Try the system default.';else if(failed)deviceHint.textContent='Speaker selection applied to available audio routes.';else deviceHint.textContent='Speaker selection applied.'}
 function stopMicrophoneTest(){try{micTestSource?.disconnect()}catch{}try{micTestGain?.disconnect()}catch{}const streams=[micTestStream,micTestRawStream];micTestStream=null;micTestRawStream=null;for(const stream of new Set(streams.filter(Boolean)))try{stream.getTracks().forEach(track=>track.stop())}catch{}stopVoiceNoisePipeline(micTestNoisePipeline);micTestNoisePipeline=null;micTestSource=micTestGain=null;testMicrophone.textContent='Test microphone'}
 async function toggleMicrophoneTest(){if(micTestStream){stopMicrophoneTest();deviceHint.textContent='Microphone test stopped.';return}if(localStream||serverVoiceStream){deviceHint.textContent='Leave voice before testing the microphone.';return}try{const ctx=sfxCtx();if(!ctx)throw new Error('Audio output unavailable');await ctx.resume();const raw=await navigator.mediaDevices.getUserMedia(microphoneConstraints({echoCancellation:false}));micTestRawStream=raw;micTestStream=raw;let mode='Raw microphone';if(noiseReductionMode!=='off')try{const pipeline=noiseReductionMode==='deepfilter'?await createDeepFilterMicrophone(raw):await createRnnoiseMicrophone(raw);micTestNoisePipeline=pipeline;micTestStream=pipeline.stream;mode=noiseReductionMode==='deepfilter'?'DeepFilterNet3':'RNNoise'}catch(error){const name=noiseReductionMode==='deepfilter'?'DeepFilterNet3':'RNNoise';console.warn(name+' microphone test filter unavailable:',error);deviceHint.textContent=name+' could not start for the test, so you are hearing the raw microphone.'}micTestSource=ctx.createMediaStreamSource(micTestStream);micTestGain=ctx.createGain();micTestGain.gain.value=1;micTestSource.connect(micTestGain).connect(ctx.destination);testMicrophone.textContent='Stop microphone test';if(!deviceHint.textContent.includes('could not start'))deviceHint.textContent=mode+' monitor live. This is the same noise-reduction mode used in calls; use headphones to avoid feedback.';await refreshAudioDevices()}catch{stopMicrophoneTest();deviceHint.textContent='Could not start the microphone test. Check the selected device and permission.'}}
 function formatPushToTalkKey(code){return ({Space:'Space',Escape:'Esc',ControlLeft:'Left Ctrl',ControlRight:'Right Ctrl',AltLeft:'Left Alt',AltRight:'Right Alt',ShiftLeft:'Left Shift',ShiftRight:'Right Shift',MetaLeft:'Left Super',MetaRight:'Right Super'})[code]||code.replace(/^Key/,'').replace(/^Digit/,'')}
 function updatePushToTalkUI(){const enabled=voiceInputModeValue==='ptt';pushToTalkSettings.hidden=!enabled;voiceInputMode.value=voiceInputModeValue;pushToTalkKeyButton.textContent=pushToTalkCapturing?'Press a key…':formatPushToTalkKey(pushToTalkKey);pushToTalkDelayInput.value=String(pushToTalkDelay);pushToTalkDelayValue.textContent=pushToTalkDelay+' ms'}
-function applyMicTransmission(){if(!localStream)return;const open=!micMuted&&(voiceInputModeValue!=='ptt'||pushToTalkHeld);voiceInputTracks().forEach(track=>track.enabled=open);if(callActive&&voiceInputModeValue==='ptt'&&!micMuted){muteBtn.textContent=pushToTalkHeld?'Talking…':'Hold '+formatPushToTalkKey(pushToTalkKey);muteBtn.title='Push to talk is enabled in Settings'}}
+function applyMicTransmission(){if(!localStream)return;const open=!micMuted&&(voiceInputModeValue!=='ptt'||pushToTalkHeld);localStream.getAudioTracks().forEach(track=>track.enabled=open);if(voiceNoisePipeline)localMicrophoneStream?.getAudioTracks?.().forEach(track=>{track.enabled=true});else if(!voiceNoisePipeline)voiceInputTracks().forEach(track=>track.enabled=open);if(callActive&&voiceInputModeValue==='ptt'&&!micMuted){muteBtn.textContent=pushToTalkHeld?'Talking…':'Hold '+formatPushToTalkKey(pushToTalkKey);muteBtn.title='Push to talk is enabled in Settings'}}
 function releasePushToTalk(){pushToTalkReleaseTimer=null;pushToTalkHeld=false;applyMicTransmission()}
 voiceInputMode.onchange=()=>{voiceInputModeValue=voiceInputMode.value==='ptt'?'ptt':'voice';ssSet('voiceInputMode',voiceInputModeValue);if(voiceInputModeValue!=='ptt'){pushToTalkHeld=false;if(pushToTalkReleaseTimer){clearTimeout(pushToTalkReleaseTimer);pushToTalkReleaseTimer=null}}updatePushToTalkUI();applyMicTransmission()};pushToTalkKeyButton.onclick=()=>{pushToTalkCapturing=true;updatePushToTalkUI();deviceHint.textContent='Press the key you want to hold for push to talk.'};pushToTalkDelayInput.oninput=()=>{pushToTalkDelay=Math.max(0,Math.min(1000,Number(pushToTalkDelayInput.value)||0));ssSet('pushToTalkDelay',String(pushToTalkDelay));updatePushToTalkUI()};
 window.addEventListener('keydown',event=>{if(pushToTalkCapturing){if(event.code==='Escape'){pushToTalkCapturing=false;updatePushToTalkUI();return}event.preventDefault();pushToTalkKey=event.code;pushToTalkCapturing=false;ssSet('pushToTalkKey',pushToTalkKey);updatePushToTalkUI();return}if(voiceInputModeValue!=='ptt'||event.code!==pushToTalkKey||event.repeat)return;if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||''))return;event.preventDefault();if(pushToTalkReleaseTimer){clearTimeout(pushToTalkReleaseTimer);pushToTalkReleaseTimer=null}pushToTalkHeld=true;applyMicTransmission()});window.addEventListener('keyup',event=>{if(voiceInputModeValue!=='ptt'||event.code!==pushToTalkKey)return;event.preventDefault();if(pushToTalkReleaseTimer)clearTimeout(pushToTalkReleaseTimer);pushToTalkReleaseTimer=setTimeout(releasePushToTalk,pushToTalkDelay)});window.addEventListener('blur',()=>{if(pushToTalkReleaseTimer){clearTimeout(pushToTalkReleaseTimer);pushToTalkReleaseTimer=null}pushToTalkHeld=false;applyMicTransmission()});
@@ -1929,7 +1931,8 @@ async function serverTextMembershipSync(){
 }
 function validTurnIceServers(value){return Array.isArray(value)&&value.length>0&&value.length<=8&&value.every(item=>item&&typeof item==='object'&&iceUrls(item).length>0&&iceUrls(item).every(url=>typeof url==='string'&&/^(?:stun|turn|turns):/i.test(url)))&&value.some(hasTurnUrl)}
 async function requestTurnCredentials(){
-  if(turnIceServers.length)return turnIceServers;
+  if(turnIceServers.length&&turnIssuedAt&&Date.now()-turnIssuedAt<20*60*1000)return turnIceServers;
+  turnIceServers=[];
   if(turnCredentialWaiter)return turnCredentialWaiter;
   if(!directorySocket||directorySocket.readyState!==WebSocket.OPEN)throw new Error('Knot signaling is offline');
   let resolveWait,rejectWait;
@@ -1939,7 +1942,7 @@ async function requestTurnCredentials(){
   if(!directorySend({type:'turn-credentials'}))finish(new Error('Could not request a voice relay'));
   return wait;
 }
-function acceptTurnCredentials(value){if(!validTurnIceServers(value?.iceServers)){turnCredentialPending?.reject(new Error('Voice relay returned invalid credentials'));return}turnIceServers=value.iceServers;turnCredentialPending?.resolve(turnIceServers)}
+function acceptTurnCredentials(value){if(!validTurnIceServers(value?.iceServers)){turnCredentialPending?.reject(new Error('Voice relay returned invalid credentials'));return}turnIceServers=value.iceServers;turnIssuedAt=Date.now();turnCredentialPending?.resolve(turnIceServers)}
 function secureRelayReady(id){return !!(directorySocket?.readyState===WebSocket.OPEN&&validDevicePublicKey(directoryUser(id)?.deviceKey))}
 function syncActiveDmTransport(){
   if(activeServerId||!activePeerId)return;
@@ -2300,7 +2303,7 @@ function releaseSharedServerSilentAudio(){const context=serverSilentAudioCtx,tra
 function serverMediaPeerCount(){return Math.max(1,[...serverPeers].filter(([peerId,state])=>!state.closing&&voicePeerAllowed(peerId)).length)}
 function targetServerVoiceBitrate(){return targetVoiceBitrate()}
 async function configureServerVoiceSender(sender){
-  if(!sender)return;try{const parameters=sender.getParameters(),bitrate=targetServerVoiceBitrate(),playback=relayVoiceMode?16000:48000;if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=bitrate;parameters.encodings[0].priority='high';parameters.encodings[0].networkPriority='high';if(parameters.codecs)parameters.codecs.forEach(c=>{if(String(c.mimeType||'').toLowerCase()==='audio/opus'){c.maxptime=20;c.ptime=10;if(c.parameters){c.parameters.maxaveragebitrate=bitrate;c.parameters.maxplaybackrate=playback;c.parameters.maxptime=20;c.parameters.minptime=10;c.parameters.useinbandfec=1;c.parameters.usedtx=1;c.parameters.cbr=1;c.parameters.stereo=0;c.parameters['sprop-stereo']=0}}});await sender.setParameters(parameters)}catch{}
+  if(!sender)return;try{const parameters=sender.getParameters(),bitrate=targetServerVoiceBitrate(),playback=relayVoiceMode?16000:48000;if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=bitrate;parameters.encodings[0].priority='high';parameters.encodings[0].networkPriority='high';if(parameters.codecs)parameters.codecs.forEach(c=>{if(String(c.mimeType||'').toLowerCase()==='audio/opus'){c.maxptime=20;c.ptime=10;if(c.parameters){c.parameters.maxaveragebitrate=bitrate;c.parameters.maxplaybackrate=playback;c.parameters.maxptime=20;c.parameters.minptime=10;c.parameters.useinbandfec=1;c.parameters.usedtx=0;c.parameters.cbr=1;c.parameters.stereo=0;c.parameters['sprop-stereo']=0}}});await sender.setParameters(parameters)}catch{}
 }
 function rebalanceServerMediaBudgets(){for(const state of serverPeers.values()){if(state.closing)continue;void configureServerVoiceSender(state.voiceSender)}void maybeAdoptLiveShareBudget()}
 function addServerVoiceAudio(peerId,state,track,stream){
@@ -2428,7 +2431,8 @@ async function attachServerNativeScreenAudio(gen){
   if(!screenAudioOn||!serverNativeScreenSession||gen!==serverScreenGen)return;const track=await acquireIsolatedShareAudioTrack(()=>screenAudioOn&&!!serverNativeScreenSession&&gen===serverScreenGen);if(!track||!serverNativeScreenSession||gen!==serverScreenGen){try{track?.stop()}catch{}if(track)cleanupNativeScreenCapture(track._knotCaptureOwner);return}const audioStream=new MediaStream([track]);serverNativeScreenAudioStream=audioStream;try{track.contentHint='music'}catch{};const peers=[...serverPeers].filter(([peerId])=>voicePeerAllowed(peerId)),label=serverNativeScreenSession?.encoder||'GPU';if(serverNativeScreenAudioStream!==audioStream||!serverNativeScreenSession||gen!==serverScreenGen){try{track.stop()}catch{};if(serverNativeScreenAudioStream===audioStream)serverNativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);return}const results=await Promise.allSettled(peers.map(([peerId,state])=>attachServerNativeAudioToPeer(peerId,state)));results.forEach((result,index)=>{if(result.status!=='rejected')return;const [,state]=peers[index];setServerScreenAudioTrack(state,null).catch(()=>{});if(state.nativeSendChannel?.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-audio',serverId:state.context.serverId,active:false}))}catch{}});const attached=results.some(result=>result.status==='fulfilled');if(!attached){try{track.stop()}catch{};if(serverNativeScreenAudioStream===audioStream)serverNativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);if(gen===serverScreenGen)setServerStatus('Sharing · '+label+' AV1 · computer sound unavailable',true)}else setServerStatus('Sharing · '+label+' AV1 · computer sound live',true)
 }
 async function pumpServerNativeScreen(gen,session){
-  let audioStarted=false,preview=serverNativeLocalPlayer?.mode!=='placeholder';
+  let preview=serverNativeLocalPlayer?.mode!=='placeholder';
+  void attachServerNativeScreenAudio(gen);
   while(serverNativeScreenSession?.id===session.id&&gen===serverScreenGen){
     const queued=[];
     if(typeof window.pairNativeScreen.readMany==='function'){for(;;){const batch=await window.pairNativeScreen.readMany(session.id,{maxItems:NATIVE_SCREEN_DRAIN_ITEMS,maxBytes:NATIVE_SCREEN_DRAIN_BYTES});if(Array.isArray(batch?.items)&&batch.items.length){queued.push(...batch.items);continue}if(batch&&!batch.active){if(batch.error)setServerStatus('Native share stopped: '+batch.error)}break}}
@@ -2441,7 +2445,6 @@ async function pumpServerNativeScreen(gen,session){
       if(preview)serverNativeLocalPlayer?.append(item.data);
       const channels=[...serverPeers.values()].map(state=>state.nativeSendChannel).filter(channel=>channel?.readyState==='open');
       for(const channel of channels)if(!queueServerNativeItem(channel,item))try{channel.close()}catch{};
-      if(!audioStarted){audioStarted=true;void attachServerNativeScreenAudio(gen)}
     }
   }
   if(serverNativeScreenSession?.id===session.id&&gen===serverScreenGen)await stopServerScreenShare()
@@ -3000,7 +3003,7 @@ async function startCall(){
     // Voice must be scheduled ahead of a busy screen encoder. Restrict Opus to
     // 10–20 ms packets; the old 120 ms maximum made microphone delay obvious
     // whenever the renderer was under CPU pressure from a high-resolution share.
-    try{const p=sender.getParameters(),bitrate=targetVoiceBitrate(),playback=relayVoiceMode?16000:48000,stereo=0;if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=bitrate;p.encodings[0].priority='high';p.encodings[0].networkPriority='high';if(p.codecs)p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=20;c.ptime=10;if(c.parameters){c.parameters.maxaveragebitrate=bitrate;c.parameters.maxplaybackrate=playback;c.parameters.maxptime=20;c.parameters.minptime=10;c.parameters.useinbandfec=1;c.parameters.usedtx=1;c.parameters.cbr=1;c.parameters.stereo=stereo;c.parameters['sprop-stereo']=stereo;c.parameters.spropmaxcapturerate=playback}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
+    try{const p=sender.getParameters(),bitrate=targetVoiceBitrate(),playback=relayVoiceMode?16000:48000,stereo=0;if(p){if(!p.encodings||!p.encodings.length)p.encodings=[{}];p.encodings[0].maxBitrate=bitrate;p.encodings[0].priority='high';p.encodings[0].networkPriority='high';if(p.codecs)p.codecs.forEach(c=>{if(c.mimeType.toLowerCase()==='audio/opus'){c.maxptime=20;c.ptime=10;if(c.parameters){c.parameters.maxaveragebitrate=bitrate;c.parameters.maxplaybackrate=playback;c.parameters.maxptime=20;c.parameters.minptime=10;c.parameters.useinbandfec=1;c.parameters.usedtx=0;c.parameters.cbr=1;c.parameters.stereo=stereo;c.parameters['sprop-stereo']=stereo;c.parameters.spropmaxcapturerate=playback}}});await sender.setParameters(p)}}catch(e){console.warn('opus params:',e)}
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
     // counter callGen is incremented by every endCall call. If it changed, bail.
@@ -3092,7 +3095,23 @@ function waitForStablePeer(target=pc,timeout=10000){
     check();
   });
 }
-async function renegotiate(){
+async function restartDirectIce(){
+  const target=pc;if(!target||!callActive)return false;
+  if(target._iceRestarting)return target._iceRestarting;
+  target._iceRestarting=(async()=>{
+    try{
+      pairHint.textContent='Reconnecting voice…';
+      if(relayVoiceMode){
+        turnIceServers=[];turnIssuedAt=0;
+        try{const servers=await requestTurnCredentials();dmIceServers=servers;target.setConfiguration({iceServers:servers,iceTransportPolicy:'relay'})}catch{}
+      }
+      return await renegotiate({iceRestart:true});
+    }catch(error){console.warn('ICE restart failed',error);return false}
+    finally{if(target._iceRestarting)target._iceRestarting=null}
+  })();
+  return target._iceRestarting;
+}
+async function renegotiate({iceRestart=false}={}){
   if(!pc||(!signaling&&chat?.readyState!=='open'))return;
   const target=pc;
   if(!await waitForStablePeer(target)){
@@ -3103,7 +3122,7 @@ async function renegotiate(){
   const myId=++renegotiating;
   renegPending=true;let sent=false;
   try{
-    const offer=await pc.createOffer({iceRestart:false});
+    const offer=await pc.createOffer({iceRestart:!!iceRestart});
     if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
     await target.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});
     if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
@@ -3305,7 +3324,7 @@ async function linuxShareAudioTrack(){
     // and attach its live track as soon as PipeWire has created the isolated
     // route, so an app/game that starts producing audio later reaches the peer
     // instead of being rejected by an arbitrary first-PCM timeout.
-    op.connect(dest);outputTrack=dest.stream.getAudioTracks()[0]||null;if(!outputTrack)throw new Error('PipeWire output track could not be created');
+    op.connect(dest);const keepAlive=ctx.createGain();keepAlive.gain.value=0;op.connect(keepAlive);keepAlive.connect(ctx.destination);outputTrack=dest.stream.getAudioTracks()[0]||null;if(!outputTrack)throw new Error('PipeWire output track could not be created');
     outputTrack._knotCaptureOwner=captureOwner;try{outputTrack.contentHint='music'}catch{}
     let share=null;
     for(let routeAttempt=1;routeAttempt<=3;routeAttempt++){
@@ -3318,14 +3337,10 @@ async function linuxShareAudioTrack(){
       share=await window.pairEnv.startLinuxShareAudio();
       if(!isCurrent()){dispose(true);try{ctx.close()}catch{};return null}
       if(share){
-        const readyAt=Number(share.routeReadyAt)||Date.now()+650;
-        while(isCurrent()&&!captureError&&Date.now()<readyAt)await delay(20);
-        if(!isCurrent()){dispose(true);try{ctx.close()}catch{};return null}
-        received=false;
         const deadline=Date.now()+900;
-        while(isCurrent()&&!captureError&&!received&&Date.now()<deadline)await delay(20);
+        while(isCurrent()&&!captureError&&Date.now()<deadline)await delay(20);
         if(!isCurrent()){dispose(true);try{ctx.close()}catch{};return null}
-        if(!captureError&&received)break;
+        if(!captureError)break;
         share=null;
       }
       if(routeAttempt===3)throw new Error(captureError||'PipeWire share route could not be created');
@@ -3482,27 +3497,41 @@ function paintShareSurfaceDark(el){
 }
 function shareVideoCoveredByCanvas(video){
   const canvas=video?.nextElementSibling?.classList?.contains('native-screen-canvas')?video.nextElementSibling:video?.parentElement?.querySelector?.(':scope > .native-screen-canvas');
-  return !!(canvas&&!canvas.hidden&&!canvas.classList.contains('is-live'));
+  // Any visible canvas is the presentation surface. `is-live` only marks that
+  // a decoded picture was blitted; it must never uncover the <video>.
+  return !!(canvas&&!canvas.hidden);
 }
 function shareVideoHasMedia(video){if(!video)return false;if(video.srcObject)return (video.srcObject.getVideoTracks?.()||[]).some(track=>track.readyState!=='ended');return !!(video.currentSrc||(video.getAttribute('src')||'').length)}
-function holdShareVideo(video){if(!video)return;paintShareSurfaceDark(video);video.classList.add('awaiting-frame');video.style.setProperty('opacity','0','important')}
+function holdShareVideo(video){if(!video)return;paintShareSurfaceDark(video);video.classList.add('awaiting-frame');video.style.setProperty('opacity','0','important');video.style.setProperty('visibility','hidden','important')}
 function disarmShareVideoReveal(video){const stop=video?._knotShareRevealStop;if(typeof stop!=='function')return;video._knotShareRevealStop=null;try{stop()}catch{}}
-function shareVideoHasPicture(video){
-  const width=Number(video?.videoWidth)||0,height=Number(video?.videoHeight)||0;
+function shareVideoHasPicture(video,metadata){
+  if(!shareVideoHasMedia(video))return false;
+  const width=Number(metadata?.width||video?.videoWidth)||0,height=Number(metadata?.height||video?.videoHeight)||0;
   if(width<32||height<32)return false;
-  // Chromium's empty <video> reports 300×150 and paints white.
+  // Chromium's empty <video> reports 300×150 and paints white. Coded size from
+  // SPS/SDP can also land before a decoded picture (readyState < HAVE_CURRENT_DATA).
   if(width===300&&height===150)return false;
+  if((Number(video.readyState)||0)<2)return false;
+  const presented=Number(metadata?.presentedFrames);
+  if(Number.isFinite(presented)&&presented<1)return false;
   return true;
 }
 function revealShareVideo(video,fromFrame=false){
-  if(!video||!shareVideoHasPicture(video))return;
+  if(!video||!fromFrame||!shareVideoHasPicture(video))return;
+  if(shareVideoCoveredByCanvas(video)||video.classList.contains('native-screen-waiting'))return;
   video.classList.remove('awaiting-frame');
-  if(!video.classList.contains('native-screen-waiting'))video.style.removeProperty('opacity');
+  video.style.removeProperty('opacity');
+  video.style.removeProperty('visibility');
   disarmShareVideoReveal(video);
 }
 function armShareVideoReveal(video){
   if(!video||video._knotShareRevealStop)return;
-  const onMeta=()=>revealShareVideo(video),onFrame=()=>revealShareVideo(video,true),onEmpty=()=>holdShareVideo(video);
+  const onMeta=()=>{},onEmpty=()=>holdShareVideo(video);
+  const onFrame=(now,metadata)=>{
+    if(shareVideoCoveredByCanvas(video)||video.classList.contains('native-screen-waiting'))return;
+    if(shareVideoHasPicture(video,metadata))revealShareVideo(video,true);
+    else if(typeof video.requestVideoFrameCallback==='function')frameHandle=video.requestVideoFrameCallback(onFrame);
+  };
   video.addEventListener('loadeddata',onMeta);video.addEventListener('resize',onMeta);video.addEventListener('playing',onMeta);video.addEventListener('emptied',onEmpty);
   let frameHandle=0;if(typeof video.requestVideoFrameCallback==='function')frameHandle=video.requestVideoFrameCallback(onFrame);
   video._knotShareRevealStop=()=>{video.removeEventListener('loadeddata',onMeta);video.removeEventListener('resize',onMeta);video.removeEventListener('playing',onMeta);video.removeEventListener('emptied',onEmpty);if(frameHandle&&video.cancelVideoFrameCallback)try{video.cancelVideoFrameCallback(frameHandle)}catch{}};
@@ -3517,8 +3546,9 @@ function playShareVideo(video){if(!shareVideoHasMedia(video))return;try{video.pl
 function resetShareSurface(el){
   if(!el)return el;
   disarmShareVideoReveal(el);
-  try{el.classList?.remove('awaiting-frame','native-screen-waiting');if(el.style)el.style.removeProperty('opacity')}catch{}
-  return paintShareSurfaceDark(el);
+  if(el.tagName==='VIDEO')holdShareVideo(el);
+  else paintShareSurfaceDark(el);
+  return el;
 }
 function attachNativeScreenSurface(video){
   if(!video)return null;
@@ -3534,12 +3564,12 @@ function attachNativeScreenSurface(video){
     if(!canvas.width||!canvas.height){canvas.width=960;canvas.height=540}
     context=canvas.getContext('2d',{alpha:false,desynchronized:true});if(!context)return null;
     paintShareSurfaceDark(video);paintShareSurfaceDark(canvas);if(host)paintShareSurfaceDark(host);
-    video.classList.add('native-screen-waiting');video.style.opacity='0';video.style.zIndex='0';canvas.style.zIndex='1';canvas.hidden=false;
+    video.classList.add('native-screen-waiting');video.style.opacity='0';video.style.visibility='hidden';video.style.zIndex='0';canvas.style.zIndex='1';canvas.hidden=false;
     try{video.pause()}catch{}
   }catch{return null}
   const paintIdle=()=>{if(destroyed||!canvas||!context)return;if(!canvas.width||!canvas.height){canvas.width=960;canvas.height=540}context.fillStyle='#050609';context.fillRect(0,0,canvas.width,canvas.height)};
-  const cover=()=>{if(destroyed||!canvas)return;live=false;canvas.hidden=false;canvas.classList.remove('is-live');video.classList.add('native-screen-waiting','awaiting-frame');video.style.opacity='0';video.style.zIndex='0';canvas.style.zIndex='1'};
-  const reveal=()=>{if(destroyed||!canvas)return;live=true;canvas.hidden=false;canvas.classList.add('is-live');video.classList.remove('native-screen-waiting','awaiting-frame');video.style.removeProperty('opacity')};
+  const cover=()=>{if(destroyed||!canvas)return;live=false;canvas.hidden=false;canvas.classList.remove('is-live');video.classList.add('native-screen-waiting','awaiting-frame');video.style.opacity='0';video.style.visibility='hidden';video.style.zIndex='0';canvas.style.zIndex='1'};
+  const reveal=()=>{if(destroyed||!canvas)return;live=true;canvas.hidden=false;canvas.classList.add('is-live')};
   const freeze=()=>{if(destroyed||!canvas||!context)return;try{if(video.videoWidth&&video.videoHeight){if(canvas.width!==video.videoWidth||canvas.height!==video.videoHeight){canvas.width=video.videoWidth;canvas.height=video.videoHeight}context.drawImage(video,0,0,canvas.width,canvas.height);cover();return}}catch{}paintIdle();cover()};
   paintIdle();cover();
   return{canvas,context,paintIdle,cover,reveal,freeze,get live(){return live},destroy(){if(destroyed)return;destroyed=true;canvas?.remove();video.classList.remove('native-screen-waiting');holdShareVideo(video);if(createdHost&&host?.parentElement)host.replaceWith(video)}};
@@ -3673,7 +3703,7 @@ function createWebCodecsNativeScreenPlayer(video,codec,onError=()=>{},options={}
       playbackActive=true;
       presentationClockTimestamp=null;
       if(resumed&&presentationMode==='canvas'&&!presentationQueue.length&&!paintedFrames)paintIdle();
-      try{video.play().catch(()=>{})}catch{}
+      if(shareVideoHasMedia(video))try{video.play().catch(()=>{})}catch{}
       schedulePresentation();
     },
     destroy(){if(destroyed)return;destroyed=true;presentationGeneration++;clearInterval(stallTimer);resetPresentation();window.removeEventListener('resize',measureDisplaySize);document.removeEventListener('fullscreenchange',measureDisplaySize);try{decoder?.close()}catch{}try{const aborted=frameWriter?.abort(new Error('AV1 player closed'));aborted?.catch?.(()=>{})}catch{}try{trackGenerator?.stop()}catch{}if(ownedSurface)surface.destroy();else surface.cover();try{video.pause();video.srcObject=null;video.removeAttribute('src');video.load()}catch{}},
@@ -3726,8 +3756,8 @@ function createMseNativeScreenPlayer(video,codec,onError=()=>{},options={}){
     surface.cover();
     source.addEventListener('sourceopen',()=>{if(destroyed||failed||generation!==pipelineGeneration)return;try{buffer=source.addSourceBuffer(mime);buffer.addEventListener('error',()=>{if(generation===pipelineGeneration)fail(new Error('Native AV1 SourceBuffer failed'))});buffer.addEventListener('updateend',()=>{if(destroyed||failed||generation!==pipelineGeneration)return;if(appendingSerial){completedAppendSerial=Math.max(completedAppendSerial,appendingSerial);appendingSerial=0}cleaning=false;synchronizePlayback();drain()});drain()}catch(error){fail(error)}},{once:true})
   };
-  const noteFrame=(now,metadata={})=>{if(!playbackActive)return;renderedFrames++;if(!firstPaintAt)firstPaintAt=now;if(shareVideoHasPicture(video))surface.reveal();if(lastRenderedAt){renderIntervals.push(now-lastRenderedAt);if(renderIntervals.length>360)renderIntervals.shift()}lastRenderedAt=now;const range=liveRange(),mediaTime=Number(metadata.mediaTime);if(range&&Number.isFinite(mediaTime)){const latency=(range.end-mediaTime)*1000;if(latency>=0&&Number.isFinite(latency)){latencySamples.push(latency);if(latencySamples.length>360)latencySamples.shift()}}};
-  if(typeof video.requestVideoFrameCallback==='function'){const rendered=(now,metadata)=>{if(destroyed)return;noteFrame(now,metadata);video.requestVideoFrameCallback(rendered)};video.requestVideoFrameCallback(rendered)}else video.addEventListener('playing',()=>{if(!firstPaintAt&&shareVideoHasPicture(video)){firstPaintAt=performance.now();surface.reveal()}});
+  const noteFrame=(now,metadata={})=>{if(!playbackActive)return;renderedFrames++;if(!firstPaintAt)firstPaintAt=now;if(shareVideoHasPicture(video,metadata)){try{const w=video.videoWidth,h=video.videoHeight;if(surface.canvas&&surface.context&&w&&h){if(surface.canvas.width!==w||surface.canvas.height!==h){surface.canvas.width=w;surface.canvas.height=h}surface.context.drawImage(video,0,0,w,h);surface.cover()}}catch{}}if(lastRenderedAt){renderIntervals.push(now-lastRenderedAt);if(renderIntervals.length>360)renderIntervals.shift()}lastRenderedAt=now;const range=liveRange(),mediaTime=Number(metadata.mediaTime);if(range&&Number.isFinite(mediaTime)){const latency=(range.end-mediaTime)*1000;if(latency>=0&&Number.isFinite(latency)){latencySamples.push(latency);if(latencySamples.length>360)latencySamples.shift()}}};
+  if(typeof video.requestVideoFrameCallback==='function'){const rendered=(now,metadata)=>{if(destroyed)return;noteFrame(now,metadata);video.requestVideoFrameCallback(rendered)};video.requestVideoFrameCallback(rendered)}else video.addEventListener('playing',()=>{if(!firstPaintAt&&shareVideoHasPicture(video)){firstPaintAt=performance.now();noteFrame(firstPaintAt)}});
   try{navigator.mediaCapabilities?.decodingInfo?.({type:'media-source',video:{contentType:mime,width:configuredWidth||3840,height:configuredHeight||2160,bitrate:Number(options.bitrate)||10000000,framerate:Number(options.fps)||60}}).then(result=>{powerKnown=true;powerEfficient=!!result?.powerEfficient}).catch(()=>{})}catch{}
   openPipeline();
   return{
@@ -3787,8 +3817,8 @@ function bindReservedRemoteScreenAudio(){
   if(!track||track.kind!=='audio'||track.readyState==='ended')return null;
   const audio=ensureNativeRemoteAudio(),current=audio.srcObject?.getAudioTracks?.()[0];
   if(current!==track)audio.srcObject=new MediaStream([track]);
-  applyMediaElementOutput(audio).catch(()=>{});
   audio.volume=remoteScreen.volume;audio.muted=remoteScreenSuppressed||audio.volume===0;track.enabled=true;
+  applyMediaElementOutput(audio).catch(()=>{});
   if(!audio.muted)audio.play().catch(()=>{});
   return audio;
 }
@@ -3912,7 +3942,8 @@ async function attachNativeShareAudio(gen){
   if(!screenAudioOn||!screenActive||gen!==screenGen)return;const track=await acquireIsolatedShareAudioTrack(()=>screenAudioOn&&screenActive&&gen===screenGen);if(!track||!screenActive||gen!==screenGen){try{track?.stop()}catch{}if(track)cleanupNativeScreenCapture(track._knotCaptureOwner);return}const audioStream=new MediaStream([track]);nativeScreenAudioStream=audioStream;try{track.contentHint='music'}catch{};try{try{if(nativeScreenChannel?.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-audio',active:true}))}catch{}await setReservedScreenAudioTrack(track);if(nativeScreenAudioStream!==audioStream||!screenActive||gen!==screenGen)throw new Error('screen share ended while attaching audio');screenAudioDebug=' · sound live';screenStatus.textContent='Sharing · '+(nativeScreenSession?.encoder||'GPU')+' AV1'+screenAudioDebug}catch(error){console.warn('[AUDIO] native share audio failed:',error?.message||error);try{if(nativeScreenChannel?.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-audio',active:false}))}catch{}try{await setReservedScreenAudioTrack(null)}catch{}try{track.stop()}catch{}if(nativeScreenAudioStream===audioStream)nativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);if(screenActive&&gen===screenGen){screenAudioDebug=' · sound unavailable';screenStatus.textContent='Sharing · '+(nativeScreenSession?.encoder||'GPU')+' AV1'+screenAudioDebug}}
 }
 async function pumpNativeScreen(gen,session,channel){
-  let audioStarted=false,preview=nativeLocalPlayer?.mode!=='placeholder';
+  let preview=nativeLocalPlayer?.mode!=='placeholder';
+  void attachNativeShareAudio(gen);
   while(screenActive&&gen===screenGen&&nativeScreenSession?.id===session.id){
     const queued=[];
     if(typeof window.pairNativeScreen.readMany==='function'){for(;;){const batch=await window.pairNativeScreen.readMany(session.id,{maxItems:NATIVE_SCREEN_DRAIN_ITEMS,maxBytes:NATIVE_SCREEN_DRAIN_BYTES});if(Array.isArray(batch?.items)&&batch.items.length){queued.push(...batch.items);continue}if(batch&&!batch.active){if(batch.error)screenStatus.textContent='Native share stopped: '+batch.error}break}}
@@ -3924,7 +3955,6 @@ async function pumpNativeScreen(gen,session,channel){
       if(!nativeScreenAnnounced){nativeScreenAnnounced=true;try{send({t:'screen-start',native:true,codec:'AV1',encoder:session.encoder})}catch{};logCallEvent('You started '+(session.encoder||'GPU')+' AV1 screen sharing')}
       if(preview)nativeLocalPlayer?.append(item.data);
       if(!await sendNativeScreenLiveItem(channel,item)){queued.length=0;if(screenActive&&gen===screenGen&&nativeScreenSession?.id===session.id)await stopScreenShare();return}
-      if(!audioStarted){audioStarted=true;void attachNativeShareAudio(gen)}
     }
   }
   if(screenActive&&gen===screenGen&&nativeScreenSession?.id===session.id)await stopScreenShare();

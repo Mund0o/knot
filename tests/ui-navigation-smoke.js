@@ -174,7 +174,9 @@ if (!rendererSource.includes('function resumeScreenPlayback') || !rendererSource
   throw new Error('Returning to a share can still leave a blank/white tile or drop screen audio');
 }
 const screenStartSource=rendererSource.slice(rendererSource.indexOf("if(value.t==='screen-start')"),rendererSource.indexOf("if(value.t==='screen-watch'"));
-if (!rendererSource.includes('function prepareShareSurface') || !rendererSource.includes('function playShareVideo') || !rendererSource.includes('function shareVideoHasPicture') || !rendererSource.includes("classList.add('awaiting-frame')") || !styleSource.includes('video.awaiting-frame') || rendererSource.includes('try{remoteScreen.play().catch(()=>{})}catch{}') || !screenStartSource.includes('prepareShareSurface(remoteScreen)') || screenStartSource.indexOf('prepareShareSurface(remoteScreen)')>screenStartSource.indexOf("watchDmShare('remote')") || rendererSource.includes("presentationMode='track'")) {
+const msePlayerSource=rendererSource.slice(rendererSource.indexOf('function createMseNativeScreenPlayer'),rendererSource.indexOf('function createNativeScreenPlayer'));
+const surfaceAttachSource=rendererSource.slice(rendererSource.indexOf('function attachNativeScreenSurface'),rendererSource.indexOf('function createNativeScreenPlaceholder'));
+if (!rendererSource.includes('function prepareShareSurface') || !rendererSource.includes('function playShareVideo') || !rendererSource.includes('function shareVideoHasPicture') || !rendererSource.includes("classList.add('awaiting-frame')") || !styleSource.includes('video.awaiting-frame') || rendererSource.includes('try{remoteScreen.play().catch(()=>{})}catch{}') || !screenStartSource.includes('prepareShareSurface(remoteScreen)') || screenStartSource.indexOf('prepareShareSurface(remoteScreen)')>screenStartSource.indexOf("watchDmShare('remote')") || rendererSource.includes("presentationMode='track'") || rendererSource.includes('surface.reveal()') || !rendererSource.includes('if(!video||!fromFrame||!shareVideoHasPicture(video))return') || !rendererSource.includes('if((Number(video.readyState)||0)<2)return false') || !rendererSource.includes('width===300&&height===150') || !msePlayerSource.includes('surface.context.drawImage(video,0,0,w,h);surface.cover()') || msePlayerSource.includes('surface.reveal()') || surfaceAttachSource.includes("video.classList.remove('native-screen-waiting','awaiting-frame')") || styleSource.includes('.native-screen-canvas.is-live{opacity:0}') || !styleSource.includes('.native-screen-canvas.is-live{opacity:1}') || styleSource.includes('.native-screen-host:has(>video[hidden])') || !styleSource.includes('.screen-tile video[hidden],#remoteScreen[hidden]') || !styleSource.includes('video.native-screen-waiting{opacity:0!important;visibility:hidden')) {
   throw new Error('An incoming friend share can still paint a white video before the first frame');
 }
 if (!rendererSource.includes("type:'call-presence'") || !rendererSource.includes('callPresenceTimer=setInterval') || !workerSource.includes("value.type === 'call-presence'")) {
@@ -219,7 +221,7 @@ if (!rendererSource.includes('targetNativeAv1BitrateKbps(width,height,fps)') || 
 if (rendererSource.includes('createScriptProcessor') || !rendererSource.includes("new AudioWorkletNode(ctx,'knot-screen-audio'") || !workletSource.includes('this.trimTo(3840)')) {
   throw new Error('Windows screen audio is not isolated from renderer/video stalls by the bounded AudioWorklet path');
 }
-if (!rendererSource.includes('A silent desktop at share start is normal.') || !rendererSource.includes('op.connect(dest);outputTrack=dest.stream.getAudioTracks()[0]||null') || !rendererSource.includes('if(!captureError&&received)break') || rendererSource.includes("PipeWire monitor produced no samples")) {
+if (!rendererSource.includes('A silent desktop at share start is normal.') || !rendererSource.includes('op.connect(dest)') || !rendererSource.includes('if(!captureError)break') || rendererSource.includes("PipeWire monitor produced no samples")) {
   throw new Error('Linux screen sharing still drops the computer-audio track when playback begins after the share starts');
 }
 if (!rendererSource.includes('async function acquireIsolatedShareAudioTrack') || !rendererSource.includes('routeAttempt<=3') || !rendererSource.includes('handshake<=3') || !rendererSource.includes('Date.now()+900') || !rendererSource.includes('await window.pairEnv.stopLinuxShareAudio?.()') || !preloadSource.includes("ipcRenderer.invoke('pair:stopLinuxShareAudio')") || rendererSource.includes('Date.now()+180;while(isCurrent()&&!captureError')) {
@@ -431,8 +433,12 @@ app.whenReady().then(async () => {
 
       remoteScreen.srcObject=null;try{remoteScreen.removeAttribute('src')}catch{};remoteScreenExpected=true;prepareShareSurface(remoteScreen);remoteScreen.hidden=false;watchDmShare('remote');
       assert(screenExpanded&&focusedScreen==='remote'&&!remoteScreenTile.hidden,'friend share start did not open the viewer');
-      assert(remoteScreen.classList.contains('awaiting-frame')&&getComputedStyle(remoteScreen).opacity==='0','friend share start painted the empty video instead of a dark tile');
+      assert(remoteScreen.classList.contains('awaiting-frame')&&getComputedStyle(remoteScreen).opacity==='0'&&getComputedStyle(remoteScreen).visibility==='hidden','friend share start painted the empty video instead of a dark tile');
       assert(!/^rgb\(\s*255,\s*255,\s*255\s*\)$/.test(getComputedStyle(remoteScreenTile).backgroundColor)&&!/^rgb\(\s*255,\s*255,\s*255\s*\)$/.test(getComputedStyle(remoteScreen).backgroundColor),'an empty incoming share used a white background');
+      remoteScreen.dispatchEvent(new Event('loadeddata'));remoteScreen.dispatchEvent(new Event('resize'));remoteScreen.dispatchEvent(new Event('playing'));
+      assert(remoteScreen.classList.contains('awaiting-frame')&&getComputedStyle(remoteScreen).opacity==='0','loadeddata/resize/playing uncovered an empty friend share');
+      revealShareVideo(remoteScreen);revealShareVideo(remoteScreen,true);
+      assert(remoteScreen.classList.contains('awaiting-frame')&&getComputedStyle(remoteScreen).opacity==='0','revealShareVideo showed a friend share before a decoded frame');
       remoteScreen.srcObject=new MediaStream();remoteScreen.hidden=false;remoteScreenExpected=true;updateScreenLayout();
       assert(!remoteShareBadge.hidden&&participantFriend.classList.contains('has-share'),'remote share was not discoverable beside its owner');
       remoteShareBadge.click();
@@ -450,7 +456,10 @@ app.whenReady().then(async () => {
       nativeLocalPlayer=createNativeScreenPlaceholder(screenPreview,{width:1280,height:720});
       remoteScreen.hidden=false;screenPreview.hidden=false;watchDmShare('remote');
       const remoteCover=remoteScreen.parentElement.querySelector('.native-screen-canvas');
-      assert(remoteCover&&remoteScreen.style.opacity==='0'&&!remoteCover.hidden&&getComputedStyle(remoteCover).display!=='none','active native share hid its canvas under a transparent video');
+      assert(remoteCover&&remoteScreen.style.opacity==='0'&&getComputedStyle(remoteScreen).visibility==='hidden'&&!remoteCover.hidden&&getComputedStyle(remoteCover).display!=='none'&&getComputedStyle(remoteCover).opacity==='1','active native share hid its canvas under a transparent video');
+      remoteCover.classList.add('is-live');
+      assert(getComputedStyle(remoteCover).opacity==='1','is-live presentation canvas was transparent');
+      remoteCover.classList.remove('is-live');
       const notWhite=value=>!/^rgb\(\s*255,\s*255,\s*255\s*\)$/.test(value)&&!/^rgb\(\s*243,\s*230,\s*200\s*\)$/.test(value);
       assert(notWhite(getComputedStyle(remoteScreenTile).backgroundColor),'an empty share tile used a white background');
       assert(notWhite(getComputedStyle(remoteScreen).backgroundColor),'an incoming remote share video used a white background');

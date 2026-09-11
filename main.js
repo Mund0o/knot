@@ -104,14 +104,15 @@ async function routeLinuxDesktopAudio(state) {
   const pairPids = pairProcessTree(processes), sinkNames = new Map(sinks.split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2).map(parts => [parts[0], parts[1]]));
   for (const parts of inputs.split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2)) {
     const [id, currentSink] = parts, currentName = sinkNames.get(currentSink), block = details.match(new RegExp(`Sink Input #${id}\\n([\\s\\S]*?)(?=\\nSink Input #|$)`))?.[1] || '';
-    const pid = Number(block.match(/application\.process\.id\s*=\s*"(\d+)"/)?.[1]);
+    const pid = Number(block.match(/application\.process\.id\s*=\s*"?(\d+)"?/)?.[1]);
     const appName = block.match(/application\.name\s*=\s*"([^"]+)"/)?.[1] || '';
     const binary = block.match(/application\.process\.binary\s*=\s*"([^"]+)"/)?.[1] || '';
     const mediaName = block.match(/media\.name\s*=\s*"([^"]+)"/)?.[1] || '';
-    // Move only attributable desktop application streams. Knot and its helper
-    // processes stay on the normal output, so call playback never enters the
-    // share monitor. Module streams have no PID and are deliberately untouched.
-    if (!pid || pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || isNvidiaBroadcastLabel(appName, binary, mediaName) || !currentName || currentName === state.sink) continue;
+    const nodeName = block.match(/node\.name\s*=\s*"([^"]+)"/)?.[1] || '';
+    const driver = block.match(/^\s*Driver:\s*(\S+)/m)?.[1] || '';
+    // Names only: every PipeWire sink-input block also contains module-stream-restore.id.
+    const moduleStream=/loopback|null-sink|module-/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`);
+    if (pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || isNvidiaBroadcastLabel(appName, binary, mediaName) || moduleStream || !currentName || currentName === state.sink) continue;
     if (linuxShareAudio !== state) return;
     const movedOk = await pipewireOkAsync('pactl', ['move-sink-input', id, state.sink]);
     if (linuxShareAudio !== state) { if (movedOk) await pipewireOkAsync('pactl', ['move-sink-input', id, currentName]);return; }
@@ -119,7 +120,7 @@ async function routeLinuxDesktopAudio(state) {
   }
 }
 function scheduleLinuxDesktopAudioRoute(state, delay = 80) {
-  if (linuxShareAudio !== state || !state.loop) return;
+  if (linuxShareAudio !== state || !state.loop || !state.routeEnabled) return;
   if (state.routeRunning) { state.routeAgain = true;return; }
   // Do not cancel a pending first pass. The old clearTimeout collapsed the
   // startup audits into one move and left game audio on the real sink.
@@ -158,7 +159,7 @@ function startLinuxShareAudio(webContents) {
   // same process-scoped name while the previous route is still restoring and
   // unloading. Retry only after that retirement has fully settled.
   if (linuxShareAudioStopping) return linuxShareAudioStopping.then(()=>startLinuxShareAudio(webContents));
-  if (linuxShareAudio) return Promise.resolve({ label: linuxShareAudio.label, source: linuxShareAudio.source });
+  if (linuxShareAudio) return Promise.resolve({ label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: linuxShareAudio.routeReadyAt });
   if (linuxShareAudioStart) return linuxShareAudioStart;
   linuxShareAudioStart=startLinuxShareAudioWithRetry(webContents).finally(()=>{linuxShareAudioStart=null});
   return linuxShareAudioStart;
@@ -173,7 +174,7 @@ async function startLinuxShareAudioWithRetry(webContents) {
     try { result=await startLinuxShareAudioInner(webContents,generation); } catch { result=null; }
     if (result) return result;
     if (generation!==linuxShareAudioGeneration) return null;
-    if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source };
+    if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: linuxShareAudio.routeReadyAt };
     if (attempt===3) return null;
     const waitUntil=Date.now()+80*attempt;
     while (Date.now()<waitUntil && generation===linuxShareAudioGeneration) await new Promise(r=>setTimeout(r,20));
@@ -254,7 +255,7 @@ async function startLinuxShareAudioInner(webContents,generation) {
   // Do not redirect real desktop audio until the new monitor and loopback have
   // settled. This costs only a fraction of a second of initial share audio and
   // prevents the full-volume startup burst reported on PipeWire systems.
-  const state = { original, sink, module, loop: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, loopTimer: null, routeRunning: false, routeAgain: false, routeReadyAt: Date.now() + 650, discardUntil: Date.now() + 250, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1 };
+  const state = { original, sink, module, loop: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, loopTimer: null, routeRunning: false, routeAgain: false, routeEnabled: false, routeReadyAt: Date.now() + 650, discardUntil: Date.now() + 250, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1 };
   linuxShareAudio = state;
   if(generation!==linuxShareAudioGeneration){
     linuxShareAudio = null;
@@ -286,6 +287,7 @@ async function startLinuxShareAudioInner(webContents,generation) {
     if (linuxShareAudio !== state) return;
     await unmuteLinuxLoopbackReturn(state);
     if (linuxShareAudio !== state) return;
+    state.routeEnabled = true;
     state.routeReadyAt = Date.now() + 50;
     scheduleLinuxDesktopAudioRoute(state, 0);
     state.audits = [400, 1200, 2500].map(delay => setTimeout(() => scheduleLinuxDesktopAudioRoute(state, 0), delay));
