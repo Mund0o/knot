@@ -71,8 +71,9 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
         this.fadedIn++;
       }
       const index = this.offset * 2;
-      left[frame] = (chunk[index] || 0) * gain;
-      right[frame] = (chunk[index + 1] || 0) * gain;
+      const rawL = (chunk[index] || 0) * gain, rawR = (chunk[index + 1] || 0) * gain;
+      left[frame] = Number.isFinite(rawL) ? Math.max(-1, Math.min(1, rawL)) : 0;
+      right[frame] = Number.isFinite(rawR) ? Math.max(-1, Math.min(1, rawR)) : 0;
       this.offset++;
       this.frames--;
       if (this.offset >= Math.floor(chunk.length / 2)) {

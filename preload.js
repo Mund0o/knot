@@ -154,7 +154,7 @@ contextBridge.exposeInMainWorld('pairEnv', {
   getSources: () => ipcRenderer.invoke('pair:getSources'),
   setPendingSource: source => ipcRenderer.invoke('pair:setPendingSource', source),
   startLinuxShareAudio: () => ipcRenderer.invoke('pair:startLinuxShareAudio'),
-  stopLinuxShareAudio: () => ipcRenderer.send('pair:stopLinuxShareAudio'),
+  stopLinuxShareAudio: () => ipcRenderer.invoke('pair:stopLinuxShareAudio'),
   onLinuxShareAudio: cb => {
     if (typeof cb !== 'function') return () => {};
     const listener = (_event, samples, metadata) => {

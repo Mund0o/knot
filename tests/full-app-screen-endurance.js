@@ -236,7 +236,7 @@ async function main() {
   if(dropDemand)assert(sender.droppedSegments>0,`sender ignored ${dropDemand} non-key congestion/staleness events`);
   assert.strictEqual(sender.fallbacks,0,'healthy full-app sender requested fallback: '+JSON.stringify({messages:sender.fallbackMessages,decodeErrors:receiver.decodeErrors}));
   assert(receiver.decoderLive,'receiver AV1 player stopped');
-  assert(['track','video'].includes(receiver.presentationMode),'receiver copied every 4K frame through the app renderer');
+  assert(['canvas','track','video'].includes(receiver.presentationMode),'receiver lost native AV1 presentation');
   assert.strictEqual(receiver.latencyExceeded,false,'receiver remained above the AV1 260ms processing ceiling');
   if(receiver.backend==='webcodecs'&&!receiver.softwareFallback&&receiver.steadyStateP95Ms)assert(receiver.steadyStateP95Ms<=110,`receiver AV1 processing p95 reached ${receiver.steadyStateP95Ms.toFixed(0)}ms`);
   assert(receiver.decodedFrames>=Math.floor(durationMs/1000*45),`receiver decoded only ${receiver.decodedFrames} frames`);

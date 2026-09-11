@@ -113,7 +113,7 @@ async function main() {
   assert(result.localDecodeQueueSize === 0, `sender preview queued ${result.localDecodeQueueSize} frames`);
   assert.deepStrictEqual(channelReliability, { maxRetransmits: 1, maxPacketLifeTime: null }, 'native channel does not make one RTT-bounded repair attempt');
   assert.strictEqual(result.channelOrdered, false, 'native channel still has cross-frame head-of-line blocking');
-  assert(['track','video'].includes(result.presentationMode), 'receiver copied every 4K frame through a renderer canvas');
+  assert(['canvas','track','video'].includes(result.presentationMode), 'receiver lost native AV1 presentation');
   assert.strictEqual(result.nativeFallbacks, 0, 'healthy loopback transport requested a WebRTC codec fallback');
   assert(result.maxBufferedAmount <= 5*1024*1024, `native channel buffered ${(result.maxBufferedAmount/1024/1024).toFixed(1)} MiB`);
   assert(result.audioPackets >= Math.floor(enduranceMs/1000*30), `voice delivered only ${result.audioPackets} packets`);

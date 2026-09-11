@@ -177,9 +177,9 @@ label { display: block; margin: 0 0 6px; color: #b0b8c5; font-size: 10px; font-w
 .screen-section { position: absolute; z-index: 4; top: 54px; right: 18px; }
 .screen-videos { position: relative; width: min(360px, calc(100vw - 54px)); padding: 8px; border: 1px solid var(--stroke); border-radius: 10px; background: #0b0d11; }
 .screen-videos:not(:has(video:not([hidden]))) { display: none; }
-.remote-screen { display: block; width: 100%; max-height: 260px; border-radius: 6px; background: #07080a; }
-.screen-preview { position: absolute; right: 15px; bottom: 15px; width: 92px; border: 1px solid #747d8b; border-radius: 5px; }
-.native-screen-canvas{position:absolute;z-index:1;inset:0;display:block;width:100%;height:100%;background:#050609;color-scheme:dark;object-fit:contain;pointer-events:none}.native-screen-canvas[hidden]{display:none!important}.screen-tile .native-screen-canvas,.server-stage-screens .native-screen-canvas{width:100%;height:100%;border-radius:inherit}
+.remote-screen { display: block; width: 100%; max-height: 260px; border-radius: 6px; background: #050609; color-scheme: dark; }
+.screen-preview { position: absolute; right: 15px; bottom: 15px; width: 92px; border: 1px solid #747d8b; border-radius: 5px; background: #050609; color-scheme: dark; }
+.native-screen-canvas{position:absolute;z-index:1;inset:0;display:block;width:100%;height:100%;background:#050609;color-scheme:dark;object-fit:contain;pointer-events:none}.native-screen-canvas[hidden]{display:none!important}.native-screen-canvas.is-live{opacity:0}.native-screen-host{position:relative;display:block;width:100%;height:100%;min-width:0;min-height:0;overflow:hidden;background:#050609;color-scheme:dark;pointer-events:auto}.native-screen-host:has(>video[hidden]){display:none!important}.screen-tile .native-screen-canvas,.server-stage-screens .native-screen-canvas,.native-screen-host .native-screen-canvas{width:100%;height:100%;border-radius:inherit}.screen-tile video.awaiting-frame,.server-stage-screens video.awaiting-frame,.native-screen-host video.awaiting-frame{opacity:0!important;transition:none!important;background:#050609;color-scheme:dark}
 .fs-btn { position: absolute; top: 13px; right: 13px; min-height: 31px; background: #292e38; }
 .profile-editor { position: absolute; z-index: 8; bottom: 18px; left: 20px; width: 220px; padding: 14px; border: 1px solid #424a58; border-radius: var(--r); background: #242832; }
 .profile-editor[hidden] { display: none; }
@@ -1062,3 +1062,16 @@ html[data-theme="sunrise"] .app-rail{background:#7b3d1e}html[data-theme="sunrise
   html[data-theme="studio"] .unread-dm-dock,html[data-theme="horizon"] .unread-dm-dock{flex-direction:row;width:auto;flex:1 1 auto;min-width:0;max-height:none;overflow-x:auto;overflow-y:hidden}
   html[data-theme="studio"] .rail-button:hover,html[data-theme="horizon"] .rail-button:hover{transform:none;box-shadow:none}
 }
+
+/* Empty <video> paints a 300×150 UA frame. Light color-scheme makes that
+   rectangle white; opacity transitions left it uncovered for 200ms. */
+.screen-tile,.screen-videos,.server-stage-screens,#serverVoiceScreens,.native-screen-host{isolation:isolate;background:#050609;color-scheme:dark}
+.native-screen-host{position:relative;display:block;width:100%;height:100%;min-height:0;overflow:hidden}
+.screen-tile video,.remote-screen,.screen-preview,#remoteScreen,#screenPreview,.server-stage-screens video,#serverVoiceScreens video,#serverVoiceScreenPreview,#voicePanel.screen-expanded .screen-tile video,#voicePanel.screen-sharing .screen-tile video,.screen-tile.fs video,.native-screen-host video{position:relative;z-index:0;background:#050609!important;color-scheme:dark;transition:none}
+.native-screen-canvas,.screen-tile .native-screen-canvas,.server-stage-screens .native-screen-canvas,.native-screen-host .native-screen-canvas{z-index:1;background:#050609!important;color-scheme:dark}
+video.awaiting-frame,video.native-screen-waiting{opacity:0!important;background:#050609!important;color-scheme:dark}
+.native-screen-canvas.is-live{opacity:0}
+.screen-tile.fs,.screen-section.fs,.screen-section:fullscreen,#voicePanel .screen-section.fs,#voicePanel .screen-section:fullscreen,.server-voice-stage.fs,.server-voice-stage:fullscreen,.remote-screen.fs,.screen-preview.fs,.server-stage-screens video:fullscreen,.remote-screen:fullscreen,.screen-preview:fullscreen{background:#000!important;color-scheme:dark}
+html[data-theme] .screen-tile,html[data-theme] .screen-tile video,html[data-theme] .native-screen-canvas,html[data-theme] .native-screen-host,html[data-theme] .remote-screen,html[data-theme] .screen-preview,html[data-theme] #remoteScreen,html[data-theme] #screenPreview,html[data-theme] .server-stage-screens,html[data-theme] .server-stage-screens video,html[data-theme] #serverVoiceScreens,html[data-theme] #serverVoiceScreens video,html[data-theme] #serverVoiceScreenPreview{background:#050609!important;color-scheme:dark}
+@media(max-width:1280px){.screen-tile,.screen-tile video,.native-screen-canvas,.native-screen-host,.remote-screen,.screen-preview,#remoteScreen,#screenPreview,.server-stage-screens,.server-stage-screens video,#serverVoiceScreens video{background:#050609!important;color-scheme:dark}}
+@media(max-width:620px){.screen-tile,.screen-tile video,.native-screen-canvas,.native-screen-host,.remote-screen,.screen-preview,#remoteScreen,#screenPreview,.server-stage-screens,.server-stage-screens video,#serverVoiceScreens video{background:#050609!important;color-scheme:dark}}

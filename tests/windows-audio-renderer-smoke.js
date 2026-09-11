@@ -74,6 +74,12 @@ app.whenReady().then(async () => {
       assert(routedScreenTrack?.readyState==='live','the later desktop-audio m-line was not routed to the dedicated screen element');
       watchDmShare('remote');await new Promise(resolve=>setTimeout(resolve,120));
       assert(screenExpanded&&focusedScreen==='remote'&&!nativeRemoteAudio.muted&&!nativeRemoteAudio.paused&&routedScreenTrack.enabled,'watching a remote share did not unmute/play its desktop-audio track');
+      clearRemoteScreenShare('Not sharing');
+      assert(nativeRemoteAudio?.srcObject?.getAudioTracks?.()[0]===routedScreenTrack,'ending a share unbound the reserved desktop-audio element');
+      remoteScreenExpected=true;remoteScreenSuppressed=false;remoteScreen.hidden=false;
+      watchDmShare('remote');bindReservedRemoteScreenAudio();
+      await new Promise(resolve=>setTimeout(resolve,80));
+      assert(!nativeRemoteAudio.muted&&!nativeRemoteAudio.paused&&nativeRemoteAudio.srcObject?.getAudioTracks?.()[0]===routedScreenTrack,'a second share in the same call did not rebind desktop audio');
       let inboundAudio=0;for(const report of (await receiver.getStats()).values())if(report.type==='inbound-rtp'&&(report.kind==='audio'||report.mediaType==='audio'))inboundAudio+=Number(report.bytesReceived)||0;
       assert(inboundAudio>0,'the receiver did not receive cross-platform call/screen audio RTP');
       sender.close();receiver.close();pc=null;voice.oscillator.stop();screen.oscillator.stop();voice.track.stop();screen.track.stop();voice.context.close().catch(()=>{});screen.context.close().catch(()=>{});senderSilentContext.close().catch(()=>{});cleanupRemoteNativeScreen();remoteScreenExpected=false;remoteNativeScreenExpected=false;remoteScreen.hidden=true;screenExpanded=false;callActive=false;
