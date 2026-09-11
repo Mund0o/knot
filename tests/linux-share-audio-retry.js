@@ -18,8 +18,8 @@ assert(rendererSource.includes('while(isCurrent()&&!captureError&&Date.now()<dea
 assert(rendererSource.includes('op.connect(keepAlive)') && rendererSource.includes('keepAlive.connect(ctx.destination)'), 'PipeWire AudioWorklet is not kept alive against a muted destination');
 assert(preloadSource.includes("stopLinuxShareAudio: () => ipcRenderer.invoke('pair:stopLinuxShareAudio')"), 'stopLinuxShareAudio is not an awaitable invoke');
 assert(mainSource.includes("if (linuxShareAudio) return Promise.resolve({ label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: linuxShareAudio.routeReadyAt })"), 'Reusing a live PipeWire route omits routeReadyAt');
-assert(mainSource.includes('!state.loop || !state.routeEnabled') && mainSource.includes('state.routeEnabled = true') && mainSource.includes('await unmuteLinuxLoopbackReturn(state)'), 'Desktop streams can move before the muted loopback return is unmuted');
-assert(mainSource.includes("const moduleStream=/loopback|null-sink|module-/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`)") && !mainSource.includes('${mediaName} ${block}'), 'PipeWire routing still treats ordinary apps as modules because of module-stream-restore.id');
+assert(mainSource.includes('!state.routeEnabled') && mainSource.includes('state.routeEnabled = true') && mainSource.includes('await unmuteLinuxLoopbackReturn(state)'), 'Desktop streams can move before the muted loopback return is unmuted');
+assert(mainSource.includes("const moduleStream=/knotsharereturn|loopback|null-sink/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`)") && !mainSource.includes('${mediaName} ${block}'), 'PipeWire routing still treats ordinary apps as modules because of module-stream-restore.id');
 assert(rendererSource.includes('void attachNativeShareAudio(gen)') && !rendererSource.includes("if(!audioStarted){audioStarted=true;void attachNativeShareAudio(gen)}"), 'Native computer sound still waits for the first GOP');
 assert(rendererSource.includes('applyMediaElementOutput(audio).catch(()=>{});') && rendererSource.includes("if(!audio.muted)audio.play().catch(()=>{})"), 'Viewer screen audio does not apply the output device before play');
 
@@ -43,9 +43,9 @@ function moduleStreamFrom(block) {
   const mediaName = block.match(/media\.name\s*=\s*"([^"]+)"/)?.[1] || '';
   const nodeName = block.match(/node\.name\s*=\s*"([^"]+)"/)?.[1] || '';
   const driver = block.match(/^\s*Driver:\s*(\S+)/m)?.[1] || '';
-  return /loopback|null-sink|module-/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`);
+  return /knotsharereturn|loopback|null-sink/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`);
 }
-assert(/loopback|null-sink|module-/i.test(`Firefox firefox Sith Translation Meaning ${firefoxBlock}`), 'fixture no longer reproduces the module-stream-restore false positive');
+assert(/module-/i.test(firefoxBlock) && !moduleStreamFrom(firefoxBlock), 'fixture no longer reproduces the module-stream-restore false positive');
 assert(!moduleStreamFrom(firefoxBlock), 'Firefox playback would still be left on the real sink');
 assert(moduleStreamFrom(loopbackBlock), 'loopback return path would be moved into the share monitor');
 
