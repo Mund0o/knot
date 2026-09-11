@@ -1,11 +1,11 @@
 {
-  "version": "1.1.102",
-  "notes": "A friend’s incoming screen share no longer opens as a white rectangle. Empty video stays dark until a real picture exists.\nStarting a share no longer blasts a piercing tone through your speakers. The Linux audio return path starts muted and fades up.\nComputer sound stays attached across Stop/Share and group native shares.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.102/pair-p2p-1.1.102.tar.gz",
-  "linuxSha256": "3e86d2418591aeecfc466c24ceaf9a487ccdada670edb0dfa47b4b3cfbd6ebf8",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.102/Knot-1.1.102.AppImage",
-  "linuxAppImageSha256": "ba973c1fa598898de700d878d1d34793620838e84b85fe8b04a8c941d3df333a",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.102/Knot.Setup.1.1.102.exe",
-  "winSha256": "fe6a183c55553b6e98791b39043204bd30112960f4eec389f3190c761053d488",
-  "signature": "XTLGD9vZ29a+ywvbIatE7Dg/6tXlMHp8vwGvEvvEMzdrROMluGttaJrPxXb8lMXL//pKirM6cEgZ2I3FrONpDQ=="
+  "version": "1.1.103",
+  "notes": "Voice no longer dies around ten minutes in. ICE restarts instead of hanging up when TURN drops.\nA friend’s incoming share stays dark until a real picture exists, then draws on canvas — never Chromium’s white empty video.\nLinux-to-Linux computer sound actually reaches the capture sink. Firefox and games are no longer skipped as modules.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.103/pair-p2p-1.1.103.tar.gz",
+  "linuxSha256": "e9fe031f00a8f88ff3d9e71307b95042647829e55f26793d5cb124e83a5db51a",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.103/Knot-1.1.103.AppImage",
+  "linuxAppImageSha256": "67f1c03d055bbeb948220373cd447c9accd989398b686d3beae49f859dc518ae",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.103/Knot.Setup.1.1.103.exe",
+  "winSha256": "77a73a72cc751488866440347d0372386cf5a94379bd099bb467b61dd616df55",
+  "signature": "2x2zhq2x7A+0Qstm4jkmxz0m0wyl8mvD7u/L2Q3ndnhgPxn2uMmxQeqLnAA1+uYhfs0hXRvtttUZWMUdr0sEAg=="
 }
