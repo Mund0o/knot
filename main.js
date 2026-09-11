@@ -103,7 +103,7 @@ async function routeLinuxDesktopAudio(state) {
   if (linuxShareAudio !== state) return;
   const pairPids = pairProcessTree(processes), sinkNames = new Map(sinks.split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2).map(parts => [parts[0], parts[1]]));
   for (const parts of inputs.split(/\n+/).map(line => line.split(/\s+/)).filter(parts => parts.length >= 2)) {
-    const [id, currentSink] = parts, currentName = sinkNames.get(currentSink), block = details.match(new RegExp(`Sink Input #${id}\\n([\\s\\S]*?)(?=\\nSink Input #|$)`))?.[1] || '';
+    const [id, currentSink] = parts, currentName = sinkNames.get(currentSink) || currentSink, block = details.match(new RegExp(`Sink Input #${id}\\n([\\s\\S]*?)(?=\\nSink Input #|$)`))?.[1] || '';
     const pid = Number(block.match(/application\.process\.id\s*=\s*"?(\d+)"?/)?.[1]);
     const appName = block.match(/application\.name\s*=\s*"([^"]+)"/)?.[1] || '';
     const binary = block.match(/application\.process\.binary\s*=\s*"([^"]+)"/)?.[1] || '';
@@ -112,7 +112,7 @@ async function routeLinuxDesktopAudio(state) {
     const driver = block.match(/^\s*Driver:\s*(\S+)/m)?.[1] || '';
     // Names only: every PipeWire sink-input block also contains module-stream-restore.id.
     const moduleStream=/knotsharereturn|loopback|null-sink/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`);
-    if (pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || isNvidiaBroadcastLabel(appName, binary, mediaName) || moduleStream || !currentName || currentName === state.sink) continue;
+    if (currentName === state.sink || (currentName !== state.original && currentSink !== state.original) || pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || isNvidiaBroadcastLabel(appName, binary, mediaName) || moduleStream) continue;
     if (linuxShareAudio !== state) return;
     const movedOk = await pipewireOkAsync('pactl', ['move-sink-input', id, state.sink]);
     if (linuxShareAudio !== state) { if (movedOk) await pipewireOkAsync('pactl', ['move-sink-input', id, currentName]);return; }
