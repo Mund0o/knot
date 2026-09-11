@@ -1,11 +1,11 @@
 {
-  "version": "1.1.101",
-  "notes": "Stops 4K screen-share hitching every GOP. Keys send in 60 KB parts and skip to the latest picture instead of waiting on a full IDR.\nComputer sound retries a silent PipeWire start, and share tiles stay dark instead of flashing white.\nThe bitrate slider now tops out at the safe rate for your measured connection.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.101/pair-p2p-1.1.101.tar.gz",
-  "linuxSha256": "c5b0d03969c095b5ff1480fb5462faf5449c7f0767dc9403caa3ab4240302f42",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.101/Knot-1.1.101.AppImage",
-  "linuxAppImageSha256": "5a3125e2ceb5b4afa1da040466bf6d3ec24533ecdabc7b458a251aecd9740374",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.101/Knot.Setup.1.1.101.exe",
-  "winSha256": "117e8aede519c64b629bbcb17ec85c7263217a34ff739ae88bea7dba179ae8df",
-  "signature": "V2K7TTRoVB7ZemmggsZh5fDubsWBEbsb2+3tnHnj2TirvJRiqWv5qLC6TZ1mNRlLap8NZQJW1/uBxSmmN73IDQ=="
+  "version": "1.1.102",
+  "notes": "A friend’s incoming screen share no longer opens as a white rectangle. Empty video stays dark until a real picture exists.\nStarting a share no longer blasts a piercing tone through your speakers. The Linux audio return path starts muted and fades up.\nComputer sound stays attached across Stop/Share and group native shares.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.102/pair-p2p-1.1.102.tar.gz",
+  "linuxSha256": "3e86d2418591aeecfc466c24ceaf9a487ccdada670edb0dfa47b4b3cfbd6ebf8",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.102/Knot-1.1.102.AppImage",
+  "linuxAppImageSha256": "ba973c1fa598898de700d878d1d34793620838e84b85fe8b04a8c941d3df333a",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.102/Knot.Setup.1.1.102.exe",
+  "winSha256": "fe6a183c55553b6e98791b39043204bd30112960f4eec389f3190c761053d488",
+  "signature": "XTLGD9vZ29a+ywvbIatE7Dg/6tXlMHp8vwGvEvvEMzdrROMluGttaJrPxXb8lMXL//pKirM6cEgZ2I3FrONpDQ=="
 }
