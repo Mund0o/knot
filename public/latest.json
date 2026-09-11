@@ -1,11 +1,11 @@
 {
-  "version": "1.1.104",
-  "notes": "Stopping a screen share no longer kills the voice call. The mic is reattached when the share ends.\nLeaving a call no longer requires restarting Knot. Start voice works whenever the peer connection is still open.\nIncoming shares blit onto a dark canvas, and Linux loopback stays muted until it settles.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.104/pair-p2p-1.1.104.tar.gz",
-  "linuxSha256": "2a531c0cac3a26432ab59db87eb266ae0d83d9f5e1297ef1c4a5136482756635",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.104/Knot-1.1.104.AppImage",
-  "linuxAppImageSha256": "1f7a341731d5d7afa2bebc54c3a343a03b8ed4063bb7353bdf963f263d89cfbe",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.104/Knot.Setup.1.1.104.exe",
-  "winSha256": "f5ce41e9dfc9d2b73cff44a582e3b4b9e09c0c30b6f858a7af5faf7c3c5e8348",
-  "signature": "dO2klnikLJo3ANNv0HfWnehRJAA4QUnFjCPT9zdM/cElFaAX1UeMt/IHIRkbLp6RJnt755GqQgtk0Q9fahp+Cg=="
+  "version": "1.1.105",
+  "notes": "Incoming shares keep decoding onto the canvas instead of staying black.\nLinux computer sound moves every app on your speakers into the capture sink.\nYou can leave a call and rejoin without restarting Knot.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.105/pair-p2p-1.1.105.tar.gz",
+  "linuxSha256": "1e8d5807ca8eea9a649c3d0cfa731997ea36c320a1c8dc9cd3da56d0a5f60024",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.105/Knot-1.1.105.AppImage",
+  "linuxAppImageSha256": "f359b7deec70e61121081065800df243d9016e96e0e161d0c1ea1cd7324f66c7",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.105/Knot.Setup.1.1.105.exe",
+  "winSha256": "be8f9215652033bf330ed351001e000d25d3560dd06d1a330c4a77b75589ebd3",
+  "signature": "atXpKDCExtUKK0E6qymnlghk8mEXN6p7uiKcU6jnfI7EHQw411ALe+Nr1hAou+givL4Xean5hgMHMNZeD03eDw=="
 }
