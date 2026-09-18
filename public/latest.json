@@ -1,11 +1,11 @@
 {
-  "version": "1.1.106",
-  "notes": "Linux computer sound fades in instead of blasting the speakers when a share starts.\nNative AV1 stays on NVIDIA and AMD; VP9 is only if AV1 never paints.\nFriend computer sound binds after capture is live instead of a silent reserved track.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.106/pair-p2p-1.1.106.tar.gz",
-  "linuxSha256": "efc429f5c753f6449dba1877ed2919c0ab18d4b3cc7aa44521deb8e29cf4da0b",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.106/Knot-1.1.106.AppImage",
-  "linuxAppImageSha256": "caa4050f571bdecc8beb698d17c9531217bf18ee94b0dc0f03fb09888084cdd7",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.106/Knot.Setup.1.1.106.exe",
-  "winSha256": "14dbabeee2fb00fb8a94604d46195e97ac8094f74606528ea1c57f09f5c10ed2",
-  "signature": "9O12DF1BXmiTbnqs3CHI1iQRthCaqxCZJ7jeqwazNa0pPvpCtVW9PFRzBOInmDLe5K7KIuAiayzdL+Mbp1Q2CQ=="
+  "version": "1.1.107",
+  "notes": "Desktop sound stays audible while you share, and you can hear the friend's computer sound.\nStopping a share no longer kills the voice call.\nYou can leave a call and rejoin without restarting Knot.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.107/pair-p2p-1.1.107.tar.gz",
+  "linuxSha256": "141a6304d219c63331b47b97baf42fc77056bcc0edbd4a8331c54e29928ef3f0",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.107/Knot-1.1.107.AppImage",
+  "linuxAppImageSha256": "a9db20b02dd35063115296adc3a659a49a894a75bf33ce532b2ecfe0f3eb720e",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.107/Knot.Setup.1.1.107.exe",
+  "winSha256": "97c629ec5e8ac955e523eb091270cdb1fb278ae192441ce51d4d458e015f72ed",
+  "signature": "0SCqhQlp0gKD7/6cwTHusRBYMMTEjmKXA8yT5gebDTXhqtxIoyuiCJT4QNx0cFdsA8ycnp6xW8+l+iEC34E2BA=="
 }
