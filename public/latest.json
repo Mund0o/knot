@@ -1,11 +1,11 @@
 {
-  "version": "1.1.107",
-  "notes": "Desktop sound stays audible while you share, and you can hear the friend's computer sound.\nStopping a share no longer kills the voice call.\nYou can leave a call and rejoin without restarting Knot.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.107/pair-p2p-1.1.107.tar.gz",
-  "linuxSha256": "141a6304d219c63331b47b97baf42fc77056bcc0edbd4a8331c54e29928ef3f0",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.107/Knot-1.1.107.AppImage",
-  "linuxAppImageSha256": "a9db20b02dd35063115296adc3a659a49a894a75bf33ce532b2ecfe0f3eb720e",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.107/Knot.Setup.1.1.107.exe",
-  "winSha256": "97c629ec5e8ac955e523eb091270cdb1fb278ae192441ce51d4d458e015f72ed",
-  "signature": "0SCqhQlp0gKD7/6cwTHusRBYMMTEjmKXA8yT5gebDTXhqtxIoyuiCJT4QNx0cFdsA8ycnp6xW8+l+iEC34E2BA=="
+  "version": "1.1.108",
+  "notes": "Sharing no longer blasts the sharer's speakers.\nFriend computer sound is kept during 4K AV1.\nVoice and incoming share stay on your real speakers.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.108/pair-p2p-1.1.108.tar.gz",
+  "linuxSha256": "dbd6d2942ebd6d50706575f504c29c7d84056ab50751c8fa52bb2048267498b9",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.108/Knot-1.1.108.AppImage",
+  "linuxAppImageSha256": "0e16fd049e26e37c860b2345e31222c013eff33e0844820088793bda9c40fb0c",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.108/Knot.Setup.1.1.108.exe",
+  "winSha256": "774c79ec13a0bfb45b6a004d66eea14c92f1638c01b8039c869e6a7d41dca849",
+  "signature": "WTGhItGs6xzuU1ImqxZfr7x/4AFBuyV1kW9HQvmP0PLR93fAxQBmPzVDxrjeRn0o21zXmgpDm9FbbBuK5HDCCw=="
 }
