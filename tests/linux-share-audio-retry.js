@@ -18,10 +18,12 @@ assert(rendererSource.includes('while(isCurrent()&&!captureError&&Date.now()<dea
 assert(rendererSource.includes('op.connect(keepAlive)') && rendererSource.includes('keepAlive.connect(ctx.destination)'), 'PipeWire AudioWorklet is not kept alive against a muted destination');
 assert(preloadSource.includes("stopLinuxShareAudio: () => ipcRenderer.invoke('pair:stopLinuxShareAudio')"), 'stopLinuxShareAudio is not an awaitable invoke');
 assert(mainSource.includes("if (linuxShareAudio) return Promise.resolve({ label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: linuxShareAudio.routeReadyAt })"), 'Reusing a live PipeWire route omits routeReadyAt');
-assert(mainSource.includes('!state.routeEnabled') && mainSource.includes('state.routeEnabled = true') && mainSource.includes('await unmuteLinuxLoopbackReturn(state)'), 'Desktop streams can move before the muted loopback return is unmuted');
-assert(mainSource.includes("const moduleStream=/knotsharereturn|loopback|null-sink/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`)") && !mainSource.includes('${mediaName} ${block}'), 'PipeWire routing still treats ordinary apps as modules because of module-stream-restore.id');
+assert(mainSource.includes('!state.routeEnabled') && mainSource.includes('state.routeEnabled = true') && mainSource.includes('await unmuteLinuxLoopbackReturn(state)') && mainSource.includes("!/knotsharereturn/i.test(media)") && mainSource.includes('pcmReleaseAt') && mainSource.includes('combined.byteLength % 8'), 'Desktop streams can move, or PCM can start, before the muted loopback return has faded up');
+assert(mainSource.includes("const moduleStream=/knotsharereturn|loopback|null-sink/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`)") && !mainSource.includes('${mediaName} ${block}') && mainSource.includes("block.match(/^\\s*Sink:\\s*(\\S+)/m)") && mainSource.includes('state.routePulse') && mainSource.includes("['move-sink-input', id, state.sink]") && !mainSource.includes('!onOriginalSink'), 'PipeWire routing still treats ordinary apps as modules because of module-stream-restore.id');
 assert(rendererSource.includes('void attachNativeShareAudio(gen)') && !rendererSource.includes("if(!audioStarted){audioStarted=true;void attachNativeShareAudio(gen)}"), 'Native computer sound still waits for the first GOP');
 assert(rendererSource.includes('applyMediaElementOutput(audio).catch(()=>{});') && rendererSource.includes("if(!audio.muted)audio.play().catch(()=>{})"), 'Viewer screen audio does not apply the output device before play');
+assert(mainSource.includes('pair_share_hold_') && mainSource.includes('Knot_Share_Hold') && mainSource.includes('function linuxShareReturnInput'), 'Linux loopback still connects unmuted to the real speakers');
+assert(rendererSource.includes('bindReservedRemoteScreenAudio({force:true})') && rendererSource.includes('function applyRemoteShareVolume'), 'Reserved screen-audio rebind retries do not bounce a silent track');
 
 const firefoxBlock = `Sink Input #15648
         Driver: PipeWire
@@ -37,6 +39,11 @@ const loopbackBlock = `Sink Input #9
         application.name = "Loopback"
         media.name = "Loopback (pair_share_1.monitor)"
         node.name = "loopback-1-9"`;
+const pipewireLoopbackBlock = `Sink Input #12
+        Driver: PipeWire
+        application.name = "loopback"
+        media.name = "KnotShareReturn"
+        node.name = "input.pair_share_1.monitor"`;
 function moduleStreamFrom(block) {
   const appName = block.match(/application\.name\s*=\s*"([^"]+)"/)?.[1] || '';
   const binary = block.match(/application\.process\.binary\s*=\s*"([^"]+)"/)?.[1] || '';
@@ -48,6 +55,7 @@ function moduleStreamFrom(block) {
 assert(/module-/i.test(firefoxBlock) && !moduleStreamFrom(firefoxBlock), 'fixture no longer reproduces the module-stream-restore false positive');
 assert(!moduleStreamFrom(firefoxBlock), 'Firefox playback would still be left on the real sink');
 assert(moduleStreamFrom(loopbackBlock), 'loopback return path would be moved into the share monitor');
+assert(moduleStreamFrom(pipewireLoopbackBlock), 'PipeWire KnotShareReturn would be moved into the share monitor');
 
 const start = mainSource.indexOf('function startLinuxShareAudio(webContents)');
 const end = mainSource.indexOf('function trimLinuxShareAudio');

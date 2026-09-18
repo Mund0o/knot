@@ -32,8 +32,12 @@
 
   function av1Codec(description) {
     const bytes = bytesOf(description || []);
-    if (bytes.length < 3) return 'av01.0.13M.08';
-    const profile = bytes[1] >> 5,level = bytes[1]&0x1f,tier = bytes[2]&0x80?'H':'M';
+    if (bytes.length < 3) return 'av01.0.13H.08';
+    const profile = bytes[1] >> 5,level = bytes[1]&0x1f;
+    // 4K60 is level 5.1 (13). Advertising main tier there made NVIDIA/AMD
+    // VA-API accept the WebM container and then paint black.
+    let tier = bytes[2]&0x80?'H':'M';
+    if (level >= 13) tier = 'H';
     const highBitDepth = !!(bytes[2]&0x40),twelveBit = !!(bytes[2]&0x20),depth = highBitDepth?(twelveBit?12:10):8;
     return `av01.${profile}.${String(level).padStart(2,'0')}${tier}.${String(depth).padStart(2,'0')}`;
   }

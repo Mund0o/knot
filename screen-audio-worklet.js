@@ -5,12 +5,19 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     this.offset = 0;
     this.frames = 0;
     this.started = false;
-    // Fade in over ~10.7 ms at 48 kHz every time playback starts or resumes
+    // Fade in over ~40 ms at 48 kHz every time playback starts or resumes
     // after an underrun. Entering at full amplitude made any residual capture
     // discontinuity audible as a click or pop in the shared computer sound.
-    this.fadeInFrames = 512;
+    this.fadeInFrames = 1920;
     this.fadedIn = this.fadeInFrames;
+    this.recentPeak = 0;
+    this.playedFrames = 0;
     this.port.onmessage = event => {
+      if (event.data && event.data.type === 'fade') {
+        this.fadedIn = 0;
+        if (this.frames >= 1920) this.started = true;
+        return;
+      }
       let samples = event.data instanceof Float32Array ? event.data : new Float32Array(event.data || 0);
       let frames = Math.floor(samples.length / 2);
       if (!frames) return;
@@ -65,13 +72,18 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
         this.started = false;
         break;
       }
+      const index = this.offset * 2;
+      const sampleL = chunk[index] || 0, sampleR = chunk[index + 1] || 0;
+      const peak = Math.max(Math.abs(sampleL), Math.abs(sampleR));
+      if (this.started && this.fadedIn >= this.fadeInFrames && this.playedFrames < 96000 && this.recentPeak < 0.02 && peak > 0.12) this.fadedIn = 0;
+      this.recentPeak = this.recentPeak * 0.9 + peak * 0.1;
+      this.playedFrames++;
       let gain = 1;
       if (this.fadedIn < this.fadeInFrames) {
         gain = this.fadedIn / this.fadeInFrames;
         this.fadedIn++;
       }
-      const index = this.offset * 2;
-      const rawL = (chunk[index] || 0) * gain, rawR = (chunk[index + 1] || 0) * gain;
+      const rawL = sampleL * gain, rawR = sampleR * gain;
       left[frame] = Number.isFinite(rawL) ? Math.max(-1, Math.min(1, rawL)) : 0;
       right[frame] = Number.isFinite(rawR) ? Math.max(-1, Math.min(1, rawR)) : 0;
       this.offset++;
