@@ -1,11 +1,11 @@
 {
-  "version": "1.1.109",
-  "notes": "Share computer sound is captured and played back instead of being torn down.\nNative 4K60 AV1 no longer drops a whole GOP when one key is slightly late.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.109/pair-p2p-1.1.109.tar.gz",
-  "linuxSha256": "c7a05bd0bb206dffbe8860861b63d16b3b97d2181b19ea67c00693e70ad69cb9",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.109/Knot-1.1.109.AppImage",
-  "linuxAppImageSha256": "249a810190fc37e35f60b8347a01e2f729ac4daa6eab30c7e91dfddde5b2cb5c",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.109/Knot.Setup.1.1.109.exe",
-  "winSha256": "c42a8f882241df8d7ce81ac7b58c2644cf1319890083aacdd0a61c1a73c68085",
-  "signature": "r4vg1QJJHbHXeMnvdD9umdPxz7VW11cp+yZ9kHdFhi8NYojQE1pFCjUkMiVFzFDY7Ufd8hO25BWQu0u8+ayiAg=="
+  "version": "1.1.110",
+  "notes": "Share computer sound plays locally through the capture worklet instead of an unmuted loopback.\nCall log now includes share-audio diagnostics.\nNative AV1 no longer ends the share after one failed send.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.110/pair-p2p-1.1.110.tar.gz",
+  "linuxSha256": "05930d9ebaa263598448d7613e9ef42848620f8021b5a359e7d4ca4d716161d6",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.110/Knot-1.1.110.AppImage",
+  "linuxAppImageSha256": "a63b80eee592e5b88b43860f68718605ef6c3f2b88a8ed946354efc3c4b28d6a",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.110/Knot.Setup.1.1.110.exe",
+  "winSha256": "33e63233c5e2902d8847b83295def82e43cc2147717714b91f357c331b4531ef",
+  "signature": "gESeMKnNMsipCswzaGrm6jhk9yq5uRCSnNFeBOE9VK1NakG+lK8Tb/Ybg4a6yYSwnZ0YJuvPvvp0q2Lr9L3VCw=="
 }
