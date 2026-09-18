@@ -1,11 +1,11 @@
 {
-  "version": "1.1.111",
-  "notes": "Incoming friend share audio plays through the call AudioContext instead of a silent hidden element.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.111/pair-p2p-1.1.111.tar.gz",
-  "linuxSha256": "5374401521906b30232c42a34a8d3a3cfb9356b2e7c65cfb7c01229c60460a1e",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.111/Knot-1.1.111.AppImage",
-  "linuxAppImageSha256": "a401e765ae8609fe140ca50a4ca59c1d52defa9855bf9d1b031097aed65213ba",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.111/Knot.Setup.1.1.111.exe",
-  "winSha256": "b2ba49fdcd4e530c8e3be0aafb29efb0c6e6bc786c8c60ec0f04ac7023752993",
-  "signature": "/2d0NIO6BT2D+Mh8RTEvLC531aGEZ3+cECkcvjVfJ5YCJvGwOvsRZrlqvdPms7FKp8eKAJN2jPHbdI0qDlfKBg=="
+  "version": "1.1.112",
+  "notes": "Incoming share audio plays at audible volume; diagnostics show on the stream badge.\nNative AV1 is capped at 200 Mbps so the picture does not go black mid-share.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.112/pair-p2p-1.1.112.tar.gz",
+  "linuxSha256": "1c13a6e2b5e0e6a8a62e1cd72c7d6bb2fdd06d058d46fb1c87caeee7dd646645",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.112/Knot-1.1.112.AppImage",
+  "linuxAppImageSha256": "902b56c2d00c0aae1c4d6be720bbadb117a34da9af5e627e216a3fa0f32db864",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.112/Knot.Setup.1.1.112.exe",
+  "winSha256": "4c5beaeab1c83c024bab7d8d93284e579839441ff9ac13e7393735b06d9fe362",
+  "signature": "KPggnpJIFQg4OsborQqPG3Cv3zy/5gW1WjThmfZNKP0TdIy/rwF/EwT5kwVcvGwNmNy4OJCG4VNEnsu3jRulCg=="
 }
