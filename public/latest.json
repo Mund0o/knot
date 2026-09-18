@@ -1,11 +1,11 @@
 {
-  "version": "1.1.108",
-  "notes": "Sharing no longer blasts the sharer's speakers.\nFriend computer sound is kept during 4K AV1.\nVoice and incoming share stay on your real speakers.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.108/pair-p2p-1.1.108.tar.gz",
-  "linuxSha256": "dbd6d2942ebd6d50706575f504c29c7d84056ab50751c8fa52bb2048267498b9",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.108/Knot-1.1.108.AppImage",
-  "linuxAppImageSha256": "0e16fd049e26e37c860b2345e31222c013eff33e0844820088793bda9c40fb0c",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.108/Knot.Setup.1.1.108.exe",
-  "winSha256": "774c79ec13a0bfb45b6a004d66eea14c92f1638c01b8039c869e6a7d41dca849",
-  "signature": "WTGhItGs6xzuU1ImqxZfr7x/4AFBuyV1kW9HQvmP0PLR93fAxQBmPzVDxrjeRn0o21zXmgpDm9FbbBuK5HDCCw=="
+  "version": "1.1.109",
+  "notes": "Share computer sound is captured and played back instead of being torn down.\nNative 4K60 AV1 no longer drops a whole GOP when one key is slightly late.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.109/pair-p2p-1.1.109.tar.gz",
+  "linuxSha256": "c7a05bd0bb206dffbe8860861b63d16b3b97d2181b19ea67c00693e70ad69cb9",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.109/Knot-1.1.109.AppImage",
+  "linuxAppImageSha256": "249a810190fc37e35f60b8347a01e2f729ac4daa6eab30c7e91dfddde5b2cb5c",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.109/Knot.Setup.1.1.109.exe",
+  "winSha256": "c42a8f882241df8d7ce81ac7b58c2644cf1319890083aacdd0a61c1a73c68085",
+  "signature": "r4vg1QJJHbHXeMnvdD9umdPxz7VW11cp+yZ9kHdFhi8NYojQE1pFCjUkMiVFzFDY7Ufd8hO25BWQu0u8+ayiAg=="
 }
