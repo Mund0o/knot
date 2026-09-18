@@ -1,11 +1,11 @@
 {
-  "version": "1.1.110",
-  "notes": "Share computer sound plays locally through the capture worklet instead of an unmuted loopback.\nCall log now includes share-audio diagnostics.\nNative AV1 no longer ends the share after one failed send.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.110/pair-p2p-1.1.110.tar.gz",
-  "linuxSha256": "05930d9ebaa263598448d7613e9ef42848620f8021b5a359e7d4ca4d716161d6",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.110/Knot-1.1.110.AppImage",
-  "linuxAppImageSha256": "a63b80eee592e5b88b43860f68718605ef6c3f2b88a8ed946354efc3c4b28d6a",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.110/Knot.Setup.1.1.110.exe",
-  "winSha256": "33e63233c5e2902d8847b83295def82e43cc2147717714b91f357c331b4531ef",
-  "signature": "gESeMKnNMsipCswzaGrm6jhk9yq5uRCSnNFeBOE9VK1NakG+lK8Tb/Ybg4a6yYSwnZ0YJuvPvvp0q2Lr9L3VCw=="
+  "version": "1.1.111",
+  "notes": "Incoming friend share audio plays through the call AudioContext instead of a silent hidden element.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.111/pair-p2p-1.1.111.tar.gz",
+  "linuxSha256": "5374401521906b30232c42a34a8d3a3cfb9356b2e7c65cfb7c01229c60460a1e",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.111/Knot-1.1.111.AppImage",
+  "linuxAppImageSha256": "a401e765ae8609fe140ca50a4ca59c1d52defa9855bf9d1b031097aed65213ba",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.111/Knot.Setup.1.1.111.exe",
+  "winSha256": "b2ba49fdcd4e530c8e3be0aafb29efb0c6e6bc786c8c60ec0f04ac7023752993",
+  "signature": "/2d0NIO6BT2D+Mh8RTEvLC531aGEZ3+cECkcvjVfJ5YCJvGwOvsRZrlqvdPms7FKp8eKAJN2jPHbdI0qDlfKBg=="
 }
