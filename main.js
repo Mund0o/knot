@@ -134,8 +134,8 @@ async function routeLinuxDesktopAudio(state) {
     // Names only: every PipeWire sink-input block also contains module-stream-restore.id.
     const moduleStream=/knotsharereturn|loopback|null-sink/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`);
     const knotBinary = path.basename(process.execPath || '').replace(/\.exe$/i, '').toLowerCase();
-    const knotClient = pairPids.has(pid) || appName === 'Knot' || binary === 'pair-p2p' || /^knot$/i.test(binary) || (knotBinary && knotBinary !== 'electron' && binary.toLowerCase() === knotBinary);
-    const onShareSink = currentName === state.sink || currentSink === state.sink || sinkFromBlock === state.sink || !!(state.hold && (currentName === state.hold || currentSink === state.hold || sinkFromBlock === state.hold));
+    const knotClient = isKnotPlaybackStream(pid, appName, binary, pairPids, knotBinary);
+    const onShareSink = currentName === state.sink || currentSink === state.sink || sinkFromBlock === state.sink;
     if (onShareSink || knotClient || isNvidiaBroadcastLabel(appName, binary, mediaName) || moduleStream) continue;
     if (linuxShareAudio !== state) return;
     let movedOk = false;
@@ -164,6 +164,33 @@ function scheduleLinuxDesktopAudioRoute(state, delay = 80) {
     finally { state.routeRunning = false; }
   }, Math.max(delay, warmupDelay));
 }
+function isKnotPlaybackStream(pid, appName, binary, pairPids, knotBinary) {
+  const name = String(appName || ''), bin = String(binary || ''), knotBin = String(knotBinary || '').toLowerCase();
+  if (pairPids.has(pid) || /^knot$/i.test(name) || /^(?:pair-p2p|knot)$/i.test(bin)) return true;
+  if (knotBin && bin.toLowerCase() === knotBin) return true;
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  const fs = require('fs');
+  try {
+    const exe = String(fs.readlinkSync('/proc/' + pid + '/exe') || '').replace(/ \(deleted\)$/,'');
+    if (exe === process.execPath || /pair-p2p/i.test(exe) || /\/knot$/i.test(exe)) return true;
+    if (exe.includes('.mount_') && /knot/i.test(exe)) return true;
+    const appDir = String(process.env.APPDIR || '').replace(/\/$/, '');
+    if (appDir && (exe === appDir || exe.startsWith(appDir + '/'))) return true;
+    const ourDir = path.dirname(process.execPath || '');
+    if (ourDir && ourDir !== '/' && (/\.mount_/i.test(ourDir) || /knot/i.test(ourDir)) && (exe === ourDir || exe.startsWith(ourDir + '/'))) return true;
+  } catch {}
+  try { if (/^(?:pair-p2p|knot)$/i.test(fs.readFileSync('/proc/' + pid + '/comm', 'utf8').trim())) return true; } catch {}
+  try { if (/knot|pair-p2p/i.test(fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8'))) return true; } catch {}
+  let current = pid;
+  const seen = new Set();
+  while (Number.isFinite(current) && current > 1 && !seen.has(current)) {
+    seen.add(current);
+    if (pairPids.has(current) || current === process.pid) return true;
+    try { current = Number(fs.readFileSync('/proc/' + current + '/status', 'utf8').match(/^PPid:\s*(\d+)/m)?.[1]); }
+    catch { break; }
+  }
+  return false;
+}
 function linuxShareReturnInput(block, state) {
   const media = block.match(/media\.name\s*=\s*"([^"]+)"/)?.[1] || '';
   const appName = block.match(/application\.name\s*=\s*"([^"]+)"/)?.[1] || '';
@@ -172,14 +199,14 @@ function linuxShareReturnInput(block, state) {
   const sinkName = block.match(/^\s*Sink:\s*(\S+)/m)?.[1] || '';
   const blob = `${appName} ${media} ${nodeName} ${driver} ${sinkName}`;
   if (!/knotsharereturn/i.test(media)) {
-    const hints = [state?.sink, state?.hold, state?.source].filter(Boolean);
+    const hints = [state?.sink, state?.original, state?.source].filter(Boolean);
     return /loopback/i.test(blob) && hints.some(part => part && blob.includes(part));
   }
   return true;
 }
 async function muteLinuxLoopbackReturn(state) {
   state.loopInputs = state.loopInputs || [];
-  for (let attempt = 0; attempt < 50 && linuxShareAudio === state; attempt++) {
+  for (let attempt = 0; attempt < 80 && linuxShareAudio === state; attempt++) {
     const details = await pipewireAsync('pactl', ['list', 'sink-inputs']);
     if (linuxShareAudio !== state) return false;
     const blocks = String(details || '').split(/\n(?=Sink Input #)/);
@@ -322,7 +349,7 @@ async function startLinuxShareAudioInner(webContents,generation) {
   // Do not redirect real desktop audio until the new monitor and loopback have
   // settled. This costs only a fraction of a second of initial share audio and
   // prevents the full-volume startup burst reported on PipeWire systems.
-  const state = { original, sink, module, loop: '', hold: '', holdModule: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, routePulse: null, loopTimer: null, routeRunning: false, routeAgain: false, routeEnabled: false, routeReadyAt: Date.now() + 1200, discardUntil: Date.now() + 250, pcmReleaseAt: Date.now() + 30000, pcmRemainder: Buffer.alloc(0), pcmReadAt: 0, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1 };
+  const state = { original, sink, module, loop: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, routePulse: null, loopTimer: null, routeRunning: false, routeAgain: false, routeEnabled: false, routeReadyAt: Date.now() + 1200, discardUntil: Date.now() + 250, pcmReleaseAt: Date.now() + 30000, pcmRemainder: Buffer.alloc(0), pcmReadAt: 0, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1 };
   linuxShareAudio = state;
   if(generation!==linuxShareAudioGeneration){
     linuxShareAudio = null;
@@ -339,47 +366,29 @@ async function startLinuxShareAudioInner(webContents,generation) {
   };
   // Load the monitor→speakers loopback only after the discard window. Connecting
   // it during negotiation dumps uninitialized float PCM into the real speakers
-  // at full volume — a piercing blast for the person sharing. Park the return
-  // on a dummy sink first, mute it (PipeWire often ignores media.name=KnotShareReturn
-  // and names it Loopback (pair_share_*.monitor)), then move it to the real
-  // speakers only after mute is verified.
+  // at full volume. Pin it on the real default sink (sink_dont_move), mute it,
+  // move desktop apps onto the share sink, then fade the return up. A dummy
+  // hold sink left the return pinned off the speakers, so sharing silenced
+  // every local app until stop restored them.
   state.loopTimer = setTimeout(async () => {
     state.loopTimer = null;
     if (linuxShareAudio !== state) return;
-    const hold = `pair_share_hold_${process.pid}`;
-    const holdModule = await pipewireAsync('pactl', ['load-module', 'module-null-sink', `sink_name=${hold}`, 'sink_properties=device.description=Knot_Share_Hold']);
-    if (linuxShareAudio !== state) {
-      if (holdModule) await pipewireAsync('pactl', ['unload-module', holdModule]);
-      return;
-    }
-    state.hold = hold;
-    state.holdModule = holdModule || '';
-    if (!holdModule) {
-      state.hold = '';
-      state.routeEnabled = true;
-      state.routeReadyAt = Date.now() + 80;
-      scheduleLinuxDesktopAudioRoute(state, 0);
-      state.audits = [400, 1200, 2500, 5000, 10000].map(delay => setTimeout(() => scheduleLinuxDesktopAudioRoute(state, 0), delay));
-      if (state.routePulse) clearInterval(state.routePulse);
-      state.routePulse = setInterval(() => scheduleLinuxDesktopAudioRoute(state, 0), 3000);
-      state.pcmReleaseAt = Date.now();
-      state.routeReadyAt = Date.now();
-      return;
-    }
-    const loop = await pipewireAsync('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${hold}`, 'latency_msec=40', 'sink_dont_move=true', 'source_dont_move=true', 'sink_input_properties=media.name=KnotShareReturn']);
+    const restoreShareSink = async () => {
+      await pipewireOkAsync('pactl', ['set-sink-mute', sink, '0']);
+      await pipewireOkAsync('pactl', ['set-sink-volume', sink, '100%']);
+    };
+    // Mute the empty share sink before the loopback exists so PipeWire
+    // negotiation cannot dump an unmuted buffer into the real speakers.
+    await pipewireOkAsync('pactl', ['set-sink-volume', sink, '0%']);
+    await pipewireOkAsync('pactl', ['set-sink-mute', sink, '1']);
+    if (linuxShareAudio !== state) return;
+    const loop = await pipewireAsync('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${original}`, 'latency_msec=40', 'sink_dont_move=true', 'source_dont_move=true', 'sink_input_properties=media.name=KnotShareReturn']);
     if (linuxShareAudio !== state) {
       if (loop) await pipewireAsync('pactl', ['unload-module', loop]);
-      if (holdModule) await pipewireAsync('pactl', ['unload-module', holdModule]);
       return;
     }
     if (!loop) {
-      state.loop = '';
-      state.routeEnabled = true;
-      state.routeReadyAt = Date.now() + 80;
-      scheduleLinuxDesktopAudioRoute(state, 0);
-      state.audits = [400, 1200, 2500, 5000, 10000].map(delay => setTimeout(() => scheduleLinuxDesktopAudioRoute(state, 0), delay));
-      if (state.routePulse) clearInterval(state.routePulse);
-      state.routePulse = setInterval(() => scheduleLinuxDesktopAudioRoute(state, 0), 3000);
+      await restoreShareSink();
       state.pcmReleaseAt = Date.now();
       state.routeReadyAt = Date.now();
       return;
@@ -387,21 +396,12 @@ async function startLinuxShareAudioInner(webContents,generation) {
     state.loop = loop;
     const muted = await muteLinuxLoopbackReturn(state);
     if (linuxShareAudio !== state) return;
-    if (muted) {
-      for (const id of state.loopInputs) {
-        let movedOk = false;
-        for (let attempt = 0; attempt < 3 && linuxShareAudio === state && !movedOk; attempt++) {
-          if (attempt) await new Promise(resolve => setTimeout(resolve, 40 * attempt));
-          if (linuxShareAudio !== state) return;
-          movedOk = await pipewireOkAsync('pactl', ['move-sink-input', id, original]);
-        }
-        await pipewireOkAsync('pactl', ['set-sink-input-mute', id, '1']);
-        await pipewireOkAsync('pactl', ['set-sink-input-volume', id, '0%']);
-      }
-      state.loopInputs = [];
+    if (!muted) {
       await muteLinuxLoopbackReturn(state);
       if (linuxShareAudio !== state) return;
     }
+    await restoreShareSink();
+    if (linuxShareAudio !== state) return;
     state.routeEnabled = true;
     state.routeReadyAt = Date.now() + 80;
     scheduleLinuxDesktopAudioRoute(state, 0);
@@ -410,7 +410,7 @@ async function startLinuxShareAudioInner(webContents,generation) {
     state.routePulse = setInterval(() => scheduleLinuxDesktopAudioRoute(state, 0), 3000);
     await new Promise(resolve => setTimeout(resolve, 180));
     if (linuxShareAudio !== state) return;
-    if (muted) await unmuteLinuxLoopbackReturn(state);
+    await unmuteLinuxLoopbackReturn(state);
     if (linuxShareAudio !== state) return;
     state.pcmReleaseAt = Date.now();
     state.routeReadyAt = Date.now();
@@ -480,7 +480,6 @@ function stopLinuxShareAudio() {
     state.pcmChunks.length = 0;state.pcmBytes = 0;state.pcmInflight.clear();state.pcmOldestInflightAt = 0;
     await Promise.all((state.moved || []).map(input=>pipewireOkAsync('pactl', ['move-sink-input', input.id, input.sink])));
     if (state.loop) await pipewireAsync('pactl', ['unload-module', state.loop]);
-    if (state.holdModule) await pipewireAsync('pactl', ['unload-module', state.holdModule]);
     await pipewireAsync('pactl', ['unload-module', state.module]);
   })().finally(()=>{if(linuxShareAudioStopping===stopping)linuxShareAudioStopping=null});
   linuxShareAudioStopping=stopping;return stopping;

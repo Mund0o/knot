@@ -22,7 +22,7 @@ assert(mainSource.includes('!state.routeEnabled') && mainSource.includes('state.
 assert(mainSource.includes("const moduleStream=/knotsharereturn|loopback|null-sink/i.test(`${appName} ${binary} ${mediaName} ${nodeName} ${driver}`)") && !mainSource.includes('${mediaName} ${block}') && mainSource.includes("block.match(/^\\s*Sink:\\s*(\\S+)/m)") && mainSource.includes('state.routePulse') && mainSource.includes("['move-sink-input', id, state.sink]") && !mainSource.includes('!onOriginalSink'), 'PipeWire routing still treats ordinary apps as modules because of module-stream-restore.id');
 assert(rendererSource.includes('void attachNativeShareAudio(gen)') && !rendererSource.includes("if(!audioStarted){audioStarted=true;void attachNativeShareAudio(gen)}"), 'Native computer sound still waits for the first GOP');
 assert(rendererSource.includes('applyMediaElementOutput(audio).catch(()=>{});') && rendererSource.includes("if(!audio.muted)audio.play().catch(()=>{})"), 'Viewer screen audio does not apply the output device before play');
-assert(mainSource.includes('pair_share_hold_') && mainSource.includes('Knot_Share_Hold') && mainSource.includes('function linuxShareReturnInput'), 'Linux loopback still connects unmuted to the real speakers');
+assert(mainSource.includes('`sink=${original}`') && mainSource.includes('sink_dont_move=true') && mainSource.includes('function linuxShareReturnInput') && mainSource.includes('function isKnotPlaybackStream'), 'Linux loopback is not pinned to the real speakers after mute');
 assert(rendererSource.includes('bindReservedRemoteScreenAudio({force:true})') && rendererSource.includes('function applyRemoteShareVolume'), 'Reserved screen-audio rebind retries do not bounce a silent track');
 
 const firefoxBlock = `Sink Input #15648

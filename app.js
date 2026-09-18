@@ -763,6 +763,7 @@ function clearRemoteScreenShare(status='Not sharing'){
   try{remoteScreen.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}
   remoteScreen.srcObject=null;remoteScreen.hidden=true;resetShareSurface(remoteScreen);if(nativeRemoteAudio){try{nativeRemoteAudio.pause();nativeRemoteAudio.muted=true}catch{}}screenStatus.textContent=status;
   try{if(wasFocused)exitShareFullscreen({collapse:true});else updateScreenLayout()}catch{}
+  if(callActive)void restoreDirectVoice();
 }
 function stopWatchingRemoteShare(){
   if(remoteScreen.hidden&&!remoteScreen.srcObject)return;
@@ -923,6 +924,7 @@ function setupPeer(){
     silentDst.channelCount=1;silentScreenDst.channelCount=2;
     audioTransceiver=pc.addTrack(silentDst.stream.getAudioTracks()[0],silentDst.stream);
     screenAudioTransceiver=pc.addTrack(silentScreenDst.stream.getAudioTracks()[0],silentScreenDst.stream);
+    pc._silentVoiceAudioTrack=silentDst.stream.getAudioTracks()[0];
     pc._silentScreenAudioTrack=silentScreenDst.stream.getAudioTracks()[0];
     // Keep a reference so we can close the AudioContext on disconnect
     pc._silentAudioCtx=silentCtx;
@@ -954,14 +956,14 @@ function setupPeer(){
       // after its video track is replaced, leaving Windows standard shares
       // visibly live but silent. The dedicated element gives standard and AV1
       // shares the same reliable playback, output-device, and volume route.
-      const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio.muted=true;audio.volume=0;e.track.enabled=true;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
+      const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio._knotShareAudioTrack=e.track;audio.muted=true;audio.volume=0;e.track.enabled=true;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
       applyMediaElementOutput(audio).catch(()=>{});
-      const play=()=>{if(!remoteScreenExpected||remoteScreenSuppressed||audio.srcObject!==stream)return;e.track.enabled=true;if(remoteScreen.volume===0){audio.volume=0;audio.muted=true;return}audio.muted=false;if(audio.volume>0.05){audio.play().catch(()=>{});return}audio.volume=0;audio.play().catch(()=>{});fadeRemoteShareAudio(audio,{force:true})};
+      const play=()=>{if(!remoteScreenExpected||remoteScreenSuppressed||audio.srcObject!==stream)return;e.track.enabled=true;startRemoteShareElement(audio,{forceFade:audio.volume<=.05})};
       updateScreenLayout();play();
       if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
-    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){if(nativeRemotePlayer)cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true});const receiver=pc.getReceivers().find(value=>value.track===e.track);remoteScreenDecodeStop?.();remoteScreenDecodeStop=receiver?monitorRemoteScreenDecode(receiver,e.track,null,()=>!remoteScreen.hidden&&!remoteScreenSuppressed):null;remoteScreen.muted=true;remoteScreen.hidden=false;disarmShareVideoReveal(remoteScreen);try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};prepareShareSurface(remoteScreen);watchDmShare('remote');e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
+    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){const next=e.transceiver?.receiver?.track;if(next&&next!==e.track&&next.kind==='audio'&&next.readyState!=='ended'){remoteVoiceTrack=next;monitorSpeaking('dm-friend',next);if(callActive)setRemoteCallAudio(true);return}remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');if(callActive&&pc&&!['failed','closed'].includes(pc.connectionState)){restoreRemoteDirectVoicePlayback();return}applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){if(nativeRemotePlayer)cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true});const receiver=pc.getReceivers().find(value=>value.track===e.track);remoteScreenDecodeStop?.();remoteScreenDecodeStop=receiver?monitorRemoteScreenDecode(receiver,e.track,null,()=>!remoteScreen.hidden&&!remoteScreenSuppressed):null;remoteScreen.muted=true;remoteScreen.hidden=false;disarmShareVideoReveal(remoteScreen);try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};prepareShareSurface(remoteScreen);watchDmShare('remote');e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
 }
 function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
   let latencyTargetMs=45;const applyLatencyTarget=value=>{latencyTargetMs=Math.min(NATIVE_SCREEN_LATENCY_CEILING_MS,value);try{receiver.playoutDelayHint=latencyTargetMs/1000}catch{}try{if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=latencyTargetMs}catch{}};applyLatencyTarget(latencyTargetMs);
@@ -2217,11 +2219,16 @@ function abandonDmMediaAttempt(peerId){
   if(pc||signaling)disconnectRoom({preserveCall:true});
   dmPeerId=peerId;dmConnectingPeerId=peerId;syncActiveDmTransport();
 }
+function directVoiceTransportDead(target=pc){
+  if(!target)return true;
+  const conn=String(target.connectionState||''),ice=String(target.iceConnectionState||''),sig=String(target.signalingState||'');
+  return sig==='closed'||['closed','failed'].includes(conn)||ice==='closed'||ice==='failed';
+}
 async function ensureDmMediaConnection(peerId=activePeerId,{requireFileChannel=false}={}){
   const friend=directoryUser(peerId);if(!peerId||!friendReachable(peerId))throw new Error('Your friend is offline');
   if(!friend?.online&&friendOnLan(peerId))return lanEnsureMedia(peerId);
   if(dmMediaPlan?.peerId===peerId)return dmMediaPlan.promise;
-  if(pc&&dmPeerId===peerId&&['connected','connecting','new'].includes(pc.connectionState))return pc;
+  if(pc&&dmPeerId===peerId&&['connected','connecting','new'].includes(pc.connectionState)&&!directVoiceTransportDead(pc))return pc;
   if(dmCallOngoing()&&dmCallPeerId!==peerId)throw new Error('End the current voice call before starting another direct connection');
   if(dmMediaPlan)dmMediaPlan.cancelled=true;
   const plan={peerId,cancelled:false,promise:null};dmMediaPlan=plan;dmConnectingPeerId=peerId;syncActiveDmTransport();
@@ -2294,7 +2301,7 @@ function stopWatchingServerShare(peerId=serverFocusedShareId){if(!peerId)return;
 function renderServerShareExperience(){
   const stage=$('#serverVoiceStage'),members=$('#serverVoiceStageMembers'),screens=$('#serverVoiceScreens');if(!stage||!members||!screens)return;
   if(serverFocusedShareId&&!serverShareVideo(serverFocusedShareId))serverFocusedShareId='';const active=serverFocusedShareId&&!serverSuppressedShares.has(serverFocusedShareId)?serverShareVideo(serverFocusedShareId):null;
-  for(const video of screens.querySelectorAll('video')){const peerId=video.id==='serverVoiceScreenPreview'?directoryUserId:video.dataset.peerId||'',selected=!!active&&video===active,visible=document.visibilityState==='visible',isLocal=peerId===directoryUserId,state=isLocal?null:serverPeers.get(peerId);video.hidden=!selected;if(isLocal)serverNativeLocalPlayer?.setActive(selected&&visible);else state?.nativeScreenPlayer?.setActive(visible);if(!isLocal)try{video.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}video.volume=isLocal?0:remoteScreen.volume;video.muted=true;if(state?.screenAudio){state.screenAudio.volume=remoteScreen.volume;state.screenAudio.muted=!selected||state.screenAudio.volume===0;try{state.screenAudio.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}if(selected&&!state.screenAudio.muted)state.screenAudio.play().catch(()=>{});else try{state.screenAudio.pause()}catch{}}if(selected)prepareShareSurface(video);if(visible)playShareVideo(video);if(!video.dataset.shareMenu){video.dataset.shareMenu='1';video.addEventListener('contextmenu',event=>showShareContextMenu(event,{label:isLocal?'Your stream':(directoryUser(peerId)?.name||'Stream'),volume:!isLocal,stopWatching:()=>stopWatchingServerShare(peerId)}));video.addEventListener('dblclick',()=>stage.requestFullscreen?.().catch(()=>video.requestFullscreen?.().catch(()=>{})))}}
+  for(const video of screens.querySelectorAll('video')){const peerId=video.id==='serverVoiceScreenPreview'?directoryUserId:video.dataset.peerId||'',selected=!!active&&video===active,visible=document.visibilityState==='visible',isLocal=peerId===directoryUserId,state=isLocal?null:serverPeers.get(peerId);video.hidden=!selected;if(isLocal)serverNativeLocalPlayer?.setActive(selected&&visible);else state?.nativeScreenPlayer?.setActive(visible);if(!isLocal)try{video.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}video.volume=isLocal?0:remoteScreen.volume;video.muted=true;if(state?.screenAudio){state.screenAudio.volume=remoteScreen.volume;try{state.screenAudio.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}if(!selected||state.screenAudio.volume===0){state.screenAudio.muted=true;try{state.screenAudio.pause()}catch{}}else if(state.screenAudio.muted){state.screenAudio.play().then(()=>{if(state.screenAudio&&serverFocusedShareId===peerId)state.screenAudio.muted=false}).catch(()=>{})}else state.screenAudio.play().catch(()=>{})}if(selected)prepareShareSurface(video);if(visible)playShareVideo(video);if(!video.dataset.shareMenu){video.dataset.shareMenu='1';video.addEventListener('contextmenu',event=>showShareContextMenu(event,{label:isLocal?'Your stream':(directoryUser(peerId)?.name||'Stream'),volume:!isLocal,stopWatching:()=>stopWatchingServerShare(peerId)}));video.addEventListener('dblclick',()=>stage.requestFullscreen?.().catch(()=>video.requestFullscreen?.().catch(()=>{})))}}
   screens.hidden=!active;members.classList.toggle('watching-share',!!active);stage.classList.toggle('watching-share',!!active);document.body.classList.toggle('screen-share-active',!!active||!screenPreview.hidden||!remoteScreen.hidden);
   for(const card of members.querySelectorAll('.server-stage-member')){const avatar=card.querySelector('[data-speaking-id]'),peerId=avatar?.dataset.speakingId||'',video=serverShareVideo(peerId);card.querySelector('.server-share-badge')?.remove();card.classList.toggle('has-share',!!video);if(!video)continue;const button=document.createElement('button');button.type='button';button.className='server-share-badge';button.innerHTML='<span aria-hidden="true">▣</span><small>LIVE</small>';button.title='Watch '+(peerId===directoryUserId?'your stream':(directoryUser(peerId)?.name||'stream'));button.setAttribute('aria-label',button.title);button.onclick=()=>watchServerShare(peerId);card.prepend(button)}
 }
@@ -2372,8 +2379,9 @@ function beginServerNativeScreen(peerId,state,meta,channel){
   let fallbackRequested=false;const fallback=()=>{if(fallbackRequested)return;fallbackRequested=true;const fire=()=>{try{if(channel.readyState==='open')channel.send(JSON.stringify({t:'native-screen-fallback',serverId:state.context.serverId}))}catch{}try{if(state.channel?.readyState==='open')state.channel.send(JSON.stringify({t:'native-screen-fallback',serverId:state.context.serverId}))}catch{}};fire();[400,1200,2500].forEach(delay=>setTimeout(()=>{if(state.nativeScreenPlayer)fire()},delay))};try{state.nativeScreenPlayer=createNativeScreenPlayer(video,meta.codec||'AV1',fallback,meta)}catch(error){fallback();clearServerNativeScreen(state,{keepChannel:true,keepAudio:true});setServerStatus(error.message);return false}prepareShareSurface(video);channel._nativeReceive=nativeScreenReceiveState(state.nativeScreenPlayer,meta,fallback);try{state.nativeBufferingStop?.()}catch{}state.nativeBufferingStop=monitorNativeScreenBuffering(channel,{isActive:()=>document.visibilityState==='visible'&&!!state.screen&&!state.screen.hidden});drainNativeScreenPreMeta(channel);ackReady();bindServerReservedScreenAudio(peerId,state);if(!serverFocusedShareId)watchServerShare(peerId);renderServerVoiceUI();return true
 }
 function addServerNativeScreenAudio(state,track,stream){
-  if(state.screenAudio?.srcObject?.getAudioTracks?.()[0]===track||state.screenAudio?.srcObject===stream){state.nativeScreenAudioExpected=false;state.screenAudio.muted=serverFocusedShareId!==stream._knotPeerId&&serverFocusedShareId!==state.screen?.dataset.peerId;if(!state.screenAudio.muted){if(state.screenAudio.volume<=.05){state.screenAudio.volume=0;state.screenAudio.play().catch(()=>{});fadeRemoteShareAudio(state.screenAudio)}else state.screenAudio.play().catch(()=>{})}track.onunmute=()=>{if(state.screenAudio){state.screenAudio.srcObject=new MediaStream([track]);state.screenAudio.play().catch(()=>{})}};renderServerShareExperience();return}
-  if(state.screenAudio){try{state.screenAudio.remove()}catch{}}const audio=document.createElement('audio');audio.autoplay=true;audio.hidden=true;audio.srcObject=stream;audio.volume=remoteScreen.volume;audio.muted=serverFocusedShareId!==stream._knotPeerId&&serverFocusedShareId!==state.screen?.dataset.peerId;document.body.append(audio);state.screenAudio=audio;state.nativeScreenAudioExpected=false;applyMediaElementOutput(audio).catch(()=>{});track.onended=()=>{if(state.screenAudio===audio){audio.remove();state.screenAudio=null}};renderServerShareExperience()
+  const selected=serverFocusedShareId===stream._knotPeerId||serverFocusedShareId===state.screen?.dataset.peerId;
+  if(state.screenAudio?.srcObject?.getAudioTracks?.()[0]===track||state.screenAudio?.srcObject===stream){state.nativeScreenAudioExpected=false;if(!selected)state.screenAudio.muted=true;else{state.screenAudio.muted=true;state.screenAudio.play().then(()=>{if(state.screenAudio&&(state.screenAudio.srcObject===stream||state.screenAudio.srcObject?.getAudioTracks?.()[0]===track)){state.screenAudio.muted=false;if(state.screenAudio.volume<=.05){state.screenAudio.volume=0;fadeRemoteShareAudio(state.screenAudio,{force:true})}}}).catch(()=>{})}track.onunmute=()=>{if(state.screenAudio){state.screenAudio.srcObject=new MediaStream([track]);state.screenAudio.muted=true;state.screenAudio.play().then(()=>{if(state.screenAudio)state.screenAudio.muted=false}).catch(()=>{})}};renderServerShareExperience();return}
+  if(state.screenAudio){try{state.screenAudio.remove()}catch{}}const audio=document.createElement('audio');audio.autoplay=true;audio.hidden=true;audio.srcObject=stream;audio.volume=selected?0:remoteScreen.volume;audio.muted=true;document.body.append(audio);state.screenAudio=audio;state.nativeScreenAudioExpected=false;applyMediaElementOutput(audio).catch(()=>{});if(selected)audio.play().then(()=>{if(state.screenAudio!==audio)return;audio.muted=false;fadeRemoteShareAudio(audio,{force:true})}).catch(()=>{});track.onended=()=>{if(state.screenAudio===audio){audio.remove();state.screenAudio=null}};renderServerShareExperience()
 }
 function bindServerReservedScreenAudio(peerId,state){
   const track=state?.pc?.getTransceivers?.().find(item=>item.sender===state.screenAudioSender)?.receiver?.track;
@@ -3008,17 +3016,22 @@ async function startCall(){
   // Guard against re-entry: a second click during getUserMedia or replaceTrack
   // would leak a MediaStream and drive concurrent instances through the state
   // machine. The flag is cleared in the finally block below.
-  if(endingCall)await Promise.race([endingCall,new Promise(resolve=>setTimeout(resolve,1500))]);
+  if(endingCall)await Promise.race([endingCall,new Promise(resolve=>setTimeout(resolve,8000))]);
   if(callActive||callStarting)return;if(serverVoiceStream||serverVoiceStarting)stopServerVoice();
   const targetPeer=activePeerId||dmPeerId;
-  if(!pc||['closed','failed','disconnected'].includes(pc.connectionState)){
+  const reconnectVoice=()=>{
     if(LOCAL_TEST_MODE&&!pc)return startLocalTestCall();
     pendingVoiceStartPeerId=targetPeer;playSound('connecting');
     callBtn.disabled=true;callStatus.textContent='Connecting to start voice…';callStatus.className='call-status ringing';
+    if(pc&&targetPeer&&(dmPeerId===targetPeer||!dmPeerId))abandonDmMediaAttempt(targetPeer);
+    if(targetPeer&&friendReachable(targetPeer))void ensureDmMediaConnection(targetPeer).catch(error=>{pendingVoiceStartPeerId='';callBtn.disabled=false;callStatus.textContent=error?.message||'Could not connect voice';callStatus.className='call-status'});
+  };
+  // A brief ICE "disconnected" after hangup is not a dead PC — attaching the
+  // mic on the existing transceivers is how rejoin works without restarting.
+  if(!pc||directVoiceTransportDead(pc)){
     // Text does not create a peer. Preserve the click and start the explicit
     // media path only now; this avoids DM-open races and idle WebRTC meshes.
-    if(targetPeer&&friendReachable(targetPeer))void ensureDmMediaConnection(targetPeer).catch(error=>{pendingVoiceStartPeerId='';callBtn.disabled=false;callStatus.textContent=error?.message||'Could not connect voice';callStatus.className='call-status'});
-    return;
+    return reconnectVoice();
   }
   if(micTestStream)stopMicrophoneTest();
   callStarting=true;
@@ -3027,16 +3040,23 @@ async function startCall(){
   try{
     callStatus.textContent='Requesting mic…';callStatus.className='call-status ringing';
     localStream=await acquireCallMicrophone();
-    if(!pc){releaseCallMicrophone();return}
+    if(!pc||directVoiceTransportDead(pc)){releaseCallMicrophone();if(gen===callGen)reconnectVoice();return}
+    if(pc.signalingState==='have-local-offer')await rollbackDirectOffer(pc);
+    if(!pc||directVoiceTransportDead(pc)||gen!==callGen){releaseCallMicrophone();return}
     const track=localStream.getAudioTracks()[0];
-    const allTransceivers=pc.getTransceivers();
-    const tr=audioTransceiver||allTransceivers.find(t=>t.receiver.track?.kind==='audio'&&t.mid)||allTransceivers.find(t=>t.receiver.track?.kind==='audio')||(function(){try{return pc.addTransceiver('audio',{direction:'sendrecv'})}catch{return null}})();
-    // audioTransceiver may be an RTCRtpSender (from addTrack) which has no .sender.
-    // Resolve to the transceiver that owns it so sender.sender is correct.
-    const resolvedTr=tr&&tr.mid===undefined&&!tr.sender?allTransceivers.find(t=>t.sender===tr)||tr:tr;
-    const sender=resolvedTr?resolvedTr.sender:null;
-    logCallEvent('Diag: startCall transceivers='+allTransceivers.length+' audioTr='+(tr?'ok:mid='+tr.mid+' dir='+tr.direction:'null')+' sender='+(sender?'ok':'null'));
-    if(!sender){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='No audio sender available';callStatus.className='call-status';return}
+    bindReservedAudioTransceivers();
+    const allTransceivers=pc.getTransceivers(),screenSender=reservedScreenAudioSender();
+    let sender=reservedVoiceSender();
+    if(sender&&sender===screenSender)sender=null;
+    if(!sender){
+      const tr=audioTransceiver||allTransceivers.find(t=>t.receiver.track?.kind==='audio'&&t.mid&&t.sender!==screenSender)||allTransceivers.find(t=>t.receiver.track?.kind==='audio'&&t.sender!==screenSender)||null;
+      const resolvedTr=tr&&tr.mid===undefined&&!tr.sender?allTransceivers.find(t=>t.sender===tr)||tr:tr;
+      sender=(resolvedTr&&resolvedTr.sender)||(resolvedTr&&resolvedTr.replaceTrack?resolvedTr:null);
+      if(sender===screenSender)sender=null;
+    }
+    logCallEvent('Diag: startCall transceivers='+allTransceivers.length+' audioTr='+(audioTransceiver?'ok:mid='+audioTransceiver.mid+' dir='+audioTransceiver.direction:'null')+' sender='+(sender?'ok':'null'));
+    if(!sender){releaseCallMicrophone();reconnectVoice();return}
+    try{const tr=allTransceivers.find(item=>item.sender===sender);if(tr?.setDirection&&tr.direction!=='sendrecv')tr.setDirection('sendrecv')}catch{}
     try{await sender.replaceTrack(track)}catch(e){try{send({t:'call-end'})}catch{};endCall(true);callStatus.textContent='Failed to attach mic: '+(e?.message||e);callStatus.className='call-status';return}
     // Voice must be scheduled ahead of a busy screen encoder. Restrict Opus to
     // 10–20 ms packets; the old 120 ms maximum made microphone delay obvious
@@ -3045,10 +3065,10 @@ async function startCall(){
     // endCall may have run while we were awaiting getUserMedia or replaceTrack
     // (e.g. user clicked Stop Voice or the connection dropped). The generation
     // counter callGen is incremented by every endCall call. If it changed, bail.
-    if(gen!==callGen||!pc){try{sender.replaceTrack(null)}catch{};releaseCallMicrophone();return}
-    // endCall/disconnectRoom may have run during a nested await; if pc is gone bail.
-    if(!pc){try{sender.replaceTrack(null)}catch{};releaseCallMicrophone();return}
-    dmCallPeerId=dmPeerId||activePeerId;callActive=true;callStart=Date.now();monitorSpeaking('dm-self',localStream);setRemoteCallAudio(true);renderCallButtonState('end','End call','End voice call');callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';muteBtn.title='Mute microphone';applyMicTransmission();
+    if(gen!==callGen||!pc){try{await holdDirectVoiceSender(sender)}catch{};releaseCallMicrophone();return}
+    await ensureDirectVoiceSending(sender);
+    if(gen!==callGen||!pc){try{await holdDirectVoiceSender(sender)}catch{};releaseCallMicrophone();return}
+    dmCallPeerId=dmPeerId||activePeerId;callActive=true;callStart=Date.now();monitorSpeaking('dm-self',localStream);restoreRemoteDirectVoicePlayback();setRemoteCallAudio(true);renderCallButtonState('end','End call','End voice call');callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';muteBtn.title='Mute microphone';applyMicTransmission();
     try{remoteAudio.volume=0}catch{};setCallVolume(volumeSlider.value,false);volumeSlider.hidden=false;volumeValue.hidden=false;
     setParticipant(participantYou,true);logCallEvent('You joined the call');stopCallTone();
     if(friendInCall)playSound('friend-join');else startCallTone('calling',5);publishCallState(true);try{send({t:'call-ring'})}catch{}
@@ -3064,20 +3084,25 @@ async function endCall(silent){
   if(endingCall)return endingCall;
   callActive=false;callStarting=false;
   endingCall=(async()=>{
-  callGen++;abortScreenSharePicker();screenGen++;stopCallTone();
+  callGen++;abortScreenSharePicker();screenGen++;renegotiating++;settleDirectRenegotiation();stopCallTone();
+  const hangupGen=callGen,voice=reservedVoiceSender()||audioTransceiver?.sender||audioTransceiver;
   publishCallState(false);
   stopSpeakingMonitor('dm-self');
   if(!silent){setParticipant(participantYou,false);logCallEvent('You left the call')}
-  if(screenActive||screenStarting||screenStream)await stopScreenShare(true);
+  // Park a live silent track on the voice sender BEFORE stopping the mic.
+  // replaceTrack(null) or stop() while the mic is still attached ends the
+  // remote receiver track, after which ontrack never fires again.
+  if(voice?.replaceTrack){
+    let parked=await holdDirectVoiceSender(voice);
+    if(!parked)parked=await holdDirectVoiceSender(voice);
+    if(!parked)try{await voice.replaceTrack(silentVoiceAudioTrack(pc))}catch{}
+  }
+  if(pc?.signalingState==='have-local-offer')await rollbackDirectOffer(pc);
+  if(screenActive||screenStarting||screenStream||nativeScreenSession)await stopScreenShare(true);
   if(callTimerId){clearInterval(callTimerId);callTimerId=null}
   callTimerEl.textContent='';
-  // Stopping the local track silences our outgoing audio WITHOUT touching the
-  // negotiated transceiver, so no renegotiation is triggered (the app doesn't
-  // handle mid-call renegotiation). The peer's receiver just gets silence.
   releaseCallMicrophone();
-  // Drop our sender's track so a stopped track doesn't linger on the transceiver
-  // (which would otherwise keep matching in startCall and complicate reconnects).
-  if(pc){try{const voice=audioTransceiver?.sender||audioTransceiver;if(voice?.replaceTrack)await voice.replaceTrack(null)}catch{}}
+  if(callGen===hangupGen&&!callActive&&!callStarting&&voice?.replaceTrack)await holdDirectVoiceSender(voice);
   // Only clear the remote audio element's source when the room is left
   // (disconnectRoom), NOT on endCall. A temporary ICE drop would otherwise
   // null the srcObject and ontrack never fires again for the same transceiver,
@@ -3085,7 +3110,7 @@ async function endCall(silent){
   callActive=false;micMuted=false;syncVoiceStage();setRemoteCallAudio(false);
   if(!friendInCall)dmCallPeerId='';
   renderCallButtonState('start','Start call','Start voice call');muteBtn.hidden=true;volumeSlider.hidden=true;volumeValue.hidden=true;callStatus.textContent='Voice off';callStatus.className='call-status';closeWatchTogether();
-  const canCall=LOCAL_TEST_MODE||(pc&&pc.connectionState!=='closed')||friendReachable(activePeerId||dmPeerId);
+  const canCall=LOCAL_TEST_MODE||(pc&&pc.connectionState!=='closed'&&pc.signalingState!=='closed')||friendReachable(activePeerId||dmPeerId);
   callBtn.disabled=!canCall;
   if(!silent){playSound('hangup');try{send({t:'call-end'})}catch{}}
   })().finally(()=>{endingCall=null});
@@ -3290,11 +3315,49 @@ async function setupNativeScreenCapture(){
     return null;
   }
 }
+function liveMediaTrack(track){return track&&track.readyState==='live'?track:null}
+function ensurePeerSilentAudioTracks(target=pc){
+  if(!target)return;
+  if(liveMediaTrack(target._silentVoiceAudioTrack)&&liveMediaTrack(target._silentScreenAudioTrack))return;
+  try{
+    if(!target._silentAudioCtx||target._silentAudioCtx.state==='closed')target._silentAudioCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000});
+    const ctx=target._silentAudioCtx;
+    if(!liveMediaTrack(target._silentVoiceAudioTrack)){const dest=ctx.createMediaStreamDestination();dest.channelCount=1;target._silentVoiceAudioTrack=dest.stream.getAudioTracks()[0]}
+    if(!liveMediaTrack(target._silentScreenAudioTrack)){const dest=ctx.createMediaStreamDestination();dest.channelCount=2;target._silentScreenAudioTrack=dest.stream.getAudioTracks()[0]}
+  }catch{}
+}
+function silentVoiceAudioTrack(target=pc){ensurePeerSilentAudioTracks(target);return liveMediaTrack(target?._silentVoiceAudioTrack)||null}
+function silentScreenAudioTrack(target=pc){ensurePeerSilentAudioTracks(target);return liveMediaTrack(target?._silentScreenAudioTrack)||null}
+async function rollbackDirectOffer(target=pc){
+  if(!target||target.signalingState==='closed')return false;
+  if(target.signalingState!=='have-local-offer')return target.signalingState==='stable';
+  renegotiating++;settleDirectRenegotiation();
+  try{await target.setLocalDescription({type:'rollback'})}catch{}
+  return target.signalingState==='stable';
+}
+async function holdDirectVoiceSender(sender,target=pc){
+  if(!sender?.replaceTrack)return false;
+  ensurePeerSilentAudioTracks(target);
+  const silent=silentVoiceAudioTrack(target);
+  if(!silent)return false;
+  try{await sender.replaceTrack(silent)}catch{return false}
+  return sender.track===silent;
+}
+async function ensureDirectVoiceSending(sender){
+  if(!pc||!sender)return;
+  const tr=pc.getTransceivers().find(item=>item.sender===sender);
+  try{if(tr?.setDirection&&tr.direction!=='sendrecv')tr.setDirection('sendrecv')}catch{}
+  const dir=String(tr?.currentDirection||'');
+  if(!dir||/send/.test(dir))return;
+  if(pc.signalingState==='have-local-offer')await rollbackDirectOffer(pc);
+  if(pc.signalingState==='stable')await renegotiate();
+}
 function bindReservedAudioTransceivers(){
-  if(!pc)return;const audios=pc.getTransceivers().filter(value=>value.receiver.track?.kind==='audio');
+  if(!pc)return;const audios=pc.getTransceivers().filter(value=>!value.stopped&&value.receiver.track?.kind==='audio');
   const voiceSender=audioTransceiver?.sender||audioTransceiver,screenSender=screenAudioTransceiver?.sender||screenAudioTransceiver;
-  const voice=audios.find(value=>value.sender===voiceSender)||audios[0],screen=audios.find(value=>value.sender===screenSender)||audios.find(value=>value!==voice);
-  if(voice)audioTransceiver=voice;if(screen)screenAudioTransceiver=screen;
+  const voice=audios.find(value=>value.sender===voiceSender)||audios.find(value=>value===audioTransceiver)||audios[0];
+  const screen=audios.find(value=>value!==voice&&(value.sender===screenSender||value===screenAudioTransceiver))||audios.find(value=>value!==voice);
+  if(voice)audioTransceiver=voice;if(screen&&screen!==voice)screenAudioTransceiver=screen;
 }
 function reservedVoiceSender(target=pc){
   const value=audioTransceiver;if(!target||!value)return null;if(value.sender)return value.sender;if(value.replaceTrack)return value;return null;
@@ -3302,19 +3365,45 @@ function reservedVoiceSender(target=pc){
 function reservedScreenAudioSender(target=pc){
   if(!target)return null;const voice=reservedVoiceSender(target),value=screenAudioTransceiver;
   if(value?.sender&&value.sender!==voice)return value.sender;if(value?.replaceTrack&&value!==voice)return value;
-  return target.getTransceivers().filter(item=>item.receiver.track?.kind==='audio'&&item.sender&&item.sender!==voice).map(item=>item.sender)[0]||null;
+  const extra=target.getTransceivers().filter(item=>!item.stopped&&item.receiver.track?.kind==='audio'&&item.sender&&item.sender!==voice).map(item=>item.sender)[0]||null;
+  return extra&&extra!==voice?extra:null;
+}
+function restoreRemoteDirectVoicePlayback(){
+  if(!pc)return;
+  bindReservedAudioTransceivers();
+  const sender=reservedVoiceSender(),tr=audioTransceiver?.receiver?audioTransceiver:pc.getTransceivers().find(item=>item.sender===sender);
+  const track=liveMediaTrack(tr?.receiver?.track)||liveMediaTrack(remoteVoiceTrack)||remoteAudio?.srcObject?.getAudioTracks?.().find(item=>item.readyState==='live');
+  if(!track)return;
+  remoteVoiceTrack=track;if(tr)remoteVoiceTransceiver=tr;
+  try{
+    const stream=remoteAudio.srcObject instanceof MediaStream?remoteAudio.srcObject:new MediaStream();
+    for(const existing of stream.getAudioTracks())if(existing!==track)try{stream.removeTrack(existing)}catch{}
+    if(!stream.getAudioTracks().includes(track))stream.addTrack(track);
+    if(remoteAudio.srcObject!==stream)remoteAudio.srcObject=stream;
+  }catch{try{remoteAudio.srcObject=new MediaStream([track])}catch{}}
+  if(callActive)setRemoteCallAudio(true);
 }
 async function restoreDirectVoice(){
-  if(!callActive||!pc||pc.connectionState==='closed')return;
+  if(!callActive||!pc||pc.connectionState==='closed'||pc.signalingState==='closed')return;
   bindReservedAudioTransceivers();
-  const sender=reservedVoiceSender(),track=localStream?.getAudioTracks?.().find(item=>item.readyState==='live');
-  if(sender&&track&&sender.track!==track)try{await sender.replaceTrack(track)}catch{}
-  applyMicTransmission();setRemoteCallAudio(true);try{audioCtx?.resume()}catch{};
+  const sender=reservedVoiceSender(),screen=reservedScreenAudioSender(),track=localStream?.getAudioTracks?.().find(item=>item.readyState==='live');
+  if(sender&&sender!==screen&&track&&sender.track!==track)try{await sender.replaceTrack(track)}catch{}
+  if(sender&&sender!==screen)await ensureDirectVoiceSending(sender);
+  applyMicTransmission();restoreRemoteDirectVoicePlayback();setRemoteCallAudio(true);try{audioCtx?.resume()}catch{};try{remoteAudio.play().catch(()=>{})}catch{};
 }
 async function setReservedScreenAudioTrack(track,target=pc){
-  const sender=reservedScreenAudioSender(target);if(!sender)throw new Error('reserved screen-audio sender is unavailable');
+  const voice=reservedVoiceSender(target),sender=reservedScreenAudioSender(target);if(!sender)throw new Error('reserved screen-audio sender is unavailable');
+  if(sender===voice)throw new Error('reserved screen-audio sender resolved to the voice m-line');
   if(track)try{shareAudioFadeIn?.()}catch{}
-  await sender.replaceTrack(track||target?._silentScreenAudioTrack||null);
+  const next=track||silentScreenAudioTrack(target);
+  if(!next)return sender;
+  if(sender.track===next)return sender;
+  await sender.replaceTrack(next);
+  if(sender===reservedVoiceSender(target)){
+    const mic=liveMediaTrack(localStream?.getAudioTracks?.().find(item=>item.readyState==='live'));
+    if(mic)try{await sender.replaceTrack(mic)}catch{}
+    throw new Error('reserved screen-audio sender resolved to the voice m-line');
+  }
   if(track){
     try{const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=256000;parameters.encodings[0].priority='high';parameters.encodings[0].networkPriority='high';await sender.setParameters(parameters)}catch{}
     try{if(nativeScreenChannel?.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-audio',active:true}))}catch{}
@@ -3935,7 +4024,7 @@ function holdNativeScreenPreMeta(channel,data){
   if(bytes.byteLength>NATIVE_SCREEN_PART+12)return;if(!channel._nativePreMeta)channel._nativePreMeta=[];let total=channel._nativePreMeta.reduce((sum,value)=>sum+value.byteLength,0);while(channel._nativePreMeta.length&&(channel._nativePreMeta.length>=32||total+bytes.byteLength>2*1024*1024)){total-=channel._nativePreMeta.shift().byteLength}if(total+bytes.byteLength<=2*1024*1024)channel._nativePreMeta.push(bytes)
 }
 function drainNativeScreenPreMeta(channel){for(const packet of channel._nativePreMeta?.splice(0)||[])receiveNativeScreenPacket(channel,packet)}
-function ensureNativeRemoteAudio(){if(nativeRemoteAudio)return nativeRemoteAudio;nativeRemoteAudio=document.createElement('audio');nativeRemoteAudio.autoplay=true;nativeRemoteAudio.hidden=true;document.body.append(nativeRemoteAudio);applyMediaElementOutput(nativeRemoteAudio).catch(()=>{});return nativeRemoteAudio}
+function ensureNativeRemoteAudio(){if(nativeRemoteAudio)return nativeRemoteAudio;nativeRemoteAudio=document.createElement('audio');nativeRemoteAudio.autoplay=true;nativeRemoteAudio.muted=true;nativeRemoteAudio.volume=0;nativeRemoteAudio.hidden=true;document.body.append(nativeRemoteAudio);applyMediaElementOutput(nativeRemoteAudio).catch(()=>{});return nativeRemoteAudio}
 function applyRemoteShareVolume(audio){
   if(!audio)return audio;
   const target=Math.max(0,Math.min(1,Number(remoteScreen.volume)||0));
@@ -3943,6 +4032,16 @@ function applyRemoteShareVolume(audio){
   if(audio.muted){audio.volume=target;audio._knotShareFade=0;return audio}
   if(audio._knotShareFade)return audio;
   audio.volume=target;
+  return audio;
+}
+function startRemoteShareElement(audio,{forceFade=false}={}){
+  if(!audio)return audio;
+  const target=Math.max(0,Math.min(1,Number(remoteScreen.volume)||0));
+  if(remoteScreenSuppressed||target===0){audio.muted=true;audio.volume=0;audio._knotShareFade=0;return audio}
+  const hear=()=>{if(remoteScreenSuppressed||remoteScreen.volume===0||!audio.srcObject)return;audio.muted=false;if(!forceFade&&audio.volume>0.05){audio.play().catch(()=>{});return}audio.volume=0;fadeRemoteShareAudio(audio,{force:true})};
+  // Chromium autoplay allows muted play() without a gesture; unmute after it starts.
+  audio.muted=true;
+  audio.play().then(hear).catch(()=>hear());
   return audio;
 }
 function fadeRemoteShareAudio(audio,{force=false}={}){
@@ -3982,12 +4081,11 @@ function bindReservedRemoteScreenAudio({force=false}={}){
     audio.muted=true;
     if(!audio._knotOutputApplied){audio._knotOutputApplied=true;applyMediaElementOutput(audio).catch(()=>{})}
   }
-  audio.muted=remoteScreenSuppressed||target===0;
-  if(!audio.muted){
-    if(audible){audio.volume=target;audio.play().catch(()=>{})}
-    else if(fading){audio.volume=keepVolume;audio.play().catch(()=>{})}
-    else {audio.volume=0;audio.play().catch(()=>{});fadeRemoteShareAudio(audio,{force:true})}
-  }
+  if(remoteScreenSuppressed||target===0){audio.muted=true;audio.volume=target;audio._knotShareFade=0;return audio}
+  if(!same||force||!audible){
+    if(fading&&same&&!force){audio.volume=keepVolume;audio.play().catch(()=>{})}
+    else startRemoteShareElement(audio,{forceFade:true});
+  }else {audio.volume=target;audio.play().catch(()=>{})}
   if(!audio.muted)audio.play().catch(()=>{});
   return audio;
 }
@@ -4260,7 +4358,11 @@ async function stopScreenShare(fromEnd, {silent=false}={}){
   const wasFocused=typeof focusedScreen!=='undefined'&&focusedScreen==='local';
   screenGen++;
   screenStarting=false;
-  const nativeSession=nativeScreenSession;nativeScreenSession=null;nativeLiveBudgetMbps=NaN;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);if(nativeScreenChannel){try{if(!silent&&nativeScreenChannel.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-end'}));nativeScreenChannel.close()}catch{}nativeScreenChannel=null}nativeLocalPlayer?.destroy();nativeLocalPlayer=null;nativeScreenAnnounced=false;if(nativeScreenAudioStream){nativeScreenAudioStream.getTracks().forEach(track=>track.stop());nativeScreenAudioStream=null}
+  const nativeSession=nativeScreenSession;nativeScreenSession=null;nativeLiveBudgetMbps=NaN;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);if(nativeScreenChannel){try{if(!silent&&nativeScreenChannel.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-end'}));nativeScreenChannel.close()}catch{}nativeScreenChannel=null}nativeLocalPlayer?.destroy();nativeLocalPlayer=null;nativeScreenAnnounced=false;
+  // Detach computer-sound from its reserved sender while that track is still
+  // live. Stopping it first (or replaceTrack(null)) can recycle onto the mic.
+  if(pc)try{await setReservedScreenAudioTrack(null)}catch{}
+  if(nativeScreenAudioStream){nativeScreenAudioStream.getTracks().forEach(track=>track.stop());nativeScreenAudioStream=null}
   if(window.pairEnv?.platform==='linux')window.pairEnv.stopLinuxShareAudio?.();
   screenActive=false;friendWatchingScreen=false;screenAudioDebug='';
   screenStatsGeneration++;if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;
@@ -4271,12 +4373,19 @@ async function stopScreenShare(fromEnd, {silent=false}={}){
   if(pc){
     // Video is renegotiated per share, while the computer-audio m-line is
     // permanent and returns to its reserved silent track between shares.
-    try{await setReservedScreenAudioTrack(null)}catch{}
+    const hadVideo=screenSenders.length>0;
     screenSenders.forEach(s=>{try{pc.removeTrack(s)}catch{}});screenSenders=[];
     // Hangup must not wait on a stuck screen renegotiation — that blocked
-    // Start call until Knot was restarted. Live Stop still awaits the offer.
-    if(fromEnd)void renegotiate();
-    else {await renegotiate();await restoreDirectVoice()}
+    // Start call until Knot was restarted. Native AV1 has no WebRTC video
+    // sender; skip a no-op offer. Live Stop awaits the answer, then always
+    // reattaches the microphone.
+    try{
+      if(hadVideo){
+        if(fromEnd)void renegotiate();
+        else {await renegotiate();await waitForStablePeer(pc,5000)}
+      }
+    }catch(error){console.warn('screen-stop renegotiation',error)}
+    finally{if(!fromEnd)await restoreDirectVoice()}
   }
   screenPreview.srcObject=null;try{screenPreview.removeAttribute('src');screenPreview.load()}catch{}screenPreview.hidden=true;
   if(wasFocused)try{exitShareFullscreen({collapse:true})}catch{}
@@ -4341,7 +4450,7 @@ const fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=
 const screenAudioBadge=document.createElement('span');screenAudioBadge.className='screen-audio-badge';screenStage.appendChild(screenAudioBadge);const syncScreenAudioBadge=()=>{screenAudioBadge.textContent=screenStatus.textContent||'Sharing';screenAudioBadge.hidden=!screenExpanded};new MutationObserver(syncScreenAudioBadge).observe(screenStatus,{childList:true,characterData:true,subtree:true});
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
 function setRemoteScreenWatching(watching){const next=watching===true;if(remoteScreenWatchAnnounced===next)return;remoteScreenWatchAnnounced=next;try{send({t:'screen-watch',active:next})}catch{}}
-function watchDmShare(kind){const available=kind==='local'?!screenPreview.hidden:!remoteScreen.hidden;if(!available)return;if(kind==='remote'){remoteScreenSuppressed=false;setRemoteScreenWatching(true);try{remoteScreen.srcObject?.getTracks?.().forEach(track=>{track.enabled=true});nativeRemoteAudio?.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}remoteScreen.muted=true;if(nativeRemoteAudio){if(nativeRemoteAudio._knotShareFade)applyRemoteShareVolume(nativeRemoteAudio);else{nativeRemoteAudio.muted=remoteScreen.volume===0;if(!nativeRemoteAudio.muted){nativeRemoteAudio.volume=0;nativeRemoteAudio.play().catch(()=>{});fadeRemoteShareAudio(nativeRemoteAudio,{force:true})}}}prepareShareSurface(remoteScreen);nativeRemotePlayer?.setActive(true);playShareVideo(remoteScreen);if(nativeRemoteAudio&&!nativeRemoteAudio.muted)nativeRemoteAudio.play().catch(()=>{})}else{setRemoteScreenWatching(false);prepareShareSurface(screenPreview);nativeLocalPlayer?.setActive(true);playShareVideo(screenPreview)}focusedScreen=kind;screenExpanded=true;updateScreenLayout();resumeScreenPlayback()}
+function watchDmShare(kind){const available=kind==='local'?!screenPreview.hidden:!remoteScreen.hidden;if(!available)return;if(kind==='remote'){remoteScreenSuppressed=false;setRemoteScreenWatching(true);try{remoteScreen.srcObject?.getTracks?.().forEach(track=>{track.enabled=true});nativeRemoteAudio?.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}remoteScreen.muted=true;if(nativeRemoteAudio){if(nativeRemoteAudio._knotShareFade)applyRemoteShareVolume(nativeRemoteAudio);else startRemoteShareElement(nativeRemoteAudio,{forceFade:true})}prepareShareSurface(remoteScreen);nativeRemotePlayer?.setActive(true);playShareVideo(remoteScreen);if(nativeRemoteAudio&&!nativeRemoteAudio.muted)nativeRemoteAudio.play().catch(()=>{})}else{setRemoteScreenWatching(false);prepareShareSurface(screenPreview);nativeLocalPlayer?.setActive(true);playShareVideo(screenPreview)}focusedScreen=kind;screenExpanded=true;updateScreenLayout();resumeScreenPlayback()}
 function syncScreenPlayback(){
   const visible=document.visibilityState==='visible',localAvailable=screenPreview.srcObject||nativeLocalPlayer,localSelected=screenExpanded&&focusedScreen==='local';
   nativeLocalPlayer?.setActive(localSelected&&visible);
@@ -4354,7 +4463,10 @@ function syncScreenPlayback(){
     if(hear){
       remoteScreen.muted=true;
       playShareVideo(remoteScreen);
-      if(nativeRemoteAudio){applyRemoteShareVolume(nativeRemoteAudio);if(!nativeRemoteAudio.muted)nativeRemoteAudio.play().catch(()=>{})}
+      if(nativeRemoteAudio){
+        if(!nativeRemoteAudio.muted&&!nativeRemoteAudio.paused){applyRemoteShareVolume(nativeRemoteAudio);if(!nativeRemoteAudio.muted)nativeRemoteAudio.play().catch(()=>{})}
+        else startRemoteShareElement(nativeRemoteAudio);
+      }
     }else{remoteScreen.muted=true;if(nativeRemoteAudio){nativeRemoteAudio.pause();nativeRemoteAudio.muted=true}}
   }
 }
