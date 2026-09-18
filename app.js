@@ -1028,11 +1028,11 @@ function monitorNativeScreenBuffering(channel,{isActive}={}){
     if(finished)return;
     if(typeof isActive==='function'&&!isActive())return;
     const state=channel?._nativeReceive,stats=state?.player?.stats?.()||{},painted=Number(stats.paintedFrames)||0,bytes=Number(state?.bytesReceived)||0;
-    if(painted>0&&!stats.pictureDead){blackStalls=0;return}
+    if(painted>0){blackStalls=0;return}
     if(!(bytes>=40000||state?.haveInit))return;
     blackStalls++;
-    // Uniform VA-API black still counts as AV1. Retry software WebCodecs.
-    // VP9 is only for a share that never painted after every AV1 decoder.
+    // A live picture, even a dark one, must not rebuild the decoder. That hitch
+    // is the stutter. Software retry is only for zero painted frames.
     if(blackStalls>=2&&state.player?.advanceBackend?.(new Error('Native AV1 produced no picture'))){
       advancedBackend=true;
       screenStatus.textContent='AV1 hardware picture missing · retrying software decode';
@@ -1065,7 +1065,11 @@ function nativeSharePathMbps(){
   return Number.isFinite(path)&&path>0?path:NaN;
 }
 function nativeKeyWaitMs(segmentBytes){return networkMath()?.nativeKeyWaitMs?.(segmentBytes,nativeSharePathMbps())||NATIVE_SCREEN_KEY_WAIT_MS}
-function nativeShareRemainingMs(capturedAt){return networkMath()?.nativeShareRemainingMs?.(capturedAt)||Math.max(0,NATIVE_SCREEN_LATENCY_CEILING_MS-(Date.now()-Number(capturedAt||0)))}
+function nativeShareRemainingMs(capturedAt){
+  const base=networkMath()?.nativeShareRemainingMs?.(capturedAt)??Math.max(0,NATIVE_SCREEN_LATENCY_CEILING_MS-(Date.now()-Number(capturedAt||0)));
+  if(!lanSharePath())return base;
+  return Math.max(base,Math.max(0,900-(Date.now()-Number(capturedAt||0))));
+}
 function syncScreenBitrateSlider(){
   const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),hint=$('#screenBitrateCapHint');if(!bitrate)return;
   const max=sliderBitrateMaxMbps(),next=Math.max(2,Math.min(max,Number(bitrate.value)||screenBitrateMbps||20));
@@ -3789,7 +3793,7 @@ function createWebCodecsNativeScreenPlayer(video,codec,onError=()=>{},options={}
   if(options.decode===false)return createNativeScreenPlaceholder(video,options);
   const parser=window.KnotNativeVideo;if(codec.toUpperCase()!=='AV1'||!parser||typeof VideoDecoder!=='function')return null;
   const allowSoftwareFallback=options.allowSoftwareFallback!==false,preferSoftware=options.preferSoftware===true,enforceLatencyTarget=options.enforceLatencyTarget!==false,fps=Number(options.fps)||60,configuredWidth=Number(options.width)||0,configuredHeight=Number(options.height)||0;
-  const latencyTargetMs=Math.max(1,Number(options.latencyTargetMs)||NATIVE_SCREEN_LATENCY_TARGET_MS),latencyCeilingMs=NATIVE_SCREEN_LATENCY_CEILING_MS,frameIntervalMs=1000/Math.max(1,fps),maxPresentationFrames=Math.max(4,Math.ceil(fps*latencyTargetMs/1000)),maxDecodeQueue=Math.max(6,Math.floor(fps*latencyCeilingMs/1000));
+  const latencyTargetMs=Math.max(1,Number(options.latencyTargetMs)||NATIVE_SCREEN_LATENCY_TARGET_MS),latencyCeilingMs=NATIVE_SCREEN_LATENCY_CEILING_MS,frameIntervalMs=1000/Math.max(1,fps),maxPresentationFrames=Math.max(12,Math.ceil(fps*.25)),maxDecodeQueue=Math.max(8,Math.floor(fps*latencyCeilingMs/1000));
   const ownedSurface=!options.surface,surface=options.surface||attachNativeScreenSurface(video);if(!surface)return null;
   const canvas=surface.canvas,context=surface.context,paintIdle=surface.paintIdle;
   let trackGenerator=null,frameWriter=null,frameWriterBusy=false,presentationQueue=[],presentationTimer=null,presentationRaf=0,presentationClockTimestamp=null,presentationClockAt=0,presentationGeneration=0,presentationMode='canvas',presentationDroppedFrames=0,renderedFrames=0,lastRenderedAt=0,decoder=null,config=null,configured=false,destroyed=false,decoderDisabled=false,failureReported=false,latencyExceeded=false,latencyViolationWindows=0,playbackActive=true,decodedFrames=0,paintedFrames=0,firstPaintAt=0,frameWidth=0,frameHeight=0,softwareFallback=preferSoftware,hardwareUnavailable=false,replay=[],queuedSinceOutput=0,configuredAt=0,lastOutputAt=0,needsKeyframe=true,displayMaxW=0,displayMaxH=0,pictureDead=false;const arrivalTimes=new Map(),latencySamples=[],renderIntervals=[];
@@ -3825,7 +3829,7 @@ function createWebCodecsNativeScreenPlayer(video,codec,onError=()=>{},options={}
     let frame=presentationQueue[0],now=performance.now();
     if(presentationClockTimestamp===null){presentationClockTimestamp=frame.timestamp;presentationClockAt=now}
     let due=presentationClockAt+(frame.timestamp-presentationClockTimestamp)/1000;
-    if(now-due>Math.max(48,frameIntervalMs*3)){
+    if(now-due>Math.max(90,frameIntervalMs*5)){
       while(presentationQueue.length>1){const nextDue=presentationClockAt+(presentationQueue[1].timestamp-presentationClockTimestamp)/1000;if(nextDue>now-frameIntervalMs)break;const stale=presentationQueue.shift();arrivalTimes.delete(stale.timestamp);try{stale.close()}catch{}presentationDroppedFrames++}
       frame=presentationQueue[0];presentationClockTimestamp=frame.timestamp;presentationClockAt=now;due=now;
     }
@@ -3837,7 +3841,7 @@ function createWebCodecsNativeScreenPlayer(video,codec,onError=()=>{},options={}
     if(!playbackActive){arrivalTimes.delete(frame.timestamp);frame.close();return}
     presentationQueue.push(frame);
     const now=performance.now();
-    while(presentationQueue.length>1){const oldest=presentationQueue[0],arrived=arrivalTimes.get(oldest.timestamp);if(arrived===undefined||now-arrived<=latencyCeilingMs)break;const stale=presentationQueue.shift();arrivalTimes.delete(stale.timestamp);try{stale.close()}catch{}presentationDroppedFrames++;presentationClockTimestamp=null}
+    while(presentationQueue.length>1){const oldest=presentationQueue[0],arrived=arrivalTimes.get(oldest.timestamp);if(arrived===undefined||now-arrived<=Math.max(latencyCeilingMs,400))break;const stale=presentationQueue.shift();arrivalTimes.delete(stale.timestamp);try{stale.close()}catch{}presentationDroppedFrames++;presentationClockTimestamp=null}
     if(presentationQueue.length>maxPresentationFrames){clearTimeout(presentationTimer);presentationTimer=null;const stale=presentationQueue.shift();arrivalTimes.delete(stale.timestamp);try{stale.close()}catch{}presentationDroppedFrames++;presentationClockTimestamp=null}schedulePresentation()
   };
   const startSoftwareDecoder=error=>{
@@ -4218,9 +4222,18 @@ async function sendNativeScreenLiveItem(channel,item){
   // for the whole IDR to sit in SCTP hitchs every GOP. Skip a picture already
   // older than the 260 ms cap; a fresh key only waits the leftover budget.
   const remaining=capturedAt?nativeShareRemainingMs(capturedAt):NATIVE_SCREEN_LATENCY_CEILING_MS;
-  if(capturedAt&&remaining<=0){markNativeScreenCongested(channel,state,key,frameCount);return true}
-  if(state.dropping&&!key){markNativeScreenCongested(channel,state,false,frameCount);return true}
-  const keyWait=key?Math.min(admitWait,remaining):0;
+  const lan=lanSharePath();
+  // A 4K key routinely spends >260 ms in encode+SCTP. Treating that as
+  // congestion dropped the rest of the GOP and stuttered the live picture.
+  // On LAN keep sending; skip only a very late delta, never the following GOP.
+  if(capturedAt&&remaining<=0){
+    if(!lan||!key){
+      if(!lan){markNativeScreenCongested(channel,state,key,frameCount);return true}
+      state.droppedFrames+=frameCount;return true;
+    }
+  }
+  if(state.dropping&&!key&&!lan){markNativeScreenCongested(channel,state,false,frameCount);return true}
+  const keyWait=key?(lan?admitWait:Math.min(admitWait,remaining)):0;
   const recovering=state.dropping;
   // A duplicate init is sent only at an intentional recovery boundary. The
   // receiver treats it as an immediate decoder reset before the following key,

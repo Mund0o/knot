@@ -18,6 +18,10 @@ const READ_MANY_MAX_BYTES = MAX_QUEUE_BYTES;
 // behind (150 ms) still sends a complete picture. 8 MiB overflow still
 // force-trims.
 const GOP_STALE_MS = 260;
+// Hold a second GOP so a 4K key that took ~300 ms to encode is not discarded
+// before the renderer drains it. GOP_STALE_MS stays 260 for the live-latency
+// contract; trim uses this looser bound so the picture does not freeze.
+const GOP_HOLD_MS = 520;
 const MAX_SEGMENT_BUFFER_BYTES = 64 * 1024 * 1024;
 const MAX_READ_WAITERS = 4;
 const STOP_TERM_DELAY_MS = 1500;
@@ -87,14 +91,14 @@ function trimNativeCaptureQueue(session, now = Date.now()) {
   const latestInit = original.findLast(value => value.kind === 'init');
   const latestKey = original.findLastIndex(value => value.kind === 'cluster' && value.key);
   const oldestCluster = original.find(value => value.kind === 'cluster');
-  const stale = oldestCluster && now - Number(oldestCluster.capturedAt || 0) > GOP_STALE_MS;
+  const stale = oldestCluster && now - Number(oldestCluster.capturedAt || 0) > GOP_HOLD_MS;
   const overflow = session.queueBytes > MAX_QUEUE_BYTES && original.length > 1;
   if (!stale && !overflow) return;
   let keep = [];
   if (latestInit) keep.push(latestInit);
   if (latestKey >= 0) {
     const keyItem = original[latestKey];
-    if (now - Number(keyItem.capturedAt || 0) > GOP_STALE_MS) keep = latestInit ? [latestInit] : [];
+    if (now - Number(keyItem.capturedAt || 0) > GOP_HOLD_MS) keep = latestInit ? [latestInit] : [];
     else for (const value of original.slice(latestKey)) if (value !== latestInit) keep.push(value);
   }
   let keepBytes = keep.reduce((total, value) => total + value.data.length, 0);
@@ -432,4 +436,4 @@ class NativeScreenService {
   }
 }
 
-module.exports = { gpuScreenRecorderCommand, gpuScreenRecorderCommandAsync, parseInfo, validateNativeScreenInfo, nativeScreenInfo, nativeScreenInfoAsync, ByteQueue, WebmClusterSegmenter, NativeScreenService, GOP_STALE_MS, MAX_QUEUE_BYTES, READ_MANY_MAX_ITEMS, READ_MANY_MAX_BYTES, trimNativeCaptureQueue };
+module.exports = { gpuScreenRecorderCommand, gpuScreenRecorderCommandAsync, parseInfo, validateNativeScreenInfo, nativeScreenInfo, nativeScreenInfoAsync, ByteQueue, WebmClusterSegmenter, NativeScreenService, GOP_STALE_MS, GOP_HOLD_MS, MAX_QUEUE_BYTES, READ_MANY_MAX_ITEMS, READ_MANY_MAX_BYTES, trimNativeCaptureQueue };

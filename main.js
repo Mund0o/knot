@@ -200,10 +200,14 @@ function linuxShareReturnInput(block, state) {
   const nodeName = block.match(/node\.name\s*=\s*"([^"]+)"/)?.[1] || '';
   const driver = block.match(/^\s*Driver:\s*(\S+)/m)?.[1] || '';
   const sinkName = block.match(/^\s*Sink:\s*(\S+)/m)?.[1] || '';
-  const blob = `${appName} ${media} ${nodeName} ${driver} ${sinkName}`;
+  const sourceName = block.match(/^\s*Source:\s*(\S+)/m)?.[1] || block.match(/device\.string\s*=\s*"([^"]+)"/)?.[1] || '';
+  const owner = (block.match(/Owner Module:\s*(\d+)/)?.[1] || '').trim();
+  const blob = `${appName} ${media} ${nodeName} ${driver} ${sinkName} ${sourceName}`;
+  if (state?.loop && owner && owner === String(state.loop).trim()) return true;
   if (!/knotsharereturn/i.test(media)) {
     const hints = [state?.sink, state?.hold, state?.original, state?.source].filter(Boolean);
-    return /loopback/i.test(blob) && hints.some(part => part && blob.includes(part));
+    if (/loopback|module-loopback/i.test(blob) && (hints.some(part => part && blob.includes(part)) || /pair_share_/i.test(blob))) return true;
+    return false;
   }
   return true;
 }
@@ -403,27 +407,23 @@ async function startLinuxShareAudioInner(webContents,generation) {
       state.routeReadyAt = Date.now();
       return;
     }
-    state.loop = loop;
+    state.loop = String(loop).trim();
     let muted = await muteLinuxLoopbackReturn(state);
     if (linuxShareAudio !== state) return;
-    if (muted && holdModule) {
+    if (state.loopInputs.length && holdModule) {
       for (const id of state.loopInputs) {
         await pipewireOkAsync('pactl', ['move-sink-input', id, original]);
         await pipewireOkAsync('pactl', ['set-sink-input-mute', id, '1']);
         await pipewireOkAsync('pactl', ['set-sink-input-volume', id, '0%']);
       }
-      state.loopInputs = [];
       muted = await muteLinuxLoopbackReturn(state);
       if (linuxShareAudio !== state) return;
     }
-    if (!muted) {
+    if (!muted && !holdModule) {
       await pipewireAsync('pactl', ['unload-module', loop]);
-      if (holdModule) await pipewireAsync('pactl', ['unload-module', holdModule]);
       if (linuxShareAudio !== state) return;
       state.loop = '';
       state.loopInputs = [];
-      state.hold = '';
-      state.holdModule = '';
       await restoreShareSink();
       state.pcmReleaseAt = Date.now();
       state.routeReadyAt = Date.now();
@@ -432,11 +432,17 @@ async function startLinuxShareAudioInner(webContents,generation) {
     await restoreShareSink();
     if (linuxShareAudio !== state) return;
     state.routeEnabled = true;
+    state.pcmReleaseAt = Date.now();
     state.routeReadyAt = Date.now() + 80;
     scheduleLinuxDesktopAudioRoute(state, 0);
     state.audits = [400, 1200, 2500, 5000, 10000].map(delay => setTimeout(() => scheduleLinuxDesktopAudioRoute(state, 0), delay));
     if (state.routePulse) clearInterval(state.routePulse);
     state.routePulse = setInterval(() => scheduleLinuxDesktopAudioRoute(state, 0), 3000);
+    for (const id of state.loopInputs || []) {
+      await pipewireOkAsync('pactl', ['move-sink-input', id, original]);
+      await pipewireOkAsync('pactl', ['set-sink-input-mute', id, '1']);
+      await pipewireOkAsync('pactl', ['set-sink-input-volume', id, '0%']);
+    }
     await new Promise(resolve => setTimeout(resolve, 180));
     if (linuxShareAudio !== state) return;
     await unmuteLinuxLoopbackReturn(state);

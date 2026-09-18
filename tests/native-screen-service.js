@@ -192,11 +192,11 @@ if (live.supported) {
   assert(staleKey, 'fixture cluster was not classified as a key');
   assert.ok(GOP_STALE_MS > 150, 'capture GOP trim is tighter than one keyint and freezes the live picture');
   assert.strictEqual(GOP_STALE_MS, 260, 'capture queue must match the 260 ms live latency cap');
-  staleKey.capturedAt = Date.now() - 200;
+  staleKey.capturedAt = Date.now() - 400;
   const queuedBefore = lag.session.queue.length;
   trimNativeCaptureQueue(lag.session);
   assert.strictEqual(lag.session.queue.length, queuedBefore, 'a one-GOP-old cluster was trimmed as stale');
-  staleKey.capturedAt = Date.now() - 400;
+  staleKey.capturedAt = Date.now() - 800;
   children.at(-1).stdout.write(cluster);
   await new Promise(resolve=>setImmediate(resolve));
   const kept = lag.readMany(lagLive.id);
