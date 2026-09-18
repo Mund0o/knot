@@ -3253,7 +3253,7 @@ async function setupNativeScreenCapture(){
     op.connect(dest);
     unsubClean=window.pairCapture.onCleanAudio((buf,frames,metadata)=>{
       if(captureClosed||!isCurrent())return;
-      const capturedAt=Number(metadata?.capturedAt);if(Number.isFinite(capturedAt)&&Date.now()-capturedAt>800)return;
+      const capturedAt=Number(metadata?.capturedAt);if(Number.isFinite(capturedAt)&&Date.now()-capturedAt>2500)return;
       const arr=new Float32Array(buf),count=Math.max(0,Math.min(Math.floor(Number(frames)||0),arr.length));if(!count)return;
       const samples=new Float32Array(count*2);
       if(arr.length>=count*2)samples.set(arr.subarray(0,count*2));
@@ -3470,7 +3470,7 @@ async function linuxShareAudioTrack(){
     await ctx.audioWorklet.addModule(new URL('screen-audio-worklet.js',location.href));
     op=new AudioWorkletNode(ctx,'knot-screen-audio',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
     unsubData=window.pairEnv.onLinuxShareAudio((buf,metadata)=>{if(!isCurrent())return;
-      const capturedAt=Number(metadata?.capturedAt);if(Number.isFinite(capturedAt)&&Date.now()-capturedAt>800)return;
+      const capturedAt=Number(metadata?.capturedAt);if(Number.isFinite(capturedAt)&&Date.now()-capturedAt>2500)return;
       const arr=new Float32Array(buf);if(!arr.length)return;
       let peak=0;for(let i=0;i<arr.length;i++){const sample=Math.abs(arr[i]);if(sample>peak)peak=sample}
       if(peak>=1e-4)received=true;
