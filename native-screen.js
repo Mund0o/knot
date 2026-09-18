@@ -322,7 +322,7 @@ class NativeScreenService {
     // A native group share encodes once but fans the same stream to every peer.
     // Allow the renderer's total-upload budget to fall below 2 Mbps per viewer;
     // the old floor multiplied into an 18+ Mbps minimum for a full group.
-    const maxKbps = info.vendor === 'amd' ? 150000 : 250000;
+    const maxKbps = info.vendor === 'amd' ? 150000 : 200000;
     const bitrateKbps = Math.max(350, Math.min(maxKbps, Math.round(Number(options.bitrateKbps) || 6000)));
     const bitrateMode = 'cbr';
     const cursor = options.cursor === 'never' ? 'no' : 'yes';

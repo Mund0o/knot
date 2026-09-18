@@ -8,9 +8,9 @@
   const TIMEOUT_MS = 12000;
   const CACHE_MS = 6 * 60 * 60 * 1000;
   const PROBE_VERSION = 2;
-  const MAX_NATIVE_SHARE_MBPS = 250;
+  const MAX_NATIVE_SHARE_MBPS = 200;
   const MAX_HARDWARE_WEBRTC_SHARE_MBPS = 80;
-  const MAX_SLIDER_MBPS = 250;
+  const MAX_SLIDER_MBPS = 200;
   const MAX_SHARE_LATENCY_MS = 260;
   const PROBE_WINDOW_MS = 800;
   const PROBE_MIN_BYTES = 2 * 1024 * 1024;
@@ -68,8 +68,8 @@
     return Math.min(20, Math.max(2, cap));
   }
 
-  // Settings slider ceiling. 250 Mbps remains the GPU/encoder max; a measured
-  // 40 Mbps path only offers the derated safe rate (~30 Mbps), not 250.
+  // Settings slider ceiling. 200 Mbps is the GPU/encoder max; a measured
+  // 40 Mbps path only offers the derated safe rate (~30 Mbps), not 200.
   function sliderBitrateMaxMbps(uploadMbps, downloadMbps) {
     const up = effectiveUploadCapMbps(uploadMbps, Infinity);
     const down = effectiveUploadCapMbps(downloadMbps, Infinity);

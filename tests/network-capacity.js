@@ -74,11 +74,11 @@ assert.strictEqual(cachedCapacityFresh({ uploadMbps: 20, downloadMbps: 80, at: n
 assert.strictEqual(cachedCapacityFresh({ uploadMbps: 20, downloadMbps: 80, at: now - CACHE_MS - 1, probeVersion: PROBE_VERSION }), false);
 assert.strictEqual(cachedCapacityFresh({ uploadMbps: 0, downloadMbps: 80, at: now, probeVersion: PROBE_VERSION }), false);
 assert.ok(MAX_SLIDER_MBPS >= MAX_NATIVE_SHARE_MBPS);
-assert.strictEqual(MAX_NATIVE_SHARE_MBPS, 250, 'GPU encoder ceiling must stay 250 Mbps');
-assert.strictEqual(sliderBitrateMaxMbps(), 250, 'an unmeasured path must still expose the 250 Mbps ceiling');
-assert.strictEqual(sliderBitrateMaxMbps(40, 40), 30, 'a 40 Mbps path must not offer the 250 Mbps slider');
+assert.strictEqual(MAX_NATIVE_SHARE_MBPS, 200, 'GPU encoder ceiling must stay 200 Mbps');
+assert.strictEqual(sliderBitrateMaxMbps(), 200, 'an unmeasured path must still expose the 200 Mbps ceiling');
+assert.strictEqual(sliderBitrateMaxMbps(40, 40), 30, 'a 40 Mbps path must not offer the 200 Mbps slider');
 assert.ok(sliderBitrateMaxMbps(40, 40) < 40, 'the settings slider must stay at the derated safe rate');
-assert.strictEqual(sliderBitrateMaxMbps(2000, 2000), 250, 'gigabit paths must still be allowed the 250 Mbps GPU ceiling');
+assert.strictEqual(sliderBitrateMaxMbps(2000, 2000), 200, 'gigabit paths must still be allowed the 200 Mbps GPU ceiling');
 assert.strictEqual(classifyShareBuffering({ freezeDelta: 1 }), 'path');
 assert.strictEqual(classifyShareBuffering({ packetsLostDelta: 4 }), 'path');
 assert.strictEqual(classifyShareBuffering({ softwareFallback: true, decodeQueue: 12 }), 'decode');
