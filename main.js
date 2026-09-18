@@ -87,6 +87,11 @@ function isNvidiaBroadcastLabel(...values) { return values.some(value => /(?:nvi
 function isExcludedShareSource(source) { return isNvidiaBroadcastLabel(source?.name); }
 function pipewireAsync(command, args) { return new Promise(resolve => execFile(command, args, { encoding: 'utf8', timeout: 2500, maxBuffer: 4*1024*1024 }, (error, stdout) => resolve(error ? '' : String(stdout || '').trim()))); }
 function pipewireOkAsync(command, args) { return new Promise(resolve => execFile(command, args, { timeout: 2500 }, error => resolve(!error))); }
+function debugLinuxShareAudio(state, message) {
+  const text = String(message || '');
+  if (!text) return;
+  try { if (state?.webContents && !state.webContents.isDestroyed()) state.webContents.send('pair:linuxShareAudioDebug', text); } catch {}
+}
 function spawnLinuxMonitorCapture(source) {
   const attempts = [
     ['parec', ['--device', source, '--format=float32le', '--rate=48000', '--channels=2', '--latency-msec=40']],
@@ -145,7 +150,10 @@ async function routeLinuxDesktopAudio(state) {
       movedOk = await pipewireOkAsync('pactl', ['move-sink-input', id, state.sink]);
     }
     if (linuxShareAudio !== state) { if (movedOk) await pipewireOkAsync('pactl', ['move-sink-input', id, currentName]);return; }
-    if (movedOk && !state.moved.some(item => item.id === id)) state.moved.push({ id, sink: currentName || sinkFromBlock || state.original });
+    if (movedOk && !state.moved.some(item => item.id === id)) {
+      state.moved.push({ id, sink: currentName || sinkFromBlock || state.original });
+      debugLinuxShareAudio(state, 'moved sink-input #'+id+' '+appName+' → '+state.sink);
+    }
   }
 }
 function scheduleLinuxDesktopAudioRoute(state, delay = 80) {
@@ -243,15 +251,13 @@ async function muteLinuxLoopbackReturn(state) {
 }
 async function unmuteLinuxLoopbackReturn(state) {
   if (!state.loopInputs?.length) return;
+  // Local hearing is the capture AudioWorklet, not this PipeWire loopback.
+  // Fading the loopback onto real speakers was the ear-blast; keep it parked
+  // at 0% so the friend still gets isolated capture without a speaker return.
+  debugLinuxShareAudio(state, 'loopback held at 0% · local monitor is the capture worklet · ids='+(state.loopInputs||[]).join(','));
   for (const id of state.loopInputs) {
     await pipewireOkAsync('pactl', ['set-sink-input-volume', id, '0%']);
-    await pipewireOkAsync('pactl', ['set-sink-input-mute', id, '0']);
-  }
-  for (let step = 1; step <= 5; step++) {
-    if (linuxShareAudio !== state) return;
-    const percent = String(step * 20) + '%';
-    for (const id of state.loopInputs) await pipewireOkAsync('pactl', ['set-sink-input-volume', id, percent]);
-    await new Promise(resolve => setTimeout(resolve, 24));
+    await pipewireOkAsync('pactl', ['set-sink-input-mute', id, '1']);
   }
 }
 function startLinuxShareAudio(webContents) {
@@ -392,6 +398,7 @@ async function startLinuxShareAudioInner(webContents,generation) {
     state.hold = hold;
     state.holdModule = holdModule || '';
     const loopSink = holdModule || original;
+    debugLinuxShareAudio(state, 'loopback load source='+sink+'.monitor sink='+loopSink+' hold='+(holdModule||'none'));
     const loop = await pipewireAsync('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${loopSink}`, 'latency_msec=40', 'source_dont_move=true', 'sink_input_properties=media.name=KnotShareReturn']);
     if (linuxShareAudio !== state) {
       if (loop) await pipewireAsync('pactl', ['unload-module', loop]);
@@ -408,7 +415,9 @@ async function startLinuxShareAudioInner(webContents,generation) {
       return;
     }
     state.loop = String(loop).trim();
+    debugLinuxShareAudio(state, 'loopback module='+state.loop);
     let muted = await muteLinuxLoopbackReturn(state);
+    debugLinuxShareAudio(state, 'mute '+(muted?'ok':'miss')+' inputs='+(state.loopInputs||[]).join(',')+' n='+(state.loopInputs||[]).length);
     if (linuxShareAudio !== state) return;
     if (state.loopInputs.length && holdModule) {
       for (const id of state.loopInputs) {

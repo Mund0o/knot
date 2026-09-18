@@ -173,6 +173,12 @@ contextBridge.exposeInMainWorld('pairEnv', {
     ipcRenderer.on('pair:linuxShareAudioError', listener);
     return () => ipcRenderer.removeListener('pair:linuxShareAudioError', listener);
   },
+  onLinuxShareAudioDebug: cb => {
+    if (typeof cb !== 'function') return () => {};
+    const listener = (_event, message) => cb(message);
+    ipcRenderer.on('pair:linuxShareAudioDebug', listener);
+    return () => ipcRenderer.removeListener('pair:linuxShareAudioDebug', listener);
+  },
   onGpuProcessGone: cb => {
     if (typeof cb !== 'function') return () => {};
     const listener = (_event, details) => cb(details || { reason: 'unknown' });
