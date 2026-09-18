@@ -762,7 +762,7 @@ function clearRemoteScreenShare(status='Not sharing'){
   // negotiated transceiver, and a disabled receiver can stay silent after the
   // remote peer starts a new share. Playback is suppressed at the media element.
   try{remoteScreen.srcObject?.getTracks?.().forEach(track=>{track.enabled=true})}catch{}
-  remoteScreen.srcObject=null;remoteScreen.hidden=true;resetShareSurface(remoteScreen);if(nativeRemoteAudio){try{nativeRemoteAudio.pause();nativeRemoteAudio.muted=true}catch{}}screenStatus.textContent=status;
+  remoteScreen.srcObject=null;remoteScreen.hidden=true;resetShareSurface(remoteScreen);if(nativeRemoteAudio){try{nativeRemoteAudio.pause();nativeRemoteAudio.muted=true}catch{}}teardownRemoteShareAudioSink();screenStatus.textContent=status;
   try{if(wasFocused)exitShareFullscreen({collapse:true});else updateScreenLayout()}catch{}
   if(callActive)void restoreDirectVoice();
 }
@@ -4032,7 +4032,31 @@ function holdNativeScreenPreMeta(channel,data){
   if(bytes.byteLength>NATIVE_SCREEN_PART+12)return;if(!channel._nativePreMeta)channel._nativePreMeta=[];let total=channel._nativePreMeta.reduce((sum,value)=>sum+value.byteLength,0);while(channel._nativePreMeta.length&&(channel._nativePreMeta.length>=32||total+bytes.byteLength>2*1024*1024)){total-=channel._nativePreMeta.shift().byteLength}if(total+bytes.byteLength<=2*1024*1024)channel._nativePreMeta.push(bytes)
 }
 function drainNativeScreenPreMeta(channel){for(const packet of channel._nativePreMeta?.splice(0)||[])receiveNativeScreenPacket(channel,packet)}
-function ensureNativeRemoteAudio(){if(nativeRemoteAudio)return nativeRemoteAudio;nativeRemoteAudio=document.createElement('audio');nativeRemoteAudio.autoplay=true;nativeRemoteAudio.muted=true;nativeRemoteAudio.volume=0;nativeRemoteAudio.hidden=true;document.body.append(nativeRemoteAudio);applyMediaElementOutput(nativeRemoteAudio).catch(()=>{});return nativeRemoteAudio}
+function ensureNativeRemoteAudio(){if(nativeRemoteAudio)return nativeRemoteAudio;nativeRemoteAudio=document.createElement('audio');nativeRemoteAudio.autoplay=true;nativeRemoteAudio.muted=true;nativeRemoteAudio.volume=0;nativeRemoteAudio.playsInline=true;nativeRemoteAudio.hidden=true;document.body.append(nativeRemoteAudio);applyMediaElementOutput(nativeRemoteAudio).catch(()=>{});return nativeRemoteAudio}
+let shareAudioSource=null,shareAudioGain=null,shareAudioStream=null;
+function setupRemoteShareAudioSink(audio){
+  if(!audio?.srcObject)return false;
+  const st=audio.srcObject,tracks=st.getAudioTracks?.()||[];
+  if(!tracks.length){logShareAudio('viewer sink has no audio tracks');return false}
+  try{
+    const ctx=sfxCtx();if(!ctx){logShareAudio('viewer sink has no AudioContext');return false}
+    if(ctx.state==='suspended')try{ctx.resume()}catch{}
+    const target=Math.max(0,Math.min(1,Number(remoteScreen.volume)||0));
+    if(shareAudioSource&&shareAudioStream===st&&shareAudioGain){
+      shareAudioGain.gain.setValueAtTime(target,ctx.currentTime);
+      logShareAudio('viewer sink reuse ctx='+ctx.state+' gain='+target.toFixed(2)+' track='+tracks[0].readyState+' muted='+tracks[0].muted);
+      return true;
+    }
+    try{shareAudioSource?.disconnect()}catch{}try{shareAudioGain?.disconnect()}catch{}
+    const src=ctx.createMediaStreamSource(st),gain=ctx.createGain();
+    gain.gain.value=0;src.connect(gain);gain.connect(ctx.destination);
+    shareAudioSource=src;shareAudioGain=gain;shareAudioStream=st;
+    gain.gain.linearRampToValueAtTime(target||1,ctx.currentTime+.28);
+    logShareAudio('viewer sink graph ctx='+ctx.state+' tracks='+tracks.map(t=>t.readyState+(t.muted?'/rtp-muted':'')).join(',')+' target='+(target||1));
+    return true;
+  }catch(error){logShareAudio('viewer sink failed '+(error?.message||error));return false}
+}
+function teardownRemoteShareAudioSink(){try{shareAudioSource?.disconnect()}catch{}try{shareAudioGain?.disconnect()}catch{}shareAudioSource=shareAudioGain=shareAudioStream=null}
 function applyRemoteShareVolume(audio){
   if(!audio)return audio;
   const target=Math.max(0,Math.min(1,Number(remoteScreen.volume)||0));
@@ -4045,10 +4069,15 @@ function applyRemoteShareVolume(audio){
 function startRemoteShareElement(audio,{forceFade=false}={}){
   if(!audio)return audio;
   const target=Math.max(0,Math.min(1,Number(remoteScreen.volume)||0));
-  if(remoteScreenSuppressed||target===0){audio.muted=true;audio.volume=0;audio._knotShareFade=0;return audio}
-  const hear=()=>{if(remoteScreenSuppressed||remoteScreen.volume===0||!audio.srcObject)return;audio.muted=false;if(!forceFade&&audio.volume>0.05){audio.play().catch(()=>{});return}audio.volume=0;fadeRemoteShareAudio(audio,{force:true})};
-  // Chromium autoplay allows muted play() without a gesture; unmute after it starts.
-  audio.muted=true;
+  if(remoteScreenSuppressed||target===0){audio.muted=true;audio.volume=0;audio._knotShareFade=0;teardownRemoteShareAudioSink();return audio}
+  const hear=()=>{
+    if(remoteScreenSuppressed||!audio.srcObject)return;
+    if(setupRemoteShareAudioSink(audio)){audio.muted=false;audio.volume=0;audio.play().catch(()=>{});return}
+    audio.muted=false;audio.play().catch(()=>{});
+    if(!forceFade&&audio.volume>0.05)return;
+    audio.volume=0;fadeRemoteShareAudio(audio,{force:true});audio.play().catch(()=>{});
+  };
+  audio.muted=true;audio.volume=0;
   audio.play().then(hear).catch(()=>hear());
   return audio;
 }
@@ -4082,7 +4111,9 @@ function bindReservedRemoteScreenAudio({force=false}={}){
   const fading=!!audio._knotShareFade;
   track.enabled=true;
   track.onunmute=()=>{if(!remoteScreenExpected)return;bindReservedRemoteScreenAudio({force:true})};
-  if(!same||force){
+  const routed=shareAudioStream&&shareAudioGain&&audio.srcObject&&audio._knotShareAudioTrack===track;
+  if((!same||force)&&!routed){
+    teardownRemoteShareAudioSink();
     audio.srcObject=new MediaStream([track]);
     audio._knotShareAudioTrack=track;
     audio.volume=audible||fading?keepVolume:0;
@@ -4461,7 +4492,7 @@ const syncAudioToggleAvailability=()=>{audioToggleBtn.disabled=screenBtn.disable
 const screenVolWrap=document.createElement('label');screenVolWrap.className='screen-volume';
 const screenVolLabel=document.createElement('span');screenVolLabel.textContent='Stream volume';
 const screenVol=document.createElement('input');screenVol.type='range';screenVol.min=0;screenVol.max=100;screenVol.value=100;screenVol.setAttribute('aria-label','Stream volume');
-screenVol.oninput=()=>{const v=Math.max(0,Math.min(100,Number(screenVol.value)||0))/100;remoteScreen.volume=v;remoteScreen.muted=true;if(nativeRemoteAudio){nativeRemoteAudio._knotShareFade=0;nativeRemoteAudio.volume=v;nativeRemoteAudio.muted=v===0}ssSet('screenVol',String(v))};enableRangeDrag(screenVol);
+screenVol.oninput=()=>{const v=Math.max(0,Math.min(100,Number(screenVol.value)||0))/100;remoteScreen.volume=v;remoteScreen.muted=true;if(nativeRemoteAudio){nativeRemoteAudio._knotShareFade=0;nativeRemoteAudio.volume=shareAudioGain?0:v;nativeRemoteAudio.muted=v===0}if(shareAudioGain){const ctx=sfxCtx();try{shareAudioGain.gain.setValueAtTime(v,ctx?ctx.currentTime:0)}catch{shareAudioGain.gain.value=v}}ssSet('screenVol',String(v))};enableRangeDrag(screenVol);
 (async()=>{try{const saved=await ss('screenVol');if(saved!==null){const v=parseFloat(saved);if(v>=0&&v<=1){remoteScreen.volume=v;remoteScreen.muted=true;if(nativeRemoteAudio){nativeRemoteAudio.volume=v;nativeRemoteAudio.muted=v===0}screenVol.value=Math.round(v*100)}}}catch{}})();screenVolWrap.append(screenVolLabel,screenVol);
 const shareContextMenu=document.createElement('div');shareContextMenu.className='share-context-menu';shareContextMenu.hidden=true;shareContextMenu.setAttribute('role','menu');document.body.append(shareContextMenu);
 function hideShareContextMenu(){shareContextMenu.hidden=true;shareContextMenu.replaceChildren()}
