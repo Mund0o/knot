@@ -1,11 +1,11 @@
 {
-  "version": "1.1.112",
-  "notes": "Incoming share audio plays at audible volume; diagnostics show on the stream badge.\nNative AV1 is capped at 200 Mbps so the picture does not go black mid-share.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.112/pair-p2p-1.1.112.tar.gz",
-  "linuxSha256": "1c13a6e2b5e0e6a8a62e1cd72c7d6bb2fdd06d058d46fb1c87caeee7dd646645",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.112/Knot-1.1.112.AppImage",
-  "linuxAppImageSha256": "902b56c2d00c0aae1c4d6be720bbadb117a34da9af5e627e216a3fa0f32db864",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.112/Knot.Setup.1.1.112.exe",
-  "winSha256": "4c5beaeab1c83c024bab7d8d93284e579839441ff9ac13e7393735b06d9fe362",
-  "signature": "KPggnpJIFQg4OsborQqPG3Cv3zy/5gW1WjThmfZNKP0TdIy/rwF/EwT5kwVcvGwNmNy4OJCG4VNEnsu3jRulCg=="
+  "version": "1.1.113",
+  "notes": "Share audio now starts even when PipeWire cannot build the loopback return, and the status line says when your speakers stay silent.\nA black native AV1 picture retries software decode, a dead presentation canvas no longer blanks a share tile, and Wayland shares the display you picked.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.113/pair-p2p-1.1.113.tar.gz",
+  "linuxSha256": "bfe685b9957ba4dc511718a34cc6f56425c2d05d624a35ff73d2e3dddb37edb6",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.113/Knot-1.1.113.AppImage",
+  "linuxAppImageSha256": "c94093e9cc20b4c1f06eace72cc83ec4b684c987680d509991aa353c082ff713",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.113/Knot.Setup.1.1.113.exe",
+  "winSha256": "f2591349bfd48a9503666799b715ff9ca6a4cbf942ce214c7959221dd43b8483",
+  "signature": "p8f35Njby1rNhFrGFNVRgvSbE//WKMqWxMqUWJLJ0+9t6F/Sq6pAHM6pa96lAEXTgtRpnEgpJWYoTruroKt9Bw=="
 }
