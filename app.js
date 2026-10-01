@@ -889,6 +889,32 @@ const ICE_SERVERS=CONFIGURED_ICE_SERVERS.length?CONFIGURED_ICE_SERVERS:DEFAULT_I
 function iceUrls(item){return Array.isArray(item?.urls)?item.urls:[item?.urls]}
 function hasTurnUrl(item){return iceUrls(item).some(url=>typeof url==='string'&&/^(?:turn|turns):/i.test(url))}
 function directIceServers(){const stun=ICE_SERVERS.map(item=>{const urls=iceUrls(item).filter(url=>typeof url==='string'&&/^stun:/i.test(url));return urls.length?{urls}:null}).filter(Boolean);return stun.length?stun:DEFAULT_ICE_SERVERS}
+function iceMath(){return window.KnotIceSdp||null}
+function directIceTransportPolicy(){return relayVoiceMode&&Array.isArray(dmIceServers)&&dmIceServers.some(hasTurnUrl)?'relay':'all'}
+function localCallSdp(target=pc){const sdp=target?.localDescription?.sdp||'';return iceMath()?.preferPublicIceSdp?iceMath().preferPublicIceSdp(sdp):sdp}
+function sendDirectIceCandidate(candidate){
+  const json=candidate&&typeof candidate.toJSON==='function'?candidate.toJSON():candidate;
+  const clean=cleanIceCandidate(json);if(!clean)return;
+  if(iceMath()&&!iceMath().iceCandidateWorthSending(clean.candidate))return;
+  if(signaling&&signaling.readyState===1)try{signaling.send(JSON.stringify({type:'signal',payload:{kind:'candidate',candidate:clean}}))}catch{}
+}
+async function addDirectIceCandidate(candidate){
+  const value=cleanIceCandidate(candidate);if(!value)return;
+  if(pc?.remoteDescription){try{await pc.addIceCandidate(value)}catch(error){if(pc.signalingState!=='closed')console.warn('ICE candidate',error)}return}
+  const queued=pc?pc._pendingRemoteCandidates||(pc._pendingRemoteCandidates=[]):pendingDirectCandidates;
+  if(queued.length<128)queued.push(value);
+}
+async function flushDirectIceCandidates(target=pc){
+  if(!target?.remoteDescription)return;
+  const queued=target._pendingRemoteCandidates||(target._pendingRemoteCandidates=[]);
+  if(pendingDirectCandidates.length)queued.push(...pendingDirectCandidates.splice(0));
+  for(const candidate of queued.splice(0))try{await target.addIceCandidate(candidate)}catch(error){if(target.signalingState!=='closed')console.warn('ICE candidate',error)}
+}
+function ensureOfferAudioTransceivers(){
+  if(!pc)return;
+  if(!audioTransceiver){try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});preferVoiceAudioCodecs(audioTransceiver)}catch{}}
+  if(!screenAudioTransceiver){try{screenAudioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'})}catch{}}
+}
 let dmIceServers=directIceServers(),turnIceServers=CONFIGURED_ICE_SERVERS.filter(hasTurnUrl),turnIssuedAt=0,turnCredentialWaiter=null,turnCredentialPending=null,relayVoiceMode=false,dmMediaPlan=null;
 function viableScreenPeer(target=pc){return !!target&&target===pc&&!['failed','disconnected','closed'].includes(String(target.connectionState||''))&&target.signalingState!=='closed'}
 function setupPeer(){
@@ -909,7 +935,7 @@ function setupPeer(){
     if(oldFiles){oldFiles.onmessage=null;try{oldFiles.close()}catch{}}
     try{oldPc.close()}catch{}
   }
-  pc=new RTCPeerConnection({iceServers:dmIceServers,iceTransportPolicy:relayVoiceMode?'relay':'all'});const peer=pc;peer.onicecandidate=()=>{};let wasEverConnected=false;
+  pc=new RTCPeerConnection({iceServers:dmIceServers,iceTransportPolicy:directIceTransportPolicy(),bundlePolicy:'max-bundle',rtcpMuxPolicy:'require',iceCandidatePoolSize:relayVoiceMode?0:2});const peer=pc;peer._pendingRemoteCandidates=pendingDirectCandidates.splice(0,128);pendingDirectCandidates.length=0;peer.onicecandidate=event=>{if(event.candidate)sendDirectIceCandidate(event.candidate)};let wasEverConnected=false;
   peer.onconnectionstatechange=()=>{if(pc!==peer)return;const state=peer.connectionState;if(state==='connected'){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=relayVoiceMode;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}if(callActive)publishCallState(true);if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;releaseCallMicrophone();callActive=false;startCall()}}else{setStatus(relayVoiceMode?'Voice relay active · files and screen share stay P2P':'Connected directly',true);friendLeftNotified=false}}if(state==='disconnected'){if(!peer._disconnectGrace)peer._disconnectGrace=setTimeout(()=>{if(pc!==peer)return;if(callActive&&peer.connectionState==='failed')void restartDirectIce();else if(['disconnected','failed'].includes(peer.connectionState)&&!callActive)setStatus('disconnected')},8000);return}if(state==='failed'&&callActive){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}void restartDirectIce();return}if(['failed','closed'].includes(state)){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(callActive)publishCallState(false);if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=true;abortScreenSharePicker();if(screenActive||screenStarting||screenStream||nativeScreenSession)void stopScreenShare(true);else screenGen++;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}applyRemoteCallState(false);if(directFileId)closeTcpLane();setStatus(state)}if(state==='connecting'){pairHint.textContent=(relayVoiceMode?'Connecting low-bandwidth voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…';armConnectTimeout()}};peer.oniceconnectionstatechange=()=>{if(pc!==peer)return;if(peer.iceConnectionState==='failed'){pairHint.textContent=relayVoiceMode?'Voice relay failed. Text will keep working, but this network cannot reach the relay.':'Direct peer connection failed; retrying before the low-bandwidth voice relay.'}else if(peer.iceConnectionState==='checking'||peer.iceConnectionState==='connected'){pairHint.textContent=(relayVoiceMode?'Connecting voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…'}};peer.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else if(!relayVoiceMode)files=e.channel;wire()};
   peer.addEventListener('connectionstatechange',()=>{if(pc!==peer||peer.connectionState!=='connected'||callActive||callStarting||pendingVoiceStartPeerId!==dmPeerId)return;pendingVoiceStartPeerId='';startCall()});
   const baseDirectDataChannel=pc.ondatachannel;pc.ondatachannel=event=>{if(event.channel.label==='knot-screen-native'){wireNativeScreenChannel(event.channel,{remote:true});return}baseDirectDataChannel(event)};
@@ -926,17 +952,24 @@ function setupPeer(){
   // via addTrack (which matches by sender.track.kind) instead of addTransceiver
   // (whose receiver-based kind matching fails for createAnswer in Chrome).
   try{
-    const silentCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000});
+    const Ctor=window.AudioContext||window.webkitAudioContext;if(!Ctor)throw new Error('Web Audio is unavailable');
+    let silentCtx;try{silentCtx=new Ctor({sampleRate:48000})}catch{silentCtx=new Ctor()}
+    try{silentCtx.resume()}catch{}
     const silentDst=silentCtx.createMediaStreamDestination(),silentScreenDst=silentCtx.createMediaStreamDestination();
     silentDst.channelCount=1;silentScreenDst.channelCount=2;
-    audioTransceiver=pc.addTrack(silentDst.stream.getAudioTracks()[0],silentDst.stream);
-    screenAudioTransceiver=pc.addTrack(silentScreenDst.stream.getAudioTracks()[0],silentScreenDst.stream);
-    pc._silentVoiceAudioTrack=silentDst.stream.getAudioTracks()[0];
-    pc._silentScreenAudioTrack=silentScreenDst.stream.getAudioTracks()[0];
-    // Keep a reference so we can close the AudioContext on disconnect
+    const voiceTrack=silentDst.stream.getAudioTracks()[0],screenTrack=silentScreenDst.stream.getAudioTracks()[0];
+    if(!voiceTrack||voiceTrack.readyState!=='live'||!screenTrack||screenTrack.readyState!=='live')throw new Error('silent audio track is not live');
+    audioTransceiver=pc.addTrack(voiceTrack,silentDst.stream);
+    screenAudioTransceiver=pc.addTrack(screenTrack,silentScreenDst.stream);
+    pc._silentVoiceAudioTrack=voiceTrack;
+    pc._silentScreenAudioTrack=screenTrack;
     pc._silentAudioCtx=silentCtx;
     preferVoiceAudioCodecs(pc.getTransceivers().find(value=>value.sender===audioTransceiver));
-  }catch(e){console.warn('Silent audio tracks failed, using transceivers:',e);try{audioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});screenAudioTransceiver=pc.addTransceiver('audio',{direction:'sendrecv'});preferVoiceAudioCodecs(audioTransceiver)}catch(e2){console.warn('addTransceiver also failed:',e2);audioTransceiver=null;screenAudioTransceiver=null}}
+  }catch(e){
+    // addTransceiver matching fails for createAnswer in Chrome. Leave the
+    // transceivers unset so an answerer can adopt the offer m-lines instead.
+    console.warn('Silent audio tracks failed:',e);audioTransceiver=null;screenAudioTransceiver=null;
+  }
   logCallEvent('Diag: setupPeer transceivers='+pc.getTransceivers().length+' voice='+(audioTransceiver?'ready':'null')+' screenAudio='+(screenAudioTransceiver?'ready':'null'));
   let gestureGuard=false,screenGestureGuard=false;
   pc.ontrack=e=>{logCallEvent('Diag: ontrack kind='+e.track.kind);try{const stream=e.streams[0]||new MediaStream([e.track]);
@@ -1058,7 +1091,26 @@ function monitorNativeScreenBuffering(channel,{isActive}={}){
   },800);
   const timer=setInterval(sample,2000);setTimeout(sample,800);return stop;
 }
-async function waitIce(target=pc){if(!target||target.iceGatheringState==='complete')return;await new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;target.removeEventListener('icegatheringstatechange',changed);clearTimeout(timeout);resolve()};const changed=()=>{if(target.iceGatheringState==='complete'||target.signalingState==='closed')finish()};const timeout=setTimeout(finish,5000);target.addEventListener('icegatheringstatechange',changed)})}
+async function waitIce(target=pc){
+  if(!target)return;
+  const ice=iceMath(),timeoutMs=relayVoiceMode?(ice?.WAIT_ICE_RELAY_MS||12000):(ice?.WAIT_ICE_MS||8000);
+  const ready=()=>{
+    if(target.signalingState==='closed')return true;
+    if(target.iceGatheringState==='complete')return true;
+    const sdp=target.localDescription?.sdp||'';
+    return relayVoiceMode?!!ice?.sdpHasRelayIceCandidate?.(sdp):!!ice?.sdpHasPublicIceCandidate?.(sdp);
+  };
+  if(ready())return;
+  await new Promise(resolve=>{
+    let done=false;
+    const finish=()=>{if(done)return;done=true;target.removeEventListener('icegatheringstatechange',onChange);target.removeEventListener('icecandidate',onChange);clearTimeout(timer);resolve()};
+    const onChange=()=>{if(ready())finish()};
+    const timer=setTimeout(finish,timeoutMs);
+    target.addEventListener('icegatheringstatechange',onChange);
+    target.addEventListener('icecandidate',onChange);
+    onChange();
+  });
+}
 function networkMath(){return window.KnotNetworkCapacity||null}
 function probedUploadMbps(){return Number(networkCapacity?.uploadMbps)}
 function probedDownloadMbps(){return Number(networkCapacity?.downloadMbps)}
@@ -1248,45 +1300,10 @@ function preferVoiceAudioCodecs(transceiver){
     const ordered=(useRed?red:[]).concat(opus,rest);if(ordered.length)transceiver.setCodecPreferences(ordered);
   }catch{}
 }
-function remapAudioPayloadType(section,fromPt,toPt){
-  const from=String(fromPt),to=String(toPt);
-  if(from===to||new RegExp('a=rtpmap:'+to+'\\b').test(section))return section;
-  let next=section.replace(/^m=audio .+$/m,line=>{const parts=line.trim().split(/\s+/);if(parts.length<4)return line;return parts.slice(0,3).concat([...new Set(parts.slice(3).map(pt=>pt===from?to:pt))]).join(' ')});
-  next=next.replace(new RegExp('^(a=(?:rtpmap|fmtp|rtcp-fb):)'+from+'(?=\\s|$)','gm'),'$1'+to);
-  next=next.replace(new RegExp('(\\bapt=)'+from+'\\b','g'),'$1'+to);
-  next=next.replace(new RegExp('(a=fmtp:\\d+ )'+from+'(?=/)','g'),'$1'+to);
-  return next;
-}
-function payloadTypesInSdp(sdp){
-  const used=new Set();
-  String(sdp||'').replace(/a=rtpmap:(\d+)\b/g,(_,pt)=>used.add(Number(pt)));
-  String(sdp||'').replace(/^m=\w+ \d+ \S+ (.+)$/gm,(_,pts)=>{for(const pt of String(pts).trim().split(/\s+/))if(/^\d+$/.test(pt))used.add(Number(pt))});
-  return used;
-}
-function takeFreeAudioPayloadType(used){
-  // 112/113 are Chromium telephone-event. 111/63/110/126 are the first m-line's
-  // Opus/RED/CN/telephone-event. Reusing 112 was a no-op on real offers, so both
-  // audio m-lines kept Opus 111 and the bundle either crashed or dropped sound.
-  for(const pt of [114,115,116,117,118,119,120,121,122,123,124,125,127,96,97,98,99,100,101,102,103,104,105,106,107,108,109]){
-    if(used.has(pt))continue;used.add(pt);return pt;
-  }
-  return 0;
-}
-function unbundleOpusCollision(sdp){
-  const used=payloadTypesInSdp(sdp);let audioIndex=0;
-  used.add(111);used.add(112);used.add(113);
-  return String(sdp||'').split(/(?=^m=)/m).map(part=>{
-    if(!part.startsWith('m=audio'))return part;
-    if(audioIndex++===0)return part;
-    let next=part;
-    const opusPt=Number((next.match(/a=rtpmap:(\d+) opus\//i)||[])[1]||111);
-    const opusTo=takeFreeAudioPayloadType(used);
-    if(opusTo&&opusTo!==opusPt)next=remapAudioPayloadType(next,opusPt,opusTo);
-    const redPt=Number((next.match(/a=rtpmap:(\d+) red\//i)||[])[1]||0);
-    if(redPt){const redTo=takeFreeAudioPayloadType(used);if(redTo&&redTo!==redPt)next=remapAudioPayloadType(next,redPt,redTo)}
-    return next;
-  }).join('');
-}
+function remapAudioPayloadType(section,fromPt,toPt){return iceMath()?.remapAudioPayloadType(section,fromPt,toPt)??section}
+function payloadTypesInSdp(sdp){return iceMath()?.payloadTypesInSdp(sdp)||new Set()}
+function takeFreeAudioPayloadType(used){return iceMath()?.takeFreeAudioPayloadType(used)||0}
+function unbundleOpusCollision(sdp){return iceMath()?.unbundleOpusCollision(sdp)??sdp}
 function patchOpusSection(section,kind){
   const voice=kind==='voice',bitrate=relayVoiceMode?24000:voice?targetVoiceBitrate():256000,playback=relayVoiceMode?16000:48000,stereo=relayVoiceMode||voice?0:1,dtx=0;
   const pt=(section.match(/a=rtpmap:(\d+) opus\//i)||[])[1]||'111';
@@ -1311,8 +1328,8 @@ function monitorVoicePlayout(receiver,track){
   }catch{}finally{sampleInFlight=false}};
   const timer=setInterval(sample,2500);track.addEventListener?.('ended',stop,{once:true});setTimeout(sample,1200);return stop;
 }
-$('#createOffer').onclick=async()=>{try{if(pc||signaling)disconnectRoom();pairSignalBusy=false;pairReplyAccepted=false;processSignal.disabled=false;role='offer';signalIn.value='';ssSet('savedInviteCode',null);setOutgoingCode('');processSignal.textContent='Finish connection';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Invite ready. Copy it, send it to your friend, then paste their reply in step 2.'}catch(e){pairHint.textContent='Could not create invite: '+(e?.message||e)}};
-processSignal.onclick=async()=>{if(pairSignalBusy){pairHint.textContent='Still processing that code…';return}if(role==='offer'&&(pairReplyAccepted||!pc||pc.signalingState!=='have-local-offer')){const failed=pc&&['failed','disconnected','closed'].includes(pc.connectionState);pairHint.textContent=failed?'That connection attempt already ended. Click Create invite, then send the new code to your friend for a fresh try.':'That reply was already accepted. Connecting directly…';processSignal.disabled=true;return}pairSignalBusy=true;processSignal.disabled=true;try{const remote=await cleanSignal(signalIn.value);if(role==='offer'){if(remote.type!=='answer')throw new Error('Paste the reply your friend created, not another invite');await pc.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remote.sdp)});if(!await derive(pc._kp,remote.pub))throw new Error('Security code was not confirmed');pairReplyAccepted=true;pairHint.textContent='Connecting directly…'}else if(!role){if(remote.type!=='offer')throw new Error('Paste an invite first, then create its reply');role='answer';setOutgoingCode('');setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remote.sdp)});if(!await derive(kp,remote.pub))throw new Error('Security code was not confirmed');applyInboundScreenCodecPreference(pc);const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}));pairHint.textContent='Reply ready. Copy it and send it back to the person who invited you.';processSignal.textContent='Reply ready'}else pairHint.textContent='Your reply is already ready. Copy it and send it back to your friend.'}catch(e){processSignal.disabled=false;pairHint.textContent='Could not continue pairing: '+(e?.message||e)}finally{pairSignalBusy=false}};
+$('#createOffer').onclick=async()=>{try{if(pc||signaling)disconnectRoom();pairSignalBusy=false;pairReplyAccepted=false;processSignal.disabled=false;role='offer';signalIn.value='';ssSet('savedInviteCode',null);setOutgoingCode('');processSignal.textContent='Finish connection';setupPeer();const kp=await keyPair();pc._kp=kp;setupChannels();ensureOfferAudioTransceivers();const o=await pc.createOffer();await pc.setLocalDescription({type:'offer',sdp:patchSdp(o.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'offer',sdp:localCallSdp(),pub:await exportPub(kp.publicKey)}));pairHint.textContent='Invite ready. Copy it, send it to your friend, then paste their reply in step 2.'}catch(e){pairHint.textContent='Could not create invite: '+(e?.message||e)}};
+processSignal.onclick=async()=>{if(pairSignalBusy){pairHint.textContent='Still processing that code…';return}if(role==='offer'&&(pairReplyAccepted||!pc||pc.signalingState!=='have-local-offer')){const failed=pc&&['failed','disconnected','closed'].includes(pc.connectionState);pairHint.textContent=failed?'That connection attempt already ended. Click Create invite, then send the new code to your friend for a fresh try.':'That reply was already accepted. Connecting directly…';processSignal.disabled=true;return}pairSignalBusy=true;processSignal.disabled=true;try{const remote=await cleanSignal(signalIn.value);if(role==='offer'){if(remote.type!=='answer')throw new Error('Paste the reply your friend created, not another invite');await pc.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remote.sdp)});await flushDirectIceCandidates();if(!await derive(pc._kp,remote.pub))throw new Error('Security code was not confirmed');pairReplyAccepted=true;pairHint.textContent='Connecting directly…'}else if(!role){if(remote.type!=='offer')throw new Error('Paste an invite first, then create its reply');role='answer';setOutgoingCode('');setupPeer();const kp=await keyPair();pc._kp=kp;await pc.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remote.sdp)});await flushDirectIceCandidates();if(!await derive(kp,remote.pub))throw new Error('Security code was not confirmed');applyInboundScreenCodecPreference(pc);const a=await pc.createAnswer();await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});await waitIce();setOutgoingCode(await makeSignal({type:'answer',sdp:localCallSdp(),pub:await exportPub(kp.publicKey)}));pairHint.textContent='Reply ready. Copy it and send it back to the person who invited you.';processSignal.textContent='Reply ready'}else pairHint.textContent='Your reply is already ready. Copy it and send it back to your friend.'}catch(e){processSignal.disabled=false;pairHint.textContent='Could not continue pairing: '+(e?.message||e)}finally{pairSignalBusy=false}};
 copySignal.onclick=()=>copyOutgoingCode().catch(e=>{pairHint.textContent='Could not copy code: '+(e?.message||e)});
 messageForm.onsubmit=async e=>{e.preventDefault();const text=convertEmoticons(messageInput.value.trim()),gif=pendingGif;if(!text&&!gif)return;const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE){pairHint.textContent='Messages are limited to 64 KB.';return}if(!sharedKey){if(LOCAL_TEST_MODE){addMessage(text,true,gif);messageInput.value='';setPendingGif(null);return}return}send({t:'msg',v:await seal(payload)});addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics)};
 async function waitForDirectFileChannel(peerId,timeoutMs=30000){const until=Date.now()+timeoutMs;while(Date.now()<until){if(fileBus()&&pc?.connectionState==='connected'&&dmPeerId===peerId)return true;await new Promise(resolve=>setTimeout(resolve,100))}return false}
@@ -1805,7 +1822,7 @@ profileSettingsReady=(async()=>{const[savedName,savedFrame,savedAvatar,savedShar
 // Auto-update pulls latest.json directly from GitHub (configured in updater.js),
   // independent of the signaling server. No action needed here.
 
-let signaling;
+let signaling,pairRoom='',pairGeneration=0,pendingDirectCandidates=[];
 function secureSignalAddress(address){try{const u=new URL(address);const loopback=['localhost','127.0.0.1','[::1]','::1'].includes(u.hostname);return u.protocol==='wss:'||(u.protocol==='ws:'&&loopback)?u.href:null}catch{return null}}
 function roomSignalAddress(address,room){const safe=secureSignalAddress(address);if(!safe)return null;const u=new URL(safe);u.searchParams.set('room',String(room).trim().toUpperCase());return u.href}
 function makeInviteCode(){return clientHex(16)}
@@ -1981,12 +1998,20 @@ async function serverTextMembershipSync(){
 function validTurnIceServers(value){return Array.isArray(value)&&value.length>0&&value.length<=8&&value.every(item=>item&&typeof item==='object'&&iceUrls(item).length>0&&iceUrls(item).every(url=>typeof url==='string'&&/^(?:stun|turn|turns):/i.test(url)))&&value.some(hasTurnUrl)}
 async function requestTurnCredentials(){
   if(turnIceServers.length&&turnIssuedAt&&Date.now()-turnIssuedAt<20*60*1000)return turnIceServers;
-  turnIceServers=[];
   if(turnCredentialWaiter)return turnCredentialWaiter;
-  if(!directorySocket||directorySocket.readyState!==WebSocket.OPEN)throw new Error('Knot signaling is offline');
+  const configuredTurn=CONFIGURED_ICE_SERVERS.filter(hasTurnUrl);
+  const useConfigured=()=>{if(!configuredTurn.length)return null;turnIceServers=configuredTurn;turnIssuedAt=Date.now();return turnIceServers};
+  if(!directorySocket||directorySocket.readyState!==WebSocket.OPEN){
+    const fallback=useConfigured();if(fallback)return fallback;
+    throw new Error('Knot signaling is offline');
+  }
   let resolveWait,rejectWait;
   const wait=turnCredentialWaiter=new Promise((resolve,reject)=>{resolveWait=resolve;rejectWait=reject});
-  const finish=(error,value)=>{const pending=turnCredentialPending;turnCredentialPending=null;turnCredentialWaiter=null;clearTimeout(pending?.timeout);error?rejectWait(error):resolveWait(value)};
+  const finish=(error,value)=>{
+    const pending=turnCredentialPending;turnCredentialPending=null;turnCredentialWaiter=null;clearTimeout(pending?.timeout);
+    if(error){const fallback=useConfigured();if(fallback){resolveWait(fallback);return}rejectWait(error);return}
+    resolveWait(value);
+  };
   turnCredentialPending={timeout:setTimeout(()=>finish(new Error('Voice relay credential timed out')),10000),resolve:value=>finish(null,value),reject:error=>finish(error)};
   if(!directorySend({type:'turn-credentials'}))finish(new Error('Could not request a voice relay'));
   return wait;
@@ -2218,15 +2243,21 @@ async function selectGroupDm(id){
 function delay(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
 async function waitForDmMediaConnection(peerId,plan,timeoutMs){
   const until=Date.now()+timeoutMs;
+  const live=()=>{
+    if(!pc||dmPeerId!==peerId)return false;
+    if(pc.connectionState==='connected')return true;
+    const ice=String(pc.iceConnectionState||'');
+    return ice==='connected'||ice==='completed';
+  };
   while(Date.now()<until){
     if(plan?.cancelled)return false;
     if(pc&&dmPeerId===peerId){
-      if(pc.connectionState==='connected')return true;
+      if(live())return true;
       if(['failed','closed'].includes(pc.connectionState))return false;
     }
     await delay(100);
   }
-  return !!(pc&&dmPeerId===peerId&&pc.connectionState==='connected');
+  return live();
 }
 function abandonDmMediaAttempt(peerId){
   if(pc||signaling)disconnectRoom({preserveCall:true});
@@ -2239,24 +2270,35 @@ function directVoiceTransportDead(target=pc){
 }
 async function ensureDmMediaConnection(peerId=activePeerId,{requireFileChannel=false}={}){
   const friend=directoryUser(peerId);if(!peerId||!friendReachable(peerId))throw new Error('Your friend is offline');
-  if(!friend?.online&&friendOnLan(peerId))return lanEnsureMedia(peerId);
+  if(friendOnLan(peerId)){
+    try{return await lanEnsureMedia(peerId)}catch(error){
+      if(!friend?.online)throw error;
+      const wantVoice=pendingVoiceStartPeerId===peerId;
+      abandonDmMediaAttempt(peerId);
+      if(wantVoice)pendingVoiceStartPeerId=peerId;
+    }
+  }
   if(dmMediaPlan?.peerId===peerId)return dmMediaPlan.promise;
   if(pc&&dmPeerId===peerId&&['connected','connecting','new'].includes(pc.connectionState)&&!directVoiceTransportDead(pc))return pc;
   if(dmCallOngoing()&&dmCallPeerId!==peerId)throw new Error('End the current voice call before starting another direct connection');
   if(dmMediaPlan)dmMediaPlan.cancelled=true;
   const plan={peerId,cancelled:false,promise:null};dmMediaPlan=plan;dmConnectingPeerId=peerId;syncActiveDmTransport();
   plan.promise=(async()=>{
+    const restoreVoice=want=>{if(want)pendingVoiceStartPeerId=peerId};
+    const finishVoice=()=>{if(pendingVoiceStartPeerId===peerId&&!callActive&&!callStarting)startCall()};
+    const directWait=iceMath()?.DIRECT_CONNECT_MS||25000,relayWait=iceMath()?.RELAY_CONNECT_MS||20000;
     for(let attempt=1;attempt<=3;attempt++){
       if(plan.cancelled)throw new Error('A peer connection was started from the other side');
       dmIceServers=directIceServers();relayVoiceMode=false;
       const session=clientHex(16);pairHint.textContent='Trying direct peer connection '+attempt+' of 3…';
       if(!directorySend({type:'connect',peerId,session,context:{type:'dm',relay:false}}))throw new Error('Knot signaling is offline');
-      const resumeVoice=pendingVoiceStartPeerId===peerId;
+      const wantVoice=pendingVoiceStartPeerId===peerId;
       await automaticPair('host',session,peerId);
-      if(resumeVoice)pendingVoiceStartPeerId=peerId;
-      if(await waitForDmMediaConnection(peerId,plan,12000))return pc;
+      restoreVoice(wantVoice);
+      if(await waitForDmMediaConnection(peerId,plan,directWait)){finishVoice();return pc}
       if(plan.cancelled)throw new Error('A peer connection was started from the other side');
       abandonDmMediaAttempt(peerId);
+      restoreVoice(wantVoice);
       if(attempt<3)await delay(350*attempt);
     }
     if(plan.cancelled)throw new Error('A peer connection was started from the other side');
@@ -2268,10 +2310,10 @@ async function ensureDmMediaConnection(peerId=activePeerId,{requireFileChannel=f
     dmIceServers=await requestTurnCredentials();relayVoiceMode=true;
     const session=clientHex(16);
     if(!directorySend({type:'connect',peerId,session,context:{type:'dm',relay:true}}))throw new Error('Knot signaling is offline');
-    const resumeVoice=pendingVoiceStartPeerId===peerId;
+    const wantVoice=pendingVoiceStartPeerId===peerId;
     await automaticPair('host',session,peerId);
-    if(resumeVoice)pendingVoiceStartPeerId=peerId;
-    if(await waitForDmMediaConnection(peerId,plan,15000))return pc;
+    restoreVoice(wantVoice);
+    if(await waitForDmMediaConnection(peerId,plan,relayWait)){finishVoice();return pc}
     throw new Error('Could not connect the voice relay. Text still works.');
   })();
   try{const connected=await plan.promise;if(activePeerId===peerId)applyFriendProfile(friend);renderCallPeerProfile();return connected}
@@ -2653,7 +2695,7 @@ async function connectDirectory(){
     else if(value.type==='call-presence'){const from=String(value.from||'');if(value.active&&directoryUser(from)&&(!dmCallOngoing()||dmCallPeerId===from)){dmCallPeerId=from;applyRemoteCallState(true,value.session||'')}else if(!value.active&&dmCallPeerId===from)applyRemoteCallState(false,value.session||'')}
     else if(value.type==='invite-created'){if(value.kind==='friend'){const input=$('#roomCode');input.value=value.code;pairHint.textContent='Friend code '+value.code+' is ready for 15 minutes.'}else showServerInvite(value.code)}
     else if(value.type==='connect-request'){
-      const friend=directoryUser(value.from),samePeer=dmConnectingPeerId===value.from&&(!!pc||!!signaling),useRelay=value.context?.relay===true;
+      const friend=directoryUser(value.from),incomingSession=String(value.session||''),samePeer=dmConnectingPeerId===value.from&&(!!pc||!!signaling),sameSession=samePeer&&incomingSession&&incomingSession===pairRoom,useRelay=value.context?.relay===true;
       // Only a call with somebody else may veto a connect request. The peer
       // already in the call is exactly who a joiner re-pairs with, and dropping
       // that request left the joiner unable to attach its mic: it reconnected
@@ -2662,9 +2704,9 @@ async function connectDirectory(){
       // call across the replacement peer (reconnectCall), so re-pairing the
       // caller resumes their voice instead of ending it.
       if(!friend||(dmCallOngoing()&&dmCallPeerId!==value.from))return;
-      // When both people click the same DM, one stable side keeps hosting and
-      // the other joins it. This prevents competing offers from cancelling.
-      if(samePeer&&directoryUserId<value.from)return;
+      // When both people click the same DM, the lower-id host keeps hosting.
+      // A joiner must still accept a later retry or TURN session from that peer.
+      if(samePeer&&directoryUserId<value.from&&(role==='host'||sameSession))return;
       if(dmMediaPlan?.peerId===value.from)dmMediaPlan.cancelled=true;
       const resumeVoice=pendingVoiceStartPeerId===value.from;
       dmConnectingPeerId=value.from;
@@ -2911,6 +2953,7 @@ async function lanEnsureMedia(peerId){
   const socket=lanSockets.get(socketId);if(!socket?.authed)throw new Error('Could not prove this Wi-Fi friend');
   directoryTrustedConnection=true;dmIceServers=[];relayVoiceMode=false;dmPeerId=peerId;dmConnectingPeerId=peerId;
   setupPeer();if(pc)pc._lan=true;setupChannels();const kp=await keyPair();if(!pc)return;pc._kp=kp;
+  ensureOfferAudioTransceivers();
   const offer=await pc.createOffer();if(!pc)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc)return;await waitIce();
   lanSend(socketId,{t:'offer',sdp:rewriteLanSdp(pc.localDescription.sdp,socket.localAddress||neighbor.host),pub:await exportPub(kp.publicKey)});
   if(await waitForDmMediaConnection(peerId,{cancelled:false},12000)){pairHint.textContent='Connected on this Wi-Fi.';return pc}
@@ -2927,29 +2970,33 @@ async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
   role=kind;directoryTrustedConnection=!!expectedPeerId;dmPeerId=expectedPeerId||activePeerId;if(expectedPeerId)dmConnectingPeerId=expectedPeerId;const baseAddress=PAIR_SIGNAL_SERVER; const room=String(explicitRoom||$('#roomCode').value).trim().toUpperCase();
   if(!/^[A-Z0-9_-]{24,64}$/.test(room))return pairHint.textContent='This private call session is invalid. Ask your friend to reconnect and try again.';
   const address=roomSignalAddress(baseAddress,room);
+  const generation=++pairGeneration;pairRoom=room;
   pairHint.textContent='Connecting to signaling server…'; signaling=new WebSocket(address);
-  signaling.onopen=()=>{try{signaling.send(JSON.stringify({type:'join',room}))}catch{}pairHint.textContent=kind==='host'?'Invite code '+room+' is ready — send it to your friend.':'Joining with invite code '+room+'…'};
-  signaling.onerror=()=>pairHint.textContent='Could not reach Knot signaling. Check your internet connection.';
-  signaling.onmessage=async event=>{try{const message=JSON.parse(event.data);
-    if(message.type==='full'){pairHint.textContent='That invite code is already in use. Create a new code or check the number.';try{signaling?.close()}catch{}signaling=null;return}
+  const socket=signaling;
+  signaling.onopen=()=>{if(generation!==pairGeneration||signaling!==socket)return;try{socket.send(JSON.stringify({type:'join',room}))}catch{}pairHint.textContent=kind==='host'?'Invite code '+room+' is ready — send it to your friend.':'Joining with invite code '+room+'…'};
+  signaling.onerror=()=>{if(generation===pairGeneration&&signaling===socket)pairHint.textContent='Could not reach Knot signaling. Check your internet connection.'};
+  signaling.onmessage=async event=>{try{if(generation!==pairGeneration||signaling!==socket)return;const message=JSON.parse(event.data);
+    if(message.type==='full'){pairHint.textContent='That invite code is already in use. Create a new code or check the number.';try{socket.close()}catch{}if(signaling===socket)signaling=null;return}
     if(message.type==='peer-ready'&&role==='host'){
-      reconnectCall=reconnectCall||callActive;setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;setupChannels();
-      const offer=await pc.createOffer();if(!pc)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
+      reconnectCall=reconnectCall||callActive;setupPeer();const kp=await keyPair();if(!pc||generation!==pairGeneration)return;pc._kp=kp;setupChannels();
+      ensureOfferAudioTransceivers();
+      const offer=await pc.createOffer();if(!pc||generation!==pairGeneration)return;await pc.setLocalDescription({type:'offer',sdp:patchSdp(offer.sdp)});if(!pc||generation!==pairGeneration)return;await waitIce();if(!signaling||signaling!==socket||generation!==pairGeneration)return;
       logCallEvent('Diag: offer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
-      signaling.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
+      socket.send(JSON.stringify({type:'signal',payload:{kind:'offer',sdp:localCallSdp(),pub:await exportPub(kp.publicKey)}}));
       pairHint.textContent='Offer sent. Connecting…';
       // If the friend never answers (wrong role, different room, or an old build
       // without TURN), don't hang silently — tell them what to check.
-      setTimeout(()=>{if(pc&&pc.connectionState!=='connected'){pairHint.textContent='No answer after 20s. Check that your friend entered '+room+' and clicked Join.'}},20000)
+      setTimeout(()=>{if(generation===pairGeneration&&pc&&pc.connectionState!=='connected'){pairHint.textContent='No answer after 20s. Check that your friend entered '+room+' and clicked Join.'}},20000)
     }
     if(message.type==='signal'){const remote=message.payload;if(!remote||typeof remote!=='object')return;
+      if(remote.kind==='candidate'){await addDirectIceCandidate(remote.candidate);return}
       // Both clicked Host: each receives the other's offer but role==='host', so
       // neither branch matches. Surface it instead of hanging.
       if(remote.kind==='offer'&&role==='host'){pairHint.textContent='Both of you clicked Host. One of you must click Leave, then that person clicks Join instead.';return}
       if(remote.kind==='offer'&&role==='join'){
         if(!validPeerSdp(remote.sdp)||!validDevicePublicKey(remote.pub))throw new Error('The peer sent an invalid offer');
-        setupPeer();const kp=await keyPair();if(!pc)return;pc._kp=kp;
-        await pc.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remote.sdp)});if(!pc)return;if(!await derive(kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}if(!pc)return;
+        setupPeer();const kp=await keyPair();if(!pc||generation!==pairGeneration)return;pc._kp=kp;
+        await pc.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remote.sdp)});if(!pc||generation!==pairGeneration)return;await flushDirectIceCandidates();if(!await derive(kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}if(!pc||generation!==pairGeneration)return;
         // Ensure the audio transceiver's direction is sendrecv so the answer
         // includes a sender — the browser may have created a recvonly transceiver
         // for the offer's audio m-line when no local sender track was attached yet.
@@ -2960,14 +3007,14 @@ async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
         pc.getTransceivers().filter(t=>t.receiver.track?.kind==='audio').forEach(t=>{try{if(t.direction!=='sendrecv'){t.setDirection('sendrecv');logCallEvent('Diag: set audioTr direction to sendrecv (was '+t.direction+')')}}catch(e){logCallEvent('Diag: setDirection error: '+e.message)}});
         bindReservedAudioTransceivers();const matched=audioTransceiver;
         logCallEvent('Diag: before createAnswer transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
-        applyInboundScreenCodecPreference(pc);const a=await pc.createAnswer();if(!pc)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc)return;await waitIce();if(!signaling)return;
+        applyInboundScreenCodecPreference(pc);const a=await pc.createAnswer();if(!pc||generation!==pairGeneration)return;await pc.setLocalDescription({type:'answer',sdp:patchSdp(a.sdp)});if(!pc||generation!==pairGeneration)return;await waitIce();if(!signaling||signaling!==socket||generation!==pairGeneration)return;
         logCallEvent('Diag: answer has m=audio=' + (pc.localDescription.sdp.includes('m=audio')?'yes':'NO'));
-        signaling.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:pc.localDescription.sdp,pub:await exportPub(kp.publicKey)}}));
+        socket.send(JSON.stringify({type:'signal',payload:{kind:'answer',sdp:localCallSdp(),pub:await exportPub(kp.publicKey)}}));
         pairHint.textContent='Answer sent. Connecting…'
       }else if(remote.kind==='answer'&&role==='host'){
         if(!validPeerSdp(remote.sdp)||!validDevicePublicKey(remote.pub))throw new Error('The peer sent an invalid answer');
         logCallEvent('Diag: before setRD(answer) transceivers='+pc.getTransceivers().length+' audioTr='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio')?'ok:dir='+(pc.getTransceivers().find(t=>t.receiver.track?.kind==='audio').direction):'null'));
-        await pc.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remote.sdp)});if(!pc)return;if(!await derive(pc._kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}
+        await pc.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remote.sdp)});if(!pc||generation!==pairGeneration)return;await flushDirectIceCandidates();if(!await derive(pc._kp,remote.pub)){disconnectRoom();pairHint.textContent='Security code was not confirmed.';return}
         logCallEvent('Diag: after setRD(answer)');
         bindReservedAudioTransceivers();const matched=audioTransceiver;
         const cd=matched?matched.currentDirection:'none';
@@ -2975,10 +3022,10 @@ async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
         // If the friend's answer didn't include an audio sender, startCall will
         // add a transceiver and renegotiate instead of relying on the unmatched one.
         pairHint.textContent='Secure connection established.'
-      }else if(remote.kind==='reneg-offer')await answerDirectRenegotiation(remote.sdp,sdp=>{if(!signaling)return false;signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp}}));return true})
+      }else if(remote.kind==='reneg-offer')await answerDirectRenegotiation(remote.sdp,sdp=>{if(!signaling||signaling!==socket||generation!==pairGeneration)return false;socket.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp}}));return true})
       else if(remote.kind==='reneg-answer')await applyDirectRenegotiationAnswer(remote.sdp)
     }
-  }catch(e){console.warn('signaling message error',e);pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
+  }catch(e){console.warn('signaling message error',e);if(generation===pairGeneration)pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
 }
 $('#hostRoom').onclick=()=>{const code=makeInviteCode();$('#roomCode').value=code;ssSet('roomCode',code);automaticPair('host')}; $('#joinRoom').onclick=()=>automaticPair('join');
 function disconnectRoom({preserveCall=false}={}){const resumeCall=!!preserveCall&&(reconnectCall||callActive);abortCurrentFileSession('Disconnected');settleDirectRenegotiation();renegotiating++;abortScreenSharePicker();if(pc&&pc._connectTimer){clearTimeout(pc._connectTimer);pc._connectTimer=null}
@@ -3000,13 +3047,13 @@ function disconnectRoom({preserveCall=false}={}){const resumeCall=!!preserveCall
   screenBtn.textContent='Share screen';screenBtn.title='Share screen';screenBtn.disabled=true;
   screenStatus.textContent='Not sharing';
   clearRemoteScreenShare();
-  try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}closeTcpLane();try{if(pc)pc.close()}catch{}if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.close()}catch{}signaling=null}sharedKey=null;directFileKey=null;setAvatar(friendAvatar,'');setAvatarIdentity(friendAvatar,'');remoteVoiceTrack=null;remoteVoiceTransceiver=null;stopCallTone();if(friendHeartbeatTimer){clearTimeout(friendHeartbeatTimer);friendHeartbeatTimer=null}stopSpeakingMonitor('dm-friend');try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{}
+  try{if(chat){chat.onmessage=null;chat.close()}}catch{}try{if(files){files.onmessage=null;files.close()}}catch{}closeTcpLane();try{if(pc)pc.close()}catch{}if(pc&&pc._silentAudioCtx)try{pc._silentAudioCtx.close()}catch{}pc=chat=files=null;if(signaling){try{signaling.onopen=null;signaling.onerror=null;signaling.onmessage=null;signaling.close()}catch{}signaling=null}sharedKey=null;directFileKey=null;setAvatar(friendAvatar,'');setAvatarIdentity(friendAvatar,'');remoteVoiceTrack=null;remoteVoiceTransceiver=null;stopCallTone();if(friendHeartbeatTimer){clearTimeout(friendHeartbeatTimer);friendHeartbeatTimer=null}stopSpeakingMonitor('dm-friend');try{remoteAudio.srcObject=null}catch{};try{if(audioCtx&&audioCtx.audioSink){audioCtx.audioSink.disconnect();delete audioCtx.audioSink}}catch{}
   // Release any pending backpressure waiters so in-flight sends don't hang
   // forever after the bus is closed. They'll re-check fileBus(), find it gone,
   // and the send loop will abort cleanly.
-  busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();tcpLaneWait.forEach(wait=>{try{wait.reject(new Error('Disconnected'))}catch{}});tcpLaneWait.clear();dmConnectingPeerId='';pendingVoiceStartPeerId='';
+  busDrains.forEach(set=>set.forEach(h=>{try{h()}catch{}}));busDrains.clear();tcpLaneWait.forEach(wait=>{try{wait.reject(new Error('Disconnected'))}catch{}});tcpLaneWait.clear();pendingDirectCandidates.length=0;if(!preserveCall){dmConnectingPeerId='';pendingVoiceStartPeerId=''}
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();acceptWait.forEach(w=>{try{w.reject(new Error('Disconnected'))}catch{}});acceptWait.clear();
-  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();cancelledOffers.clear();activeTransfers.forEach(t=>{t.abort=true;wakeIncomingTransfer(t);if(t.saveMode==='pair')window.pairSave?.cancel?.(t.seq).catch?.(()=>{});if(t.writer)t.writer.abort?.().catch?.(()=>{})});activeTransfers.clear();clearPendingFrames();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;screenAudioTransceiver=null;dmPeerId='';dmCallPeerId='';localCallSessionId='';remoteCallSessionId='';deriveGen++;setParticipant(participantYou,false);setFriendPresence(false,{animate:false,sound:false});voiceLog.innerHTML='';setStatus('Not connected');reconnectCall=resumeCall;if(activePeerId)syncActiveDmTransport();$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}
+  acceptCards.forEach(done=>{try{done(false)}catch{}});acceptCards.clear();cancelledOffers.clear();activeTransfers.forEach(t=>{t.abort=true;wakeIncomingTransfer(t);if(t.saveMode==='pair')window.pairSave?.cancel?.(t.seq).catch?.(()=>{});if(t.writer)t.writer.abort?.().catch?.(()=>{})});activeTransfers.clear();clearPendingFrames();outTransfers.clear();sendQueue=Promise.resolve();receiveQueue=Promise.resolve();connectSoundDone=false;friendLeftNotified=false;role=null;audioTransceiver=null;screenAudioTransceiver=null;if(!preserveCall){dmPeerId='';dmCallPeerId='';localCallSessionId='';remoteCallSessionId='';pairRoom='';setParticipant(participantYou,false);setFriendPresence(false,{animate:false,sound:false});voiceLog.innerHTML='';setStatus('Not connected');$('#leaveRoom').hidden=true;$('#hostRoom').hidden=false;$('#joinRoom').hidden=false;pairHint.textContent='Disconnected from room.'}deriveGen++;reconnectCall=resumeCall;if(activePeerId)syncActiveDmTransport()}
 $('#leaveRoom').onclick=()=>{disconnectRoom();relayVoiceMode=false;dmIceServers=directIceServers();syncActiveDmTransport()};
 function clearTransfers(){
   sendAbort.forEach(c=>c.abort=true);sendAbort.clear();
@@ -3170,9 +3217,9 @@ async function answerDirectRenegotiation(sdp,reply){
   const target=pc,remoteSdp=validPeerSdp(sdp);if(!target||!remoteSdp||target.signalingState==='closed')return false;const polite=role==='join'||role==='answer',interrupted=renegPending,collision=interrupted||target.signalingState!=='stable';
   if(collision&&!polite)return false;
   if(collision){renegotiating++;settleDirectRenegotiation();if(target.signalingState==='have-local-offer')try{await target.setLocalDescription({type:'rollback'})}catch{return false}else if(target.signalingState!=='stable')return false}
-  if(target!==pc)return false;await target.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remoteSdp)});if(target!==pc)return false;applyInboundScreenCodecPreference(target);const answer=await target.createAnswer();if(target!==pc)return false;await target.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});await waitIce(target);if(target!==pc)return false;const sent=reply(target.localDescription.sdp)!==false;if(sent&&interrupted)queueMicrotask(()=>{if(target===pc&&target.signalingState==='stable')renegotiate().catch(()=>{})});return sent
+  if(target!==pc)return false;await target.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remoteSdp)});if(target!==pc)return false;await flushDirectIceCandidates(target);if(target!==pc)return false;applyInboundScreenCodecPreference(target);const answer=await target.createAnswer();if(target!==pc)return false;await target.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});await waitIce(target);if(target!==pc)return false;const sent=reply(localCallSdp(target))!==false;if(sent&&interrupted)queueMicrotask(()=>{if(target===pc&&target.signalingState==='stable')renegotiate().catch(()=>{})});return sent
 }
-async function applyDirectRenegotiationAnswer(sdp){const target=pc,remoteSdp=validPeerSdp(sdp);if(!target||!remoteSdp||target.signalingState!=='have-local-offer')return false;await target.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remoteSdp)});if(target===pc)settleDirectRenegotiation();return target===pc}
+async function applyDirectRenegotiationAnswer(sdp){const target=pc,remoteSdp=validPeerSdp(sdp);if(!target||!remoteSdp||target.signalingState!=='have-local-offer')return false;await target.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remoteSdp)});await flushDirectIceCandidates(target);if(target===pc)settleDirectRenegotiation();return target===pc}
 // A screen share has two negotiations: video immediately, then audio once the
 // clean capture route is ready.  Do not create the latter offer while the
 // former is still awaiting its answer.  Chrome rejects createOffer in
@@ -3199,7 +3246,7 @@ async function restartDirectIce(){
       pairHint.textContent='Reconnecting voice…';
       if(relayVoiceMode){
         turnIceServers=[];turnIssuedAt=0;
-        try{const servers=await requestTurnCredentials();dmIceServers=servers;target.setConfiguration({iceServers:servers,iceTransportPolicy:'relay'})}catch{}
+        try{const servers=await requestTurnCredentials();dmIceServers=servers;target.setConfiguration({iceServers:servers,iceTransportPolicy:directIceTransportPolicy()})}catch{}
       }
       return await renegotiate({iceRestart:true});
     }catch(error){console.warn('ICE restart failed',error);return false}
@@ -3224,8 +3271,8 @@ async function renegotiate({iceRestart=false}={}){
     if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
     await waitIce(target);
     if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
-    if(signaling){signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:target.localDescription.sdp}}));sent=true}
-    else if(chat?.readyState==='open')sent=send({t:'reneg-offer',sdp:target.localDescription.sdp});
+    if(signaling){signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:localCallSdp(target)}}));sent=true}
+    else if(chat?.readyState==='open')sent=send({t:'reneg-offer',sdp:localCallSdp(target)});
     if(!sent)return false;armDirectRenegotiationTimeout(target,myId);return true;
   }catch(e){console.warn('renegotiate error',e);return false}
   finally{if(!sent&&myId===renegotiating)settleDirectRenegotiation()}

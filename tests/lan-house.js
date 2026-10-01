@@ -27,6 +27,9 @@ assert.strictEqual(encodeBeacon({ fp, port: 80, nonce: 'ab'.repeat(8) }), null);
 const sdp = 'a=candidate:1 1 UDP 2122260223 abcdef.local 54321 typ host\r\n';
 assert.ok(rewriteSdpHostnames(sdp, '192.168.1.9').includes('192.168.1.9'));
 assert.ok(rewriteSdpHostnames(sdp, '8.8.8.8').includes('abcdef.local'));
+const uuidSdp = 'a=candidate:1 1 UDP 2122260223 1f4712db-ea17-4bcf-a596-105139dfd8bf.local 54321 typ host\r\n';
+assert.ok(rewriteSdpHostnames(uuidSdp, '192.168.1.9').includes('192.168.1.9'));
+assert.ok(!rewriteSdpHostnames(uuidSdp, '192.168.1.9').includes('.local'));
 
 const packed = packFrame({ t: 'hello', fp });
 const read = readFrame(packed);

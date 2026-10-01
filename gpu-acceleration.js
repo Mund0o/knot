@@ -12,6 +12,12 @@ const LINUX_ACCELERATED_FEATURES = [
   'AcceleratedVideoDecodeLinuxGL'
 ];
 
+// Chromium hides host ICE addresses behind mDNS. Windows cannot resolve a
+// Linux uuid.local candidate off-link, and often not even on the same LAN.
+const WEBRTC_ICE_DISABLE_FEATURES = [
+  'WebRtcHideLocalIpsWithMdns'
+];
+
 function gpuAccelerationPolicy({ platform = process.platform, gpu = null, wayland = false } = {}) {
   const switches = new Map([
     ['force-high-performance-gpu', ''],
@@ -22,7 +28,7 @@ function gpuAccelerationPolicy({ platform = process.platform, gpu = null, waylan
     ['disable-software-rasterizer', '']
   ]);
   const enableFeatures = [...GPU_ACCELERATED_FEATURES];
-  const disableFeatures = [];
+  const disableFeatures = [...WEBRTC_ICE_DISABLE_FEATURES];
 
   if (platform === 'linux') {
     if (!gpu) return null;
@@ -71,8 +77,14 @@ function applyGpuAccelerationPolicy(app, options = {}) {
   return true;
 }
 
+function applyWebRtcIcePolicy(app) {
+  if (!app?.commandLine?.appendSwitch) return false;
+  app.commandLine.appendSwitch('disable-features', WEBRTC_ICE_DISABLE_FEATURES.join(','));
+  return true;
+}
+
 function acceleratedFeature(value) {
   return typeof value === 'string' && (value === 'enabled' || value === 'enabled_on' || value === 'enabled_force' || value === 'enabled_force_on' || value === 'enabled_readback');
 }
 
-module.exports = { gpuAccelerationPolicy, applyGpuAccelerationPolicy, acceleratedFeature };
+module.exports = { gpuAccelerationPolicy, applyGpuAccelerationPolicy, applyWebRtcIcePolicy, acceleratedFeature, WEBRTC_ICE_DISABLE_FEATURES };

@@ -3,7 +3,7 @@ const { pathToFileURL } = require('url');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, safeStorage, protocol } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
-const { applyGpuAccelerationPolicy } = require('./gpu-acceleration');
+const { applyGpuAccelerationPolicy, applyWebRtcIcePolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
 const { measureCapacity, abortCapacityProbe } = require('./network-capacity');
 const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
@@ -23,6 +23,10 @@ const emojiCatalog = require('./emoji-catalog');
 
 app.setName('Knot');
 try { app.setPath('userData', path.join(app.getPath('appData'), 'Knot')); } catch {}
+// Voice and the reserved silent AudioContext start from signaling, after the
+// click that opened the call has expired. Without this, Linux PipeWire leaves
+// the context suspended and remoteAudio.play() never starts.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 app.on('second-instance', () => {
@@ -723,6 +727,7 @@ if (hardwareAccelerationEnabled) {
       // software fallback rather than letting Chromium choose unpredictably.
       app.disableHardwareAcceleration();
       process.env.KNOT_PRIMARY_GPU_VENDOR = '';
+      applyWebRtcIcePolicy(app);
       console.warn('[gpu] no render node found; using CPU rendering');
     }
   } else {
@@ -731,6 +736,8 @@ if (hardwareAccelerationEnabled) {
     // canvas, zero-copy surfaces, and platform video acceleration.
     applyGpuAccelerationPolicy(app, { platform: process.platform });
   }
+} else {
+  applyWebRtcIcePolicy(app);
 }
 nativeScreenService = new NativeScreenService({
   // gpu-screen-recorder's encode-once path remains discrete-only. Integrated
@@ -1255,7 +1262,7 @@ app.whenReady().then(async () => {
     if(details.requestingUrl&&details.requestingUrl!==PAIR_RENDERER_URL)return false;
     if(permission==='speaker-selection')return true;
     if(permission!=='media')return false;
-    if(Array.isArray(details.mediaTypes)&&details.mediaTypes.some(type=>type!=='audio'))return false;
+    if(Array.isArray(details.mediaTypes)&&details.mediaTypes.some(type=>type==='video'))return false;
     return details.mediaType!=='video';
   };
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback,details) => {

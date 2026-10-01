@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { gpuAccelerationPolicy, acceleratedFeature } = require('../gpu-acceleration');
+const { gpuAccelerationPolicy, acceleratedFeature, applyWebRtcIcePolicy, WEBRTC_ICE_DISABLE_FEATURES } = require('../gpu-acceleration');
 
 const nvidia = { vendor: '0x10de', renderNode: '/dev/dri/renderD128', integrated: false };
 const linux = gpuAccelerationPolicy({ platform: 'linux', gpu: nvidia, wayland: true });
@@ -13,6 +13,8 @@ for (const name of ['CanvasOopRasterization', 'AcceleratedVideoDecoder', 'Accele
   assert(linux.enableFeatures.includes(name), `missing ${name}`);
 }
 assert(linux.disableFeatures.includes('Vulkan'));
+assert(linux.disableFeatures.includes('WebRtcHideLocalIpsWithMdns'));
+assert(WEBRTC_ICE_DISABLE_FEATURES.includes('WebRtcHideLocalIpsWithMdns'));
 const amd = { vendor: '0x1002', renderNode: '/dev/dri/renderD130', integrated: false };
 const amdLinux = gpuAccelerationPolicy({ platform: 'linux', gpu: amd, wayland: true });
 assert(amdLinux);
@@ -29,7 +31,11 @@ const windows = gpuAccelerationPolicy({ platform: 'win32' });
 assert(windows.switches.has('force-high-performance-gpu'));
 assert(windows.switches.has('enable-gpu-rasterization'));
 assert(windows.enableFeatures.includes('CanvasOopRasterization'));
+assert(windows.disableFeatures.includes('WebRtcHideLocalIpsWithMdns'));
 assert(!windows.enableFeatures.includes('WebRTCPipeWireCapturer'));
+const iceSwitches = [];
+assert(applyWebRtcIcePolicy({ commandLine: { appendSwitch: (name, value) => iceSwitches.push([name, value]) } }));
+assert.deepStrictEqual(iceSwitches, [['disable-features', 'WebRtcHideLocalIpsWithMdns']]);
 assert(acceleratedFeature('enabled'));
 assert(acceleratedFeature('enabled_force'));
 assert(!acceleratedFeature('disabled_software'));

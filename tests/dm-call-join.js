@@ -71,6 +71,35 @@ app.whenReady().then(async () => {
       await deliver({type:'connect-request',from:otherId,session:'S2',context:{type:'dm',relay:false}});
       assert(asked.length===0,'a connect-request from an unrelated peer tore down a live call');
 
+      // Same-session glare: the lower-id side keeps its current room and does
+      // not join a duplicate connect from the same peer.
+      const savedSelf=directoryUserId,savedRole=role;
+      directoryUserId='00000000000000000000000000000000';
+      asked.length=0;callActive=false;friendInCall=false;dmCallPeerId='';
+      dmConnectingPeerId=friendId;pairRoom='S3';role='join';
+      pc={connectionState:'connecting',signalingState:'stable',close(){}};
+      signaling={readyState:1,close(){},onopen:null,onerror:null,onmessage:null};
+      await deliver({type:'connect-request',from:friendId,session:'S3',context:{type:'dm',relay:false}});
+      assert(asked.length===0,'same-session glare from the higher-id peer was not dropped');
+
+      // A later retry or TURN session must still be joined by the lower-id joiner.
+      asked.length=0;
+      await deliver({type:'connect-request',from:friendId,session:'S4TURNSESSIONVALUE0001',context:{type:'dm',relay:false}});
+      assert(asked.length===1&&asked[0].kind==='join'&&asked[0].session==='S4TURNSESSIONVALUE0001',
+        'a new session connect-request was dropped as glare: '+JSON.stringify(asked));
+
+      // The lower-id host still refuses a competing connect while it is hosting.
+      asked.length=0;role='host';
+      await deliver({type:'connect-request',from:friendId,session:'S5TURNSESSIONVALUE0001',context:{type:'dm',relay:false}});
+      assert(asked.length===0,'the lower-id host joined a competing session instead of keeping its own');
+      directoryUserId=savedSelf;role=savedRole;pc=null;signaling=null;pairRoom='';dmConnectingPeerId='';
+
+      pendingVoiceStartPeerId=friendId;dmPeerId=friendId;dmCallPeerId=friendId;
+      disconnectRoom({preserveCall:true});
+      assert(pendingVoiceStartPeerId===friendId,'preserveCall cleared the pending voice start');
+      assert(dmCallPeerId===friendId,'preserveCall cleared the live call peer');
+      pendingVoiceStartPeerId='';dmCallPeerId='';dmPeerId='';
+
       // Joining from the friends list, before this device ever opened the DM,
       // must reach the calling peer instead of stalling on no connection.
       asked.length=0;callActive=false;friendInCall=false;dmCallPeerId=friendId;
