@@ -1,11 +1,11 @@
 {
-  "version": "1.1.114",
-  "notes": "Joining a call now works: a caller no longer drops the joiner's connection request.\nJoining from the friends list reaches the calling peer instead of parking a disabled button.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.114/pair-p2p-1.1.114.tar.gz",
-  "linuxSha256": "0795b7fd27565bb5968592b9e52f545b3733d39a78406278432473ff90ac2451",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.114/Knot-1.1.114.AppImage",
-  "linuxAppImageSha256": "2b98312c7c866b24401e445e20f642b115c7c520aba173f7c3a6eb05579c1fd1",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.114/Knot.Setup.1.1.114.exe",
-  "winSha256": "dfd9711ec0f937c0a46b4aced9a50fc5d69be2c386674b067a9cc13a4f46b844",
-  "signature": "rN6ZkYBB67WTfTw+A2wRVHOBm6O1YsNGeOQ9UgJzAT2iwAwFw4dThOckIbyScx4KcFjWaUOjtMi/Cx+KVFsnAA=="
+  "version": "1.1.115",
+  "notes": "Linux and Windows can complete a DM voice call: ICE now trickles public candidates instead of sending mDNS-only SDP.\nSame-LAN friends connect over Wi-Fi first, and a retry or TURN session is no longer dropped as glare.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.115/pair-p2p-1.1.115.tar.gz",
+  "linuxSha256": "c52b7cc419dd829638047fa0f68447f0044bba1c8086fa5d838799383cf8a0d8",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.115/Knot-1.1.115.AppImage",
+  "linuxAppImageSha256": "f0e5cafef99649c24a189bffe12f0faab977edc493f6fe2ed001d704a2cb5a8b",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.115/Knot.Setup.1.1.115.exe",
+  "winSha256": "ce3e0b9db349716add69a3c01bee2ac70529f291a787abb27e7c018471428f39",
+  "signature": "Z1uLpTMF3CLSfSW3jUNcJYLR9pWko57lV6HgIG17+n1Zyh71Dcr4mfPLI4aBlmM/waROLVF6w5gunPxKpJAtDg=="
 }
