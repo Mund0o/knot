@@ -2654,7 +2654,14 @@ async function connectDirectory(){
     else if(value.type==='invite-created'){if(value.kind==='friend'){const input=$('#roomCode');input.value=value.code;pairHint.textContent='Friend code '+value.code+' is ready for 15 minutes.'}else showServerInvite(value.code)}
     else if(value.type==='connect-request'){
       const friend=directoryUser(value.from),samePeer=dmConnectingPeerId===value.from&&(!!pc||!!signaling),useRelay=value.context?.relay===true;
-      if(!friend||dmCallOngoing())return;
+      // Only a call with somebody else may veto a connect request. The peer
+      // already in the call is exactly who a joiner re-pairs with, and dropping
+      // that request left the joiner unable to attach its mic: it reconnected
+      // three times, asked for the voice relay, and was ignored again every
+      // time while the caller sat in the call. automaticPair preserves the live
+      // call across the replacement peer (reconnectCall), so re-pairing the
+      // caller resumes their voice instead of ending it.
+      if(!friend||(dmCallOngoing()&&dmCallPeerId!==value.from))return;
       // When both people click the same DM, one stable side keeps hosting and
       // the other joins it. This prevents competing offers from cancelling.
       if(samePeer&&directoryUserId<value.from)return;
@@ -3031,13 +3038,18 @@ async function startCall(){
   // machine. The flag is cleared in the finally block below.
   if(endingCall)await Promise.race([endingCall,new Promise(resolve=>setTimeout(resolve,8000))]);
   if(callActive||callStarting)return;if(serverVoiceStream||serverVoiceStarting)stopServerVoice();
-  const targetPeer=activePeerId||dmPeerId;
+  // A friend who starts a call sets dmCallPeerId even on a device that never
+  // opened their DM, so fall back to it. With no peer at all this used to leave
+  // the button disabled and the status on "Connecting to start voice…" for a
+  // connection that was never started.
+  const targetPeer=activePeerId||dmPeerId||dmCallPeerId;
   const reconnectVoice=()=>{
     if(LOCAL_TEST_MODE&&!pc)return startLocalTestCall();
     pendingVoiceStartPeerId=targetPeer;playSound('connecting');
     callBtn.disabled=true;callStatus.textContent='Connecting to start voice…';callStatus.className='call-status ringing';
     if(pc&&targetPeer&&(dmPeerId===targetPeer||!dmPeerId))abandonDmMediaAttempt(targetPeer);
-    if(targetPeer&&friendReachable(targetPeer))void ensureDmMediaConnection(targetPeer).catch(error=>{pendingVoiceStartPeerId='';callBtn.disabled=false;callStatus.textContent=error?.message||'Could not connect voice';callStatus.className='call-status'});
+    if(!targetPeer||!friendReachable(targetPeer)){pendingVoiceStartPeerId='';callBtn.disabled=false;callStatus.textContent=targetPeer?'Your friend is offline':'Open this conversation to join the call';callStatus.className='call-status';return}
+    void ensureDmMediaConnection(targetPeer).catch(error=>{pendingVoiceStartPeerId='';callBtn.disabled=false;callStatus.textContent=error?.message||'Could not connect voice';callStatus.className='call-status'});
   };
   // A brief ICE "disconnected" after hangup is not a dead PC — attaching the
   // mic on the existing transceivers is how rejoin works without restarting.
