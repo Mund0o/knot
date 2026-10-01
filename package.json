@@ -1,6 +1,6 @@
 {
   "name": "pair-p2p",
-  "version": "1.1.112",
+  "version": "1.1.113",
   "description": "Private small-group peer-to-peer communication",
   "main": "main.js",
   "author": {
@@ -14,12 +14,13 @@
     "signal": "node server.js",
     "worker:dev": "wrangler dev",
     "worker:check": "wrangler deploy --dry-run",
-    "test:ui": "node tests/run-electron-smoke.js tests/ui-navigation-smoke.js && node tests/run-electron-smoke.js tests/group-dm-call-ui.js && node tests/run-electron-smoke.js tests/watch-lan-ui.js",
+    "test:ui": "node tests/run-electron-smoke.js tests/ui-navigation-smoke.js && node tests/run-electron-smoke.js tests/group-dm-call-ui.js && node tests/run-electron-smoke.js tests/watch-lan-ui.js && node tests/run-electron-smoke.js tests/screen-share-visible-smoke.js",
     "test:direct-file": "node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/file-transfer-preload-ipc.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js",
     "test:deepfilter": "node tests/run-electron-smoke.js tests/deepfilter-local-smoke.js",
     "test:screen:h264": "node tests/run-electron-smoke.js tests/screen-quality-smoke.js --codec=H264",
     "test:screen:av1": "node tests/run-electron-smoke.js tests/screen-quality-smoke.js --codec=AV1",
     "test:screen:native": "node tests/run-electron-smoke.js tests/native-presentation-cadence.js && node tests/native-screen-live.js && node tests/run-electron-smoke.js tests/native-screen-transport.js",
+    "test:screen:visible": "node tests/run-electron-smoke.js tests/screen-share-visible-smoke.js",
     "test:screen:full": "node tests/run-electron-smoke.js tests/full-app-screen-endurance.js",
     "test:screen": "node tests/run-screen-suite.js",
     "test:windows-audio": "node tests/windows-audio-addon-guard.js && node tests/run-electron-smoke.js tests/windows-audio-renderer-smoke.js",

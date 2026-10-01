@@ -1035,18 +1035,20 @@ function monitorNativeScreenBuffering(channel,{isActive}={}){
     if(finished)return;
     if(typeof isActive==='function'&&!isActive())return;
     const state=channel?._nativeReceive,stats=state?.player?.stats?.()||{},painted=Number(stats.paintedFrames)||0,bytes=Number(state?.bytesReceived)||0;
-    if(painted>0){blackStalls=0;return}
+    // shareFrameLooksDead requires a flat field (variance near zero), so a dark
+    // scene with any contrast does not count. A VA-API decode that paints solid
+    // black still increments paintedFrames and used to skip this recovery.
+    const deadPicture=!!stats.pictureDead&&Number(stats.width)>=32&&Number(stats.height)>=32;
+    if(painted>0&&!deadPicture){blackStalls=0;return}
     if(!(bytes>=40000||state?.haveInit))return;
     blackStalls++;
-    // A live picture, even a dark one, must not rebuild the decoder. That hitch
-    // is the stutter. Software retry is only for zero painted frames.
-    if(blackStalls>=2&&state.player?.advanceBackend?.(new Error('Native AV1 produced no picture'))){
+    if(blackStalls>=2&&state.player?.advanceBackend?.(new Error(deadPicture?'Native AV1 painted a black picture':'Native AV1 produced no picture'))){
       advancedBackend=true;
-      screenStatus.textContent='AV1 hardware picture missing · retrying software decode';
+      screenStatus.textContent=deadPicture?'AV1 picture is black · retrying software decode':'AV1 hardware picture missing · retrying software decode';
       blackStalls=0;
       return;
     }
-    if(blackStalls>=3&&painted===0){
+    if(blackStalls>=3&&(painted===0||deadPicture)){
       screenStatus.textContent='AV1 picture missing · asking friend to switch codec';
       requestNativeReceiveFallback(state,new Error('Native AV1 produced no picture'));
       try{if(channel?.readyState==='open')channel.send(JSON.stringify({t:'native-screen-fallback'}))}catch{}
@@ -3525,9 +3527,13 @@ async function linuxShareAudioTrack(){
       if(routeAttempt===3)throw new Error(captureError||'PipeWire share route could not be created');
     }
     if(!share||captureError)throw new Error(captureError||'PipeWire share route could not be created');
-    attached=true;
-    logShareAudio('route ready source='+(share.source||'?')+' track='+outputTrack.readyState+' received='+received);
-    try{shareAudioFadeIn?.()}catch{}
+attached=true;
+logShareAudio('route ready source='+(share.source||'?')+' track='+outputTrack.readyState+' received='+received+' localMonitor='+(share.localMonitor!==false));
+// Computer sound is being captured, but PipeWire could not build the muted
+// return that lets the sharer keep hearing their own speakers. Say so instead
+// of leaving them to think the share muted their machine.
+if(share.localMonitor===false){outputTrack._knotShareLocalMonitorMissing=true;screenAudioDebug=' · captured · your speakers are silent while sharing';}
+try{shareAudioFadeIn?.()}catch{}
     screenOutCtx=ctx;screenOutDest=dest;screenNative=true;screenCaptureOwner=captureOwner;
     screenCaptureCleanup=()=>dispose(true);return outputTrack;
   }catch(e){
@@ -3719,50 +3725,82 @@ function revealShareVideo(video,fromFrame=false){
   disarmShareVideoReveal(video);
 }
 function armShareVideoReveal(video){
-  if(!video||video._knotShareRevealStop)return;
-  let frameHandle=0;
-  function onFrame(now,metadata){
-    if(shareVideoCoveredByCanvas(video)||video.classList.contains('native-screen-waiting'))return;
-    if(shareVideoHasPicture(video,metadata))revealShareVideo(video,true);
-    else requestFrame();
-  }
-  function requestFrame(){
-    if(typeof video.requestVideoFrameCallback!=='function')return;
-    if(frameHandle&&video.cancelVideoFrameCallback)try{video.cancelVideoFrameCallback(frameHandle)}catch{};
-    frameHandle=video.requestVideoFrameCallback(onFrame);
-  }
-  const onMeta=()=>requestFrame(),onEmpty=()=>holdShareVideo(video);
-  video.addEventListener('loadeddata',onMeta);video.addEventListener('resize',onMeta);video.addEventListener('playing',onMeta);video.addEventListener('emptied',onEmpty);
-  requestFrame();
-  video._knotShareRevealStop=()=>{video.removeEventListener('loadeddata',onMeta);video.removeEventListener('resize',onMeta);video.removeEventListener('playing',onMeta);video.removeEventListener('emptied',onEmpty);if(frameHandle&&video.cancelVideoFrameCallback)try{video.cancelVideoFrameCallback(frameHandle)}catch{}};
+if(!video||video._knotShareRevealStop)return;
+let frameHandle=0,pollHandle=0;
+function onFrame(now,metadata){
+if(shareVideoCoveredByCanvas(video)||video.classList.contains('native-screen-waiting')){requestFrame();return}
+if(shareVideoHasPicture(video,metadata))revealShareVideo(video,true);
+else requestFrame();
+}
+function requestFrame(){
+// A canvas or native-screen-waiting hides this video on purpose. Keep the
+// callback armed anyway: the AV1 player can hand presentation back to the
+// <video> later, and a chain that returned early never fired again.
+if(typeof video.requestVideoFrameCallback!=='function')return;
+if(frameHandle&&video.cancelVideoFrameCallback)try{video.cancelVideoFrameCallback(frameHandle)}catch{};
+frameHandle=video.requestVideoFrameCallback(onFrame);
+}
+// requestVideoFrameCallback only fires for a *new* frame, so a stalled or
+// pre-decoded stream never calls onFrame and the hidden <video> stayed black
+// forever. Poll the element's own state as a floor under the callback.
+function requestPoll(){
+if(pollHandle)return;
+pollHandle=setInterval(()=>{
+// Never outlive the element: a tile removed while waiting for its first frame
+// must not leave a timer running for the rest of the session.
+if(!video.isConnected){clearInterval(pollHandle);pollHandle=0;try{disarmShareVideoReveal(video)}catch{};return}
+if(!shareVideoCoveredByCanvas(video)&&!video.classList.contains('native-screen-waiting')&&shareVideoHasPicture(video)){revealShareVideo(video,true);return}
+if(shareVideoHasPicture(video))requestFrame();
+},500);
+}
+const onMeta=()=>{requestFrame();requestPoll()},onEmpty=()=>{holdShareVideo(video);requestFrame();requestPoll()};
+video.addEventListener('loadeddata',onMeta);video.addEventListener('resize',onMeta);video.addEventListener('playing',onMeta);video.addEventListener('emptied',onEmpty);
+requestFrame();requestPoll();
+video._knotShareRevealStop=()=>{video.removeEventListener('loadeddata',onMeta);video.removeEventListener('resize',onMeta);video.removeEventListener('playing',onMeta);video.removeEventListener('emptied',onEmpty);if(pollHandle){clearInterval(pollHandle);pollHandle=0}if(frameHandle&&video.cancelVideoFrameCallback)try{video.cancelVideoFrameCallback(frameHandle)}catch{}};
 }
 function prepareShareSurface(video){
-  if(!video)return video;
-  video.playsInline=true;video.setAttribute('playsinline','');if(video===remoteScreen){video.muted=true;video.autoplay=true}paintShareSurfaceDark(video);
-  if(video===remoteScreen&&!nativeRemotePlayer){
-    video.parentElement?.querySelectorAll?.(':scope > .native-screen-canvas').forEach(canvas=>canvas.remove());
-    video.classList.remove('native-screen-waiting');
-  }
-  if(shareVideoCoveredByCanvas(video)||video.classList.contains('native-screen-waiting')||!shareVideoHasPicture(video)){holdShareVideo(video);disarmShareVideoReveal(video);armShareVideoReveal(video)}
-  return video;
+if(!video)return video;
+video.playsInline=true;video.setAttribute('playsinline','');if(video===remoteScreen){video.muted=true;video.autoplay=true}paintShareSurfaceDark(video);
+// Drop a native presentation canvas that no live player owns. This used to be
+// limited to #remoteScreen, so a server share tile that fell back from native
+// AV1 kept its dead canvas on top and rendered black over working video.
+const owned=video._knotNativeSurface;
+if(!owned){
+video.parentElement?.querySelectorAll?.(':scope > .native-screen-canvas').forEach(canvas=>canvas.remove());
+video.classList.remove('native-screen-waiting');
+}
+if(shareVideoCoveredByCanvas(video)||video.classList.contains('native-screen-waiting')||!shareVideoHasPicture(video)){holdShareVideo(video);disarmShareVideoReveal(video);armShareVideoReveal(video)}
+return video;
 }
 function playShareVideo(video){if(!shareVideoHasMedia(video))return;if(video===remoteScreen||video.dataset.peerId)video.muted=true;try{video.play().catch(()=>{})}catch{}}
 function shareFrameLooksDead(source){
-  try{
-    const probe=shareFrameLooksDead.canvas||=document.createElement('canvas');
-    probe.width=8;probe.height=8;
-    const ctx=shareFrameLooksDead.ctx||=probe.getContext('2d',{alpha:false,willReadFrequently:true});
-    if(!ctx)return false;
-    ctx.drawImage(source,0,0,8,8);
-    const pixels=ctx.getImageData(0,0,8,8).data;
-    let sum=0,sumSq=0;
-    for(let i=0;i<64;i++){
-      const y=.299*pixels[i*4]+.587*pixels[i*4+1]+.114*pixels[i*4+2];
-      sum+=y;sumSq+=y*y;
-    }
-    const mean=sum/64,variance=sumSq/64-mean*mean;
-    return mean<14&&variance<4;
-  }catch{return false}
+try{
+const probe=shareFrameLooksDead.canvas||=document.createElement('canvas');
+probe.width=8;probe.height=8;
+const ctx=shareFrameLooksDead.ctx||=probe.getContext('2d',{alpha:false,willReadFrequently:true});
+if(!ctx)return false;
+ctx.drawImage(source,0,0,8,8);
+const pixels=ctx.getImageData(0,0,8,8).data;
+let sum=0,sumSq=0;
+for(let i=0;i<64;i++){
+const y=.299*pixels[i*4]+.587*pixels[i*4+1]+.114*pixels[i*4+2];
+sum+=y;sumSq+=y*y;
+}
+const mean=sum/64,variance=sumSq/64-mean*mean;
+return mean<14&&variance<4;
+}catch{return false}
+}
+// getImageData forces a GPU->CPU readback and stalls the renderer main thread.
+// Running it on every painted 4K frame cost real presentation budget, so a
+// healthy share ran behind. Sampling still catches a stuck decoder within a
+// couple of frames while leaving the readback off the hot path.
+const DEAD_PICTURE_SAMPLE_MS=250;
+function sampleShareFrameLiveness(source,force=false){
+const now=performance.now();
+if(!force&&now-(sampleShareFrameLiveness.lastAt||0)<DEAD_PICTURE_SAMPLE_MS)return sampleShareFrameLiveness.dead;
+sampleShareFrameLiveness.lastAt=now;
+sampleShareFrameLiveness.dead=shareFrameLooksDead(source);
+return sampleShareFrameLiveness.dead;
 }
 function resetShareSurface(el){
   if(!el)return el;
@@ -3786,13 +3824,19 @@ function attachNativeScreenSurface(video){
     context=canvas.getContext('2d',{alpha:false,desynchronized:true});if(!context)return null;
     paintShareSurfaceDark(video);paintShareSurfaceDark(canvas);if(host)paintShareSurfaceDark(host);
     video.classList.add('native-screen-waiting');video.style.opacity='0';video.style.removeProperty('visibility');video.style.zIndex='0';canvas.style.zIndex='1';canvas.hidden=false;
-  }catch{return null}
-  const paintIdle=()=>{if(destroyed||!canvas||!context)return;if(!canvas.width||!canvas.height){canvas.width=960;canvas.height=540}context.fillStyle='#050609';context.fillRect(0,0,canvas.width,canvas.height)};
+}catch{return null}
+const paintIdle=()=>{if(destroyed||!canvas||!context)return;if(!canvas.width||!canvas.height){canvas.width=960;canvas.height=540}context.fillStyle='#050609';context.fillRect(0,0,canvas.width,canvas.height)};
   const cover=()=>{if(destroyed||!canvas)return;live=false;canvas.hidden=false;canvas.classList.remove('is-live');video.classList.add('native-screen-waiting','awaiting-frame');video.style.opacity='0';video.style.removeProperty('visibility');video.style.zIndex='0';canvas.style.zIndex='1'};
   const reveal=()=>{if(destroyed||!canvas)return;live=true;canvas.hidden=false;canvas.classList.add('is-live')};
   const freeze=()=>{if(destroyed||!canvas||!context)return;try{if(video.videoWidth&&video.videoHeight){if(canvas.width!==video.videoWidth||canvas.height!==video.videoHeight){canvas.width=video.videoWidth;canvas.height=video.videoHeight}context.drawImage(video,0,0,canvas.width,canvas.height);cover();return}}catch{}paintIdle();cover()};
-  paintIdle();cover();
-  return{canvas,context,paintIdle,cover,reveal,freeze,get live(){return live},destroy(){if(destroyed)return;destroyed=true;canvas?.remove();video.classList.remove('native-screen-waiting');holdShareVideo(video);if(createdHost&&host?.parentElement)host.replaceWith(video)}};
+paintIdle();cover();
+const surface={canvas,context,paintIdle,cover,reveal,freeze,get live(){return live},destroy(){if(destroyed)return;destroyed=true;canvas?.remove();if(video._knotNativeSurface===surface)video._knotNativeSurface=null;video.classList.remove('native-screen-waiting');holdShareVideo(video);if(createdHost&&host?.parentElement)host.replaceWith(video)}};
+// Record which surface owns this <video> so prepareShareSurface can tell a live
+// native presentation canvas from an orphaned one left by a dead player.
+video._knotNativeSurface=surface;
+// A previous session's verdict must not make this one look dead before it has
+// sampled a real frame.
+sampleShareFrameLiveness.lastAt=0;sampleShareFrameLiveness.dead=false;return surface;
 }
 function createNativeScreenPlaceholder(video,options={}){
   let destroyed=false,active=true;const surface=attachNativeScreenSurface(video);if(!surface)return null;const canvas=surface.canvas,context=surface.context;
@@ -3832,7 +3876,7 @@ function createWebCodecsNativeScreenPlayer(video,codec,onError=()=>{},options={}
     if(!fullscreen&&frameWidth&&frameHeight){if(!displayMaxW||!displayMaxH)measureDisplaySize();if(displayMaxW&&displayMaxH&&(drawW>displayMaxW||drawH>displayMaxH)){const scale=Math.min(displayMaxW/drawW,displayMaxH/drawH,1);drawW=Math.max(1,Math.round(drawW*scale));drawH=Math.max(1,Math.round(drawH*scale))}}
     drawW=Math.max(1,drawW||960);drawH=Math.max(1,drawH||540);
     if(canvas.width!==drawW||canvas.height!==drawH){canvas.width=drawW;canvas.height=drawH}
-    try{context.drawImage(frame,0,0,drawW,drawH);pictureDead=shareFrameLooksDead(canvas);const now=performance.now();recordPresentation(timestamp,now);noteRendered(now)}catch(error){fail(error)}finally{try{frame.close()}catch{}}
+    try{context.drawImage(frame,0,0,drawW,drawH);pictureDead=sampleShareFrameLiveness(frame);const now=performance.now();recordPresentation(timestamp,now);noteRendered(now)}catch(error){fail(error)}finally{try{frame.close()}catch{}}
   };
   const schedulePresentation=()=>{
     if(presentationTimer||frameWriterBusy||destroyed||decoderDisabled||!playbackActive||!presentationQueue.length)return;
@@ -3977,7 +4021,7 @@ function createMseNativeScreenPlayer(video,codec,onError=()=>{},options={}){
     source.addEventListener('sourceopen',()=>{if(destroyed||failed||generation!==pipelineGeneration)return;try{buffer=source.addSourceBuffer(mime);buffer.addEventListener('error',()=>{if(generation===pipelineGeneration)fail(new Error('Native AV1 SourceBuffer failed'))});buffer.addEventListener('updateend',()=>{if(destroyed||failed||generation!==pipelineGeneration)return;if(appendingSerial){completedAppendSerial=Math.max(completedAppendSerial,appendingSerial);appendingSerial=0}cleaning=false;synchronizePlayback();drain()});drain()}catch(error){fail(error)}},{once:true})
   };
   let pictureDead=false;
-  const noteFrame=(now,metadata={})=>{if(!playbackActive)return;renderedFrames++;if(!firstPaintAt)firstPaintAt=now;const w=Number(metadata?.width||video.videoWidth)||0,h=Number(metadata?.height||video.videoHeight)||0;if(w>=32&&h>=32&&!(w===300&&h===150)&&surface.canvas&&surface.context){try{if(surface.canvas.width!==w||surface.canvas.height!==h){surface.canvas.width=w;surface.canvas.height=h}surface.context.drawImage(video,0,0,w,h);surface.cover();pictureDead=shareFrameLooksDead(surface.canvas)}catch{pictureDead=true}}else pictureDead=true;if(lastRenderedAt){renderIntervals.push(now-lastRenderedAt);if(renderIntervals.length>360)renderIntervals.shift()}lastRenderedAt=now;const range=liveRange(),mediaTime=Number(metadata.mediaTime);if(range&&Number.isFinite(mediaTime)){const latency=(range.end-mediaTime)*1000;if(latency>=0&&Number.isFinite(latency)){latencySamples.push(latency);if(latencySamples.length>360)latencySamples.shift()}}};
+  const noteFrame=(now,metadata={})=>{if(!playbackActive)return;renderedFrames++;if(!firstPaintAt)firstPaintAt=now;const w=Number(metadata?.width||video.videoWidth)||0,h=Number(metadata?.height||video.videoHeight)||0;if(w>=32&&h>=32&&!(w===300&&h===150)&&surface.canvas&&surface.context){try{if(surface.canvas.width!==w||surface.canvas.height!==h){surface.canvas.width=w;surface.canvas.height=h}surface.context.drawImage(video,0,0,w,h);surface.cover();pictureDead=sampleShareFrameLiveness(video)}catch{pictureDead=true}}else pictureDead=true;if(lastRenderedAt){renderIntervals.push(now-lastRenderedAt);if(renderIntervals.length>360)renderIntervals.shift()}lastRenderedAt=now;const range=liveRange(),mediaTime=Number(metadata.mediaTime);if(range&&Number.isFinite(mediaTime)){const latency=(range.end-mediaTime)*1000;if(latency>=0&&Number.isFinite(latency)){latencySamples.push(latency);if(latencySamples.length>360)latencySamples.shift()}}};
   if(typeof video.requestVideoFrameCallback==='function'){const rendered=(now,metadata)=>{if(destroyed)return;noteFrame(now,metadata);video.requestVideoFrameCallback(rendered)};video.requestVideoFrameCallback(rendered)}else {video.addEventListener('playing',()=>{if(!firstPaintAt&&shareVideoHasPicture(video)){firstPaintAt=performance.now();noteFrame(firstPaintAt)}});video.addEventListener('timeupdate',()=>{if(!destroyed&&playbackActive)noteFrame(performance.now())})}
   try{navigator.mediaCapabilities?.decodingInfo?.({type:'media-source',video:{contentType:mime,width:configuredWidth||3840,height:configuredHeight||2160,bitrate:Number(options.bitrate)||10000000,framerate:Number(options.fps)||60}}).then(result=>{powerKnown=true;powerEfficient=!!result?.powerEfficient}).catch(()=>{})}catch{}
   openPipeline();
@@ -4157,12 +4201,16 @@ function armNativeScreenArrive(){
   },2500);
 }
 async function confirmShareAudioHeard(track,stillWanted){
-  const started=Date.now();
-  while(stillWanted()&&Date.now()-started<2000){
-    if(track?._knotShareAudioHeard?.()===true)return ' · sound live';
-    await delay(80);
-  }
-  return track?._knotShareAudioHeard?.()===true?' · sound live':' · waiting for computer sound';
+// PipeWire could not build the muted monitor return, so the sharer is not
+// hearing their own speakers. That is worth reporting even once sound is live.
+const missingMonitor=track?._knotShareLocalMonitorMissing===true;
+const suffix=missingMonitor?' · your speakers are silent while sharing':'';
+const started=Date.now();
+while(stillWanted()&&Date.now()-started<2000){
+if(track?._knotShareAudioHeard?.()===true)return ' · sound live'+suffix;
+await delay(80);
+}
+return track?._knotShareAudioHeard?.()===true?' · sound live'+suffix:' · waiting for computer sound'+suffix;
 }
 function cleanupRemoteNativeScreen({keepChannel=false,keepAudio=false,keepVideo=false}={}){
   try{nativeBufferingStop?.()}catch{}nativeBufferingStop=null;nativeRemotePlayer?.destroy();nativeRemotePlayer=null;if(remoteNativeScreenChannel)clearNativeScreenReceiveState(remoteNativeScreenChannel);if(!keepChannel&&remoteNativeScreenChannel){try{remoteNativeScreenChannel.onmessage=null;remoteNativeScreenChannel.close()}catch{}remoteNativeScreenChannel=null}if(nativeRemoteAudio&&!keepAudio){try{nativeRemoteAudio.pause();nativeRemoteAudio.srcObject=null}catch{}}if(!keepVideo){holdShareVideo(remoteScreen);try{remoteScreen.removeAttribute('src');remoteScreen.load()}catch{}}

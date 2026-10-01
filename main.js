@@ -190,8 +190,11 @@ function isKnotPlaybackStream(pid, appName, binary, pairPids, knotBinary) {
     const ourDir = path.dirname(process.execPath || '');
     if (ourDir && ourDir !== '/' && (/\.mount_/i.test(ourDir) || /knot/i.test(ourDir)) && (exe === ourDir || exe.startsWith(ourDir + '/'))) return true;
   } catch {}
-  try { if (/^(?:pair-p2p|knot)$/i.test(fs.readFileSync('/proc/' + pid + '/comm', 'utf8').trim())) return true; } catch {}
-  try { if (/knot|pair-p2p/i.test(fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8'))) return true; } catch {}
+try { if (/^(?:pair-p2p|knot)$/i.test(fs.readFileSync('/proc/' + pid + '/comm', 'utf8').trim())) return true; } catch {}
+// Only judge argv[0]. Matching "knot" anywhere in the command line skipped
+// unrelated apps (a launcher path, a mod argument, a window title) and left
+// their audio on the real sink, so it never reached the share.
+try { const argv0=String(fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8')).split('\0')[0]||'';const argv0Name=path.basename(argv0).replace(/\.exe$/i,'').toLowerCase();if(/^(?:pair-p2p|knot)$/.test(argv0Name)||argv0===knotBin) return true; } catch {}
   let current = pid;
   const seen = new Set();
   while (Number.isFinite(current) && current > 1 && !seen.has(current)) {
@@ -281,7 +284,7 @@ async function startLinuxShareAudioWithRetry(webContents) {
     try { result=await startLinuxShareAudioInner(webContents,generation); } catch { result=null; }
     if (result) return result;
     if (generation!==linuxShareAudioGeneration) return null;
-    if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: linuxShareAudio.routeReadyAt };
+    if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: linuxShareAudio.routeReadyAt, localMonitor: !linuxShareAudio.loopbackUnavailable };
     if (attempt===3) return null;
     const waitUntil=Date.now()+80*attempt;
     while (Date.now()<waitUntil && generation===linuxShareAudioGeneration) await new Promise(r=>setTimeout(r,20));
@@ -363,8 +366,19 @@ async function startLinuxShareAudioInner(webContents,generation) {
   // settled. This costs only a fraction of a second of initial share audio and
   // prevents the full-volume startup burst reported on PipeWire systems.
   const state = { original, sink, module, loop: '', hold: '', holdModule: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, routePulse: null, loopTimer: null, routeRunning: false, routeAgain: false, routeEnabled: false, routeReadyAt: Date.now() + 1200, discardUntil: Date.now() + 250, pcmReleaseAt: Date.now() + 30000, pcmRemainder: Buffer.alloc(0), pcmReadAt: 0, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1 };
-  linuxShareAudio = state;
-  if(generation!==linuxShareAudioGeneration){
+linuxShareAudio = state;
+// pcmReleaseAt is a 30 s failsafe for a loopback setup that never completes.
+// It must never outlast a route that is already live, or a slow pactl round
+// trip mutes the whole share. Release as soon as routing is enabled.
+state.pcmWatchdog = setInterval(() => {
+  if (linuxShareAudio !== state) { clearInterval(state.pcmWatchdog); state.pcmWatchdog = null; return; }
+  if (state.routeEnabled && Date.now() >= (state.routeReadyAt || 0)) {
+    state.pcmReleaseAt = Date.now();
+    clearInterval(state.pcmWatchdog); state.pcmWatchdog = null;
+  }
+}, 200);
+if (state.pcmWatchdog.unref) state.pcmWatchdog.unref();
+if(generation!==linuxShareAudioGeneration){
     linuxShareAudio = null;
     try { capture.kill('SIGKILL'); } catch {}
     await pipewireAsync('pactl',['unload-module',module]);
@@ -405,15 +419,27 @@ async function startLinuxShareAudioInner(webContents,generation) {
       if (holdModule) await pipewireAsync('pactl', ['unload-module', holdModule]);
       return;
     }
-    if (!loop) {
-      if (holdModule) await pipewireAsync('pactl', ['unload-module', holdModule]);
-      state.hold = '';
-      state.holdModule = '';
-      await restoreShareSink();
-      state.pcmReleaseAt = Date.now();
-      state.routeReadyAt = Date.now();
-      return;
-    }
+if (!loop) {
+// The loopback return only exists so the sharer keeps hearing their own
+// speakers. Capture works without it. Leaving routeEnabled false here kept the
+// null sink permanently empty, so the share carried digital silence while
+// reporting itself healthy. Route and capture anyway, then report the missing
+// local monitor so the status line tells the truth.
+if (holdModule) await pipewireAsync('pactl', ['unload-module', holdModule]);
+state.hold = '';
+state.holdModule = '';
+await restoreShareSink();
+state.routeEnabled = true;
+state.routeReadyAt = Date.now();
+state.pcmReleaseAt = Date.now();
+state.loopbackUnavailable = true;
+debugLinuxShareAudio(state, 'loopback module unavailable · capturing share sink without a local monitor return');
+scheduleLinuxDesktopAudioRoute(state, 0);
+state.audits = [400, 1200, 2500, 5000, 10000].map(delay => setTimeout(() => scheduleLinuxDesktopAudioRoute(state, 0), delay));
+if (state.routePulse) clearInterval(state.routePulse);
+state.routePulse = setInterval(() => scheduleLinuxDesktopAudioRoute(state, 0), 3000);
+return;
+}
     state.loop = String(loop).trim();
     debugLinuxShareAudio(state, 'loopback module='+state.loop);
     let muted = await muteLinuxLoopbackReturn(state);
@@ -428,16 +454,26 @@ async function startLinuxShareAudioInner(webContents,generation) {
       muted = await muteLinuxLoopbackReturn(state);
       if (linuxShareAudio !== state) return;
     }
-    if (!muted && !holdModule) {
-      await pipewireAsync('pactl', ['unload-module', loop]);
-      if (linuxShareAudio !== state) return;
-      state.loop = '';
-      state.loopInputs = [];
-      await restoreShareSink();
-      state.pcmReleaseAt = Date.now();
-      state.routeReadyAt = Date.now();
-      return;
-    }
+if (!muted && !holdModule) {
+// No hold sink means there is nowhere to park the unmuted monitor return, and
+// the return could not be muted. Tear the return down and capture without it.
+// Skipping this left routeEnabled false and the share permanently silent.
+await pipewireAsync('pactl', ['unload-module', loop]);
+if (linuxShareAudio !== state) return;
+state.loop = '';
+state.loopInputs = [];
+await restoreShareSink();
+state.routeEnabled = true;
+state.routeReadyAt = Date.now();
+state.pcmReleaseAt = Date.now();
+state.loopbackUnavailable = true;
+debugLinuxShareAudio(state, 'loopback return could not be muted · capturing share sink without a local monitor return');
+scheduleLinuxDesktopAudioRoute(state, 0);
+state.audits = [400, 1200, 2500, 5000, 10000].map(delay => setTimeout(() => scheduleLinuxDesktopAudioRoute(state, 0), delay));
+if (state.routePulse) clearInterval(state.routePulse);
+state.routePulse = setInterval(() => scheduleLinuxDesktopAudioRoute(state, 0), 3000);
+return;
+}
     await restoreShareSink();
     if (linuxShareAudio !== state) return;
     state.routeEnabled = true;
@@ -502,13 +538,14 @@ async function startLinuxShareAudioInner(webContents,generation) {
     });
     watch.unref();
   } catch {}
-  return { label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: state.routeReadyAt };
+  return { label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: state.routeReadyAt, localMonitor: !state.loopbackUnavailable };
 }
 function stopLinuxShareAudio() {
   linuxShareAudioGeneration++;
   if(linuxShareAudioStopping)return linuxShareAudioStopping;
-  const pendingStart=linuxShareAudioStart,state=linuxShareAudio;
-  linuxShareAudio = null;
+const pendingStart=linuxShareAudioStart,state=linuxShareAudio;
+linuxShareAudio = null;
+if(state?.pcmWatchdog){clearInterval(state.pcmWatchdog);state.pcmWatchdog=null;}
   const stopping=(async()=>{
     // If cancellation landed during capability/module discovery, wait until
     // that startup has observed the generation change and removed any module
@@ -1239,14 +1276,23 @@ app.whenReady().then(async () => {
       if (wayland) {
         // On Wayland, getSources() owns the xdg-desktop-portal session. Fetch
         // the selected source inside this request and consume it immediately;
-        // retaining a source from an earlier renderer IPC call makes KDE close
-        // its PipeWire target before Chromium imports it ("target not found").
-        // KDE's portal can expose a transient window target that resolves to
-        // black after the picker closes. A display share is stable across both
-        // AMD and NVIDIA Wayland sessions; window sharing remains available on
-        // platforms where Electron supplies a persistent window source.
-        const sources = await desktopCapturer.getSources({ types: ['screen'] });
-        src = sources[0];
+        // retaining a source object from an earlier renderer IPC call makes KDE
+        // close its PipeWire target before Chromium imports it ("target not
+        // found"). Match the user's display by id inside this fresh list.
+        // Always taking sources[0] shared a blank or powered-off output when
+        // that was not the monitor they picked. KDE window targets still go
+        // black after the picker closes, so a window choice stays a display.
+        const selection = pendingSource;
+        const sources = await desktopCapturer.getSources({ types: ['screen'], fetchWindowIcons: false, thumbnailSize: { width: 1, height: 1 } });
+        const allowed = sources.filter(source => !isExcludedShareSource(source));
+        if (selection?.type === 'screen') {
+          src = allowed.find(source => source.id === selection.id) || (selection.displayId ? allowed.find(source => String(source.display_id || '') === selection.displayId) : null);
+          if (!src && selection.name) {
+            const named = allowed.filter(source => String(source.name || '') === selection.name);
+            if (named.length === 1) src = named[0];
+          }
+        }
+        if (!src) src = allowed[0];
       } else {
         const selection = pendingSource;
         // Cached DesktopCapturerSource objects die across the picker → capture
