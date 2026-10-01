@@ -1,11 +1,11 @@
 {
-  "version": "1.1.115",
-  "notes": "Linux and Windows can complete a DM voice call: ICE now trickles public candidates instead of sending mDNS-only SDP.\nSame-LAN friends connect over Wi-Fi first, and a retry or TURN session is no longer dropped as glare.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.115/pair-p2p-1.1.115.tar.gz",
-  "linuxSha256": "c52b7cc419dd829638047fa0f68447f0044bba1c8086fa5d838799383cf8a0d8",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.115/Knot-1.1.115.AppImage",
-  "linuxAppImageSha256": "f0e5cafef99649c24a189bffe12f0faab977edc493f6fe2ed001d704a2cb5a8b",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.115/Knot.Setup.1.1.115.exe",
-  "winSha256": "ce3e0b9db349716add69a3c01bee2ac70529f291a787abb27e7c018471428f39",
-  "signature": "Z1uLpTMF3CLSfSW3jUNcJYLR9pWko57lV6HgIG17+n1Zyh71Dcr4mfPLI4aBlmM/waROLVF6w5gunPxKpJAtDg=="
+  "version": "1.1.116",
+  "notes": "Voice calls connect again. The public call description no longer contains a blank line that Chromium rejected.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.116/pair-p2p-1.1.116.tar.gz",
+  "linuxSha256": "c70f2f56ba17477ae70c82db3b23f16dd18879da86de442f8fe039c43c9700a9",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.116/Knot-1.1.116.AppImage",
+  "linuxAppImageSha256": "e19f0f09d449390ae7a9f8e460d8d1c68a2e132377078497b1c17866d7b88992",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.116/Knot.Setup.1.1.116.exe",
+  "winSha256": "936fa10914d6c4110a04986a3f3f0bb4b73b855f1b1026ad2957f3c6e5c2d6e6",
+  "signature": "YTzlqxPCpH8fE1NloWU3hy8LFihuj8rfOSi8mp2ch3LtW3U7o1iHF0jSp/HydNXtNyukGBQ1FiDpm9jDnBOMCA=="
 }
