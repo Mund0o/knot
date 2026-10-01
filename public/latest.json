@@ -1,11 +1,11 @@
 {
-  "version": "1.1.113",
-  "notes": "Share audio now starts even when PipeWire cannot build the loopback return, and the status line says when your speakers stay silent.\nA black native AV1 picture retries software decode, a dead presentation canvas no longer blanks a share tile, and Wayland shares the display you picked.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.113/pair-p2p-1.1.113.tar.gz",
-  "linuxSha256": "bfe685b9957ba4dc511718a34cc6f56425c2d05d624a35ff73d2e3dddb37edb6",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.113/Knot-1.1.113.AppImage",
-  "linuxAppImageSha256": "c94093e9cc20b4c1f06eace72cc83ec4b684c987680d509991aa353c082ff713",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.113/Knot.Setup.1.1.113.exe",
-  "winSha256": "f2591349bfd48a9503666799b715ff9ca6a4cbf942ce214c7959221dd43b8483",
-  "signature": "p8f35Njby1rNhFrGFNVRgvSbE//WKMqWxMqUWJLJ0+9t6F/Sq6pAHM6pa96lAEXTgtRpnEgpJWYoTruroKt9Bw=="
+  "version": "1.1.114",
+  "notes": "Joining a call now works: a caller no longer drops the joiner's connection request.\nJoining from the friends list reaches the calling peer instead of parking a disabled button.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.114/pair-p2p-1.1.114.tar.gz",
+  "linuxSha256": "0795b7fd27565bb5968592b9e52f545b3733d39a78406278432473ff90ac2451",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.114/Knot-1.1.114.AppImage",
+  "linuxAppImageSha256": "2b98312c7c866b24401e445e20f642b115c7c520aba173f7c3a6eb05579c1fd1",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.114/Knot.Setup.1.1.114.exe",
+  "winSha256": "dfd9711ec0f937c0a46b4aced9a50fc5d69be2c386674b067a9cc13a4f46b844",
+  "signature": "rN6ZkYBB67WTfTw+A2wRVHOBm6O1YsNGeOQ9UgJzAT2iwAwFw4dThOckIbyScx4KcFjWaUOjtMi/Cx+KVFsnAA=="
 }
