@@ -46,13 +46,19 @@
     const text = String(sdp || '');
     if (!sdpHasPublicIceCandidate(text)) return text;
     const newline = text.includes('\r\n') ? '\r\n' : '\n';
-    const ended = /\r?\n$/.test(text);
-    const next = text.split(/\r?\n/).filter(line => {
+    // split() keeps the empty string after a trailing newline. Adding another
+    // terminator produced a blank SDP line, and Chromium rejected the offer
+    // and the answer with "Invalid SDP line."
+    const lines = text.split(/\r?\n/);
+    const trailingEmpty = lines.length > 1 && lines[lines.length - 1] === '';
+    const kept = (trailingEmpty ? lines.slice(0, -1) : lines).filter(line => {
+      if (!line) return false;
       const parsed = parseIceCandidateLine(line);
       if (!parsed) return true;
       return !(parsed.typ === 'host' && parsed.mdns);
-    }).join(newline);
-    return ended && next ? next + newline : next;
+    });
+    const next = kept.join(newline);
+    return trailingEmpty && next ? next + newline : next;
   }
 
   function remapAudioPayloadType(section, fromPt, toPt) {

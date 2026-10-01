@@ -19,10 +19,16 @@ assert.strictEqual(ice.iceCandidateWorthSending('candidate:1 1 udp 1 1f4712db-ea
 assert.strictEqual(ice.iceCandidateWorthSending('candidate:2 1 udp 1 192.168.1.20 9 typ host'), true);
 assert.strictEqual(ice.iceCandidateWorthSending('candidate:3 1 udp 1 203.0.113.8 9 typ srflx raddr 192.168.1.20 rport 9'), true);
 
-const stripped = ice.preferPublicIceSdp('v=0\r\n' + mdnsHost + srflx);
+const stripped = ice.preferPublicIceSdp('v=0\r\n' + mdnsHost + lanHost + srflx);
 assert.ok(!stripped.includes('.local'), 'public SDP should drop mDNS host lines once srflx exists');
+assert.ok(stripped.includes('192.168.1.20'), 'public SDP must keep a real host candidate');
 assert.ok(stripped.includes('typ srflx'), 'public SDP must keep srflx');
+const strippedLines = stripped.split(/\r?\n/);
+assert.deepStrictEqual(strippedLines.filter(line => !line), [''], 'public SDP must end with one newline and contain no blank line');
+assert.ok(stripped.endsWith('\r\n') && !stripped.includes('\r\n\r\n'), 'public SDP must keep a single trailing newline');
 assert.strictEqual(ice.preferPublicIceSdp('v=0\r\n' + mdnsHost), 'v=0\r\n' + mdnsHost, 'do not strip mDNS when it is the only candidate');
+const bare = ice.preferPublicIceSdp('v=0\r\na=candidate:1 1 udp 1 uuid.local 9 typ host\r\na=candidate:3 1 udp 1 203.0.113.8 9 typ srflx');
+assert.strictEqual(bare, 'v=0\r\na=candidate:3 1 udp 1 203.0.113.8 9 typ srflx');
 
 const colliding = [
   'v=0',
