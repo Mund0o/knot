@@ -323,10 +323,15 @@ function flushLinuxShareAudio(state) {
       else state.pcmChunks[0] = head.subarray(take);
     }
     const floats = new Float32Array(packet.buffer, packet.byteOffset, packet.byteLength / 4);
+    let insane = 0;
     for (let index = 0; index < floats.length; index++) {
       const sample = floats[index];
+      if (!Number.isFinite(sample) || Math.abs(sample) > 1.25) insane++;
       floats[index] = Number.isFinite(sample) ? Math.max(-1, Math.min(1, sample)) : 0;
     }
+    // The first PipeWire monitor buffers are uninitialized floats. Clamping
+    // those to ±1 is a full-scale square wave, which is the ear blast.
+    if (floats.length && insane > floats.length * 0.2) floats.fill(0);
     const sequence = state.pcmNextSequence++;
     const capturedAt = Number(state.pcmReadAt) > 0 ? state.pcmReadAt : now;
     const samples = packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength);
@@ -377,7 +382,7 @@ linuxShareAudio = state;
 state.pcmWatchdog = setInterval(() => {
   if (linuxShareAudio !== state) { clearInterval(state.pcmWatchdog); state.pcmWatchdog = null; return; }
   if (state.routeEnabled && Date.now() >= (state.routeReadyAt || 0)) {
-    state.pcmReleaseAt = Date.now();
+    state.pcmReleaseAt = Date.now()+200;
     clearInterval(state.pcmWatchdog); state.pcmWatchdog = null;
   }
 }, 200);
@@ -435,7 +440,7 @@ state.holdModule = '';
 await restoreShareSink();
 state.routeEnabled = true;
 state.routeReadyAt = Date.now();
-state.pcmReleaseAt = Date.now();
+state.pcmReleaseAt = Date.now()+200;
 state.loopbackUnavailable = true;
 debugLinuxShareAudio(state, 'loopback module unavailable · capturing share sink without a local monitor return');
 scheduleLinuxDesktopAudioRoute(state, 0);
@@ -469,7 +474,7 @@ state.loopInputs = [];
 await restoreShareSink();
 state.routeEnabled = true;
 state.routeReadyAt = Date.now();
-state.pcmReleaseAt = Date.now();
+state.pcmReleaseAt = Date.now()+200;
 state.loopbackUnavailable = true;
 debugLinuxShareAudio(state, 'loopback return could not be muted · capturing share sink without a local monitor return');
 scheduleLinuxDesktopAudioRoute(state, 0);
@@ -481,12 +486,12 @@ return;
     await restoreShareSink();
     if (linuxShareAudio !== state) return;
     state.routeEnabled = true;
-    state.pcmReleaseAt = Date.now();
+    state.pcmReleaseAt = Date.now()+200;
     state.routeReadyAt = Date.now() + 80;
     scheduleLinuxDesktopAudioRoute(state, 0);
     state.audits = [400, 1200, 2500, 5000, 10000].map(delay => setTimeout(() => scheduleLinuxDesktopAudioRoute(state, 0), delay));
     if (state.routePulse) clearInterval(state.routePulse);
-    state.routePulse = setInterval(() => scheduleLinuxDesktopAudioRoute(state, 0), 3000);
+    state.routePulse = setInterval(() => { scheduleLinuxDesktopAudioRoute(state, 0); void unmuteLinuxLoopbackReturn(state); }, 3000);
     for (const id of state.loopInputs || []) {
       await pipewireOkAsync('pactl', ['move-sink-input', id, original]);
       await pipewireOkAsync('pactl', ['set-sink-input-mute', id, '1']);
@@ -496,7 +501,7 @@ return;
     if (linuxShareAudio !== state) return;
     await unmuteLinuxLoopbackReturn(state);
     if (linuxShareAudio !== state) return;
-    state.pcmReleaseAt = Date.now();
+    state.pcmReleaseAt = Date.now()+200;
     state.routeReadyAt = Date.now();
   }, Math.max(0, state.discardUntil - Date.now() + 80));
   capture.stdout.on('data', chunk => {

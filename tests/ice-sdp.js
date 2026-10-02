@@ -47,4 +47,22 @@ assert.ok(/a=fmtp:115 114\/114/.test(once) || /a=fmtp:\d+ 114\/114/.test(once), 
 const twice = ice.unbundleOpusCollision(once);
 assert.strictEqual(twice, once, 'already-unique payload types must not be remapped again');
 
+const blank = 'v=0\r\n\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n\r\na=rtpmap:111 opus/48000/2\r\n';
+const cleaned = ice.unbundleOpusCollision(blank);
+assert.ok(!cleaned.includes('\r\n\r\n'), 'inbound SDP must drop a blank line from an older offer');
+assert.ok(cleaned.endsWith('\r\n') && cleaned.includes('a=rtpmap:111 opus/48000/2'), 'cleaned SDP must keep its media lines and one trailing newline');
+assert.strictEqual(ice.cleanSdp('v=0\r\n\r\n'), 'v=0\r\n');
+assert.strictEqual(ice.cleanSdp('v=0\r\na=mid:0'), 'v=0\r\na=mid:0');
+
+const highProfile = 'v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 102\r\na=rtpmap:102 H264/90000\r\na=rtcp-fb:102 nack\r\na=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640c1f\r\n';
+const baseline = ice.normalizeInboundH264Fmtp(highProfile);
+assert.ok(baseline.includes('profile-level-id=42e01f') && !baseline.includes('640c1f'), 'inbound H264 must be constrained baseline so Linux can decode a Windows screen');
+assert.ok(baseline.includes('a=rtcp-fb:102 nack\r\n'), 'H264 rewrite must keep the feedback line between rtpmap and fmtp');
+assert.ok(!baseline.includes('\r\n\r\n'), 'H264 rewrite must not insert a blank SDP line');
+assert.strictEqual((baseline.match(/a=fmtp:102 /g) || []).length, 1, 'H264 rewrite must not duplicate fmtp');
+const inserted = ice.normalizeInboundH264Fmtp('v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n');
+assert.ok(inserted.includes('a=rtpmap:96 H264/90000\r\na=fmtp:96 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n'), 'missing H264 fmtp must be inserted on its own line');
+assert.ok(!inserted.includes('\r\n\r\n') && !inserted.includes('\r\r'), 'inserted H264 fmtp must not corrupt CRLF');
+assert.ok(!ice.unbundleOpusCollision(highProfile).includes('42e01f'), 'payload remap must not rewrite outbound H264');
+
 console.log('PASS ice-sdp');

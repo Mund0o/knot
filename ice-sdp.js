@@ -42,13 +42,24 @@
     return !parsed.mdns;
   }
 
+  function cleanSdp(sdp) {
+    const text = String(sdp || '');
+    if (!text) return text;
+    const newline = text.includes('\r\n') ? '\r\n' : '\n';
+    // split() keeps the empty string after a trailing newline. A second
+    // terminator is a blank SDP line, and Chromium rejects the whole
+    // description with "Invalid SDP line."
+    const lines = text.split(/\r?\n/);
+    const trailingEmpty = lines.length > 1 && lines[lines.length - 1] === '';
+    const kept = (trailingEmpty ? lines.slice(0, -1) : lines).filter(line => line.length > 0);
+    const next = kept.join(newline);
+    return trailingEmpty && next ? next + newline : next;
+  }
+
   function preferPublicIceSdp(sdp) {
     const text = String(sdp || '');
     if (!sdpHasPublicIceCandidate(text)) return text;
     const newline = text.includes('\r\n') ? '\r\n' : '\n';
-    // split() keeps the empty string after a trailing newline. Adding another
-    // terminator produced a blank SDP line, and Chromium rejected the offer
-    // and the answer with "Invalid SDP line."
     const lines = text.split(/\r?\n/);
     const trailingEmpty = lines.length > 1 && lines[lines.length - 1] === '';
     const kept = (trailingEmpty ? lines.slice(0, -1) : lines).filter(line => {
@@ -59,6 +70,37 @@
     });
     const next = kept.join(newline);
     return trailingEmpty && next ? next + newline : next;
+  }
+
+  function normalizeInboundH264Fmtp(sdp) {
+    const text = cleanSdp(sdp);
+    if (!/a=rtpmap:\d+\s+H264\/90000/i.test(text)) return text;
+    const newline = text.includes('\r\n') ? '\r\n' : '\n';
+    const hadTrailing = /\r?\n$/.test(text);
+    const rows = text.replace(/\r?\n$/, '').split(/\r?\n/);
+    const pts = new Set();
+    for (const row of rows) {
+      const match = row.match(/^a=rtpmap:(\d+)\s+H264\/90000/i);
+      if (match) pts.add(match[1]);
+    }
+    const fmtpFor = pt => 'a=fmtp:' + pt + ' level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f';
+    const replaced = new Set();
+    const out = [];
+    for (const row of rows) {
+      const fmtp = row.match(/^a=fmtp:(\d+)\b/);
+      if (fmtp && pts.has(fmtp[1])) {
+        if (!replaced.has(fmtp[1])) out.push(fmtpFor(fmtp[1]));
+        replaced.add(fmtp[1]);
+        continue;
+      }
+      out.push(row);
+      const rtp = row.match(/^a=rtpmap:(\d+)\s+H264\/90000/i);
+      if (rtp && !replaced.has(rtp[1]) && !rows.some(item => new RegExp('^a=fmtp:' + rtp[1] + '\\b').test(item))) {
+        out.push(fmtpFor(rtp[1]));
+        replaced.add(rtp[1]);
+      }
+    }
+    return out.join(newline) + (hadTrailing ? newline : '');
   }
 
   function remapAudioPayloadType(section, fromPt, toPt) {
@@ -100,7 +142,7 @@
   function unbundleOpusCollision(sdp) {
     const used = new Set([111, 112, 113]);
     let audioIndex = 0;
-    return String(sdp || '').split(/(?=^m=)/m).map(part => {
+    return cleanSdp(sdp).split(/(?=^m=)/m).map(part => {
       if (!part.startsWith('m=audio')) {
         payloadTypesInSdp(part).forEach(pt => used.add(pt));
         return part;
@@ -137,7 +179,9 @@
     sdpHasPublicIceCandidate,
     sdpHasRelayIceCandidate,
     iceCandidateWorthSending,
+    cleanSdp,
     preferPublicIceSdp,
+    normalizeInboundH264Fmtp,
     remapAudioPayloadType,
     payloadTypesInSdp,
     takeFreeAudioPayloadType,

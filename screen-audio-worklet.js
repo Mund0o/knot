@@ -1,3 +1,10 @@
+function shapeShareSample(value) {
+  const abs = Math.abs(value);
+  if (!(abs > 0.5)) return Number.isFinite(value) ? value : 0;
+  const sign = value < 0 ? -1 : 1;
+  return sign * (0.5 + (1 - Math.exp(-(abs - 0.5) * 2)) * 0.39);
+}
+
 class KnotScreenAudioProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -12,6 +19,7 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     this.fadedIn = this.fadeInFrames;
     this.recentPeak = 0;
     this.playedFrames = 0;
+    this.starved = 0;
     this.port.onmessage = event => {
       if (event.data && event.data.type === 'fade') {
         this.fadedIn = 0;
@@ -69,13 +77,23 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     for (let frame = 0; frame < left.length; frame++) {
       const chunk = this.queue[0];
       if (!chunk) {
-        this.started = false;
+        // A short gap used to restart the 40 ms preroll. That stutter is what
+        // Opus turns into robotic packet-loss concealment on the far side.
+        // Count the missing frames only. Adding the whole quantum made a
+        // one-sample shortfall look like an 80 ms dropout.
+        this.starved += left.length - frame;
+        if (this.starved > sampleRate * 0.08) {
+          this.started = false;
+          this.starved = 0;
+          this.fadedIn = 0;
+        }
         break;
       }
+      this.starved = 0;
       const index = this.offset * 2;
       const sampleL = chunk[index] || 0, sampleR = chunk[index + 1] || 0;
       const peak = Math.max(Math.abs(sampleL), Math.abs(sampleR));
-      if (this.started && this.fadedIn >= this.fadeInFrames && this.playedFrames < 96000 && this.recentPeak < 0.02 && peak > 0.12) this.fadedIn = 0;
+      if (this.started && this.fadedIn >= this.fadeInFrames && this.playedFrames < 96000 && this.recentPeak < 0.02 && peak > 0.92) this.fadedIn = 0;
       this.recentPeak = this.recentPeak * 0.9 + peak * 0.1;
       this.playedFrames++;
       let gain = 1;
@@ -83,9 +101,9 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
         gain = this.fadedIn / this.fadeInFrames;
         this.fadedIn++;
       }
-      const rawL = sampleL * gain, rawR = sampleR * gain;
-      left[frame] = Number.isFinite(rawL) ? Math.max(-1, Math.min(1, rawL)) : 0;
-      right[frame] = Number.isFinite(rawR) ? Math.max(-1, Math.min(1, rawR)) : 0;
+      const rawL = shapeShareSample(sampleL * gain), rawR = shapeShareSample(sampleR * gain);
+      left[frame] = rawL;
+      right[frame] = rawR;
       this.offset++;
       this.frames--;
       if (this.offset >= Math.floor(chunk.length / 2)) {

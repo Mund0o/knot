@@ -46,7 +46,7 @@ const LOCAL_TEST_MODE=new URLSearchParams(location.search).get('testMode')==='1'
 // report "connected", and connection-loss/voice-leave can each fire a leave tone.
 let connectSoundDone=false,friendLeftNotified=false,friendInCall=false,friendPresenceTimer=null,friendHeartbeatTimer=null,selfInCall=false,selfPresenceTimer=null,callPresenceTimer=null,callToneTimer=null;
 let screenTransceiver=null,screenActive=false,screenStarting=false,screenSharePickerPending=false,screenStream=null,screenGen=0,screenSenders=[],screenStatsTimer=null,screenStatsLast=null,screenStatsGeneration=0,screenFallbackBitrateCapMbps=0,remoteScreenExpected=false,remoteNativeScreenExpected=false,remoteScreenSuppressed=false,remoteScreenWatchAnnounced=false,friendWatchingScreen=false,screenAudioDebug='',screenSharePickerEpoch=0,screenSharePickerCancel=null,primedScreenAudioCtx=null,primedScreenAudioTimer=null;
-let nativeScreenSession=null,nativeScreenChannel=null,remoteNativeScreenChannel=null,nativeLocalPlayer=null,nativeRemotePlayer=null,nativeRemoteAudio=null,nativeScreenFallbackInFlight=false,nativeScreenAnnounced=false,nativeScreenAudioStream=null,remoteShareAudioBindTimers=[],remoteNativeArriveTimer=null,pendingRemoteNativeMeta=null;
+let nativeScreenSession=null,nativeScreenChannel=null,remoteNativeScreenChannel=null,nativeLocalPlayer=null,nativeRemotePlayer=null,nativeRemoteAudio=null,nativeScreenFallbackInFlight=false,nativeScreenAnnounced=false,nativeScreenAudioStream=null,remoteShareAudioBindTimers=[],remoteNativeArriveTimer=null,pendingRemoteNativeMeta=null,remoteScreenVideoTrack=null,remoteScreenVideoStream=null;
 const callBtn=$('#callBtn'),muteBtn=$('#muteBtn'),volumeSlider=$('#volumeSlider'),volumeValue=$('#volumeValue'),callStatus=$('#callStatus'),callTimerEl=$('#callTimer'),remoteAudio=$('#remoteAudio'),connectCard=$('#connectCard'),addFriendBtn=$('#addFriend'),panelBackdrop=$('#panelBackdrop'),profileBtn=$('#profileBtn'),profileInput=$('#profileInput'),profileAdjust=$('#profileAdjust'),profileEditor=$('#profileEditor'),profileZoom=$('#profileZoom'),profileX=$('#profileX'),profileY=$('#profileY'),profileDone=$('#profileDone'),friendAvatar=$('#friendAvatar'),voicePanel=$('#voicePanel'),roomTitle=$('#roomTitle'),settingsPanel=$('#settingsPanel'),settingsAvatar=$('#settingsAvatar'),settingsChangePhoto=$('#settingsChangePhoto'),settingsAdjustPhoto=$('#settingsAdjustPhoto'),settingsRemovePhoto=$('#settingsRemovePhoto'),displayNameInput=$('#displayName'),yourNameEl=$('#yourName'),friendNameEl=$('#friendName'),inputDevice=$('#inputDevice'),outputDevice=$('#outputDevice'),voiceProcessing=$('#voiceProcessing'),noiseReduction=$('#noiseReduction'),noiseHardware=$('#noiseHardware'),noiseProcessingHint=$('#noiseProcessingHint'),voiceInputMode=$('#voiceInputMode'),pushToTalkSettings=$('#pushToTalkSettings'),pushToTalkKeyButton=$('#pushToTalkKey'),pushToTalkDelayInput=$('#pushToTalkDelay'),pushToTalkDelayValue=$('#pushToTalkDelayValue'),deviceHint=$('#deviceHint'),testMicrophone=$('#testMicrophone'),reduceMotion=$('#reduceMotion'),soundEffects=$('#soundEffects'),shareProfile=$('#shareProfile'),rememberInvite=$('#rememberInvite'),hardwareAcceleration=$('#hardwareAcceleration'),hardwareHint=$('#hardwareHint'),transferSetupStatus=$('#transferSetupStatus'),fileTransportSetting=$('#fileTransport'),tcpListenPortInput=$('#tcpListenPort');
 function renderCallButtonState(state='start',label=state==='end'?'End call':'Start call',title=label){const end=state==='end';callBtn.dataset.callState=end?'end':'start';const text=callBtn.querySelector('.call-button-label');if(text)text.textContent=label;const startIcon=callBtn.querySelector('[data-call-icon="start"]'),endIcon=callBtn.querySelector('[data-call-icon="end"]');if(startIcon)startIcon.hidden=end;if(endIcon)endIcon.hidden=!end;callBtn.title=title;callBtn.setAttribute('aria-label',title)}
 renderCallButtonState('start','Start call','Start voice call');
@@ -816,7 +816,7 @@ function wire(){
           if(!remoteCallSessionId&&!friendInCall)return;
           applyRemoteCallState(false);logCallEvent('Friend left the call');return;
         }
-        if(value.t==='screen-start'){remoteScreenExpected=true;remoteNativeScreenExpected=value.native===true;remoteScreenSuppressed=false;logCallEvent('Friend started '+(value.native===true?'native AV1 ':'')+'screen sharing');paintShareSurfaceDark(remoteScreenTile);prepareShareSurface(remoteScreen);remoteScreen.muted=true;remoteScreen.hidden=false;screenStatus.textContent='Friend sharing';watchDmShare('remote');scheduleRemoteShareAudioBind();if(value.native===true)armNativeScreenArrive();return}
+        if(value.t==='screen-start'){remoteScreenExpected=true;remoteNativeScreenExpected=value.native===true;remoteScreenSuppressed=false;logCallEvent('Friend started '+(value.native===true?'native AV1 ':'')+'screen sharing');paintShareSurfaceDark(remoteScreenTile);remoteScreen.muted=true;screenStatus.textContent='Friend sharing';scheduleRemoteShareAudioBind();if(value.native===true){prepareShareSurface(remoteScreen);remoteScreen.hidden=false;watchDmShare('remote');armNativeScreenArrive()}else presentRemoteScreenVideo();return}
         if(value.t==='screen-audio'){if(value.active){screenAudioDebug=' · audio received';scheduleRemoteShareAudioBind();if(remoteScreenExpected)screenStatus.textContent='Friend sharing'+screenAudioDebug}else if(remoteScreenExpected){screenAudioDebug=' · sound unavailable';screenStatus.textContent='Friend sharing'+screenAudioDebug}return}
         if(value.t==='native-screen-meta'){if(remoteNativeScreenChannel)beginRemoteNativeScreen(value,remoteNativeScreenChannel);else pendingRemoteNativeMeta=value;return}
         if(value.t==='native-screen-ready'){const channel=nativeScreenChannel;if(channel){channel._nativePeerProtocol=Math.max(0,Math.min(16,Number(value.transportVersion)||0));if(channel._nativePeerProtocol>=NATIVE_SCREEN_PROTOCOL)settleNativeScreenReady(channel,true)}return}
@@ -826,7 +826,7 @@ function wire(){
         if(value.t==='watch'){receiveWatchMessage(value);return}
         if(value.t==='net-budget'){rememberPeerNetBudget(directBudgetKey(),value,{aliasDirect:true});return}
         if(value.t==='net-budget-ask'){announceNetBudget();return}
-        if(value.t==='screen-codec-fallback'&&screenActive){await switchScreenCodec(compatibilityScreenCodec());return}
+        if(value.t==='screen-codec-fallback'&&screenActive){const requested=String(value.codec||'').toUpperCase();if(requested==='VP8'||requested==='VP9'||requested==='H264'||requested==='AV1'){await switchScreenCodec(requested);return}await switchScreenCodec(compatibilityScreenCodec());return}
         if(value.t==='reneg-offer'){await answerDirectRenegotiation(value.sdp,sdp=>send({t:'reneg-answer',sdp}));return}
         if(value.t==='reneg-answer')await applyDirectRenegotiationAnswer(value.sdp);
       }catch(error){console.warn('direct renegotiation error',error)}
@@ -917,6 +917,31 @@ function ensureOfferAudioTransceivers(){
 }
 let dmIceServers=directIceServers(),turnIceServers=CONFIGURED_ICE_SERVERS.filter(hasTurnUrl),turnIssuedAt=0,turnCredentialWaiter=null,turnCredentialPending=null,relayVoiceMode=false,dmMediaPlan=null;
 function viableScreenPeer(target=pc){return !!target&&target===pc&&!['failed','disconnected','closed'].includes(String(target.connectionState||''))&&target.signalingState!=='closed'}
+function liveRemoteScreenVideoTrack(track){
+  if(track&&track.kind==='video'&&track.readyState!=='ended')return track;
+  if(remoteScreenVideoTrack&&remoteScreenVideoTrack.readyState!=='ended')return remoteScreenVideoTrack;
+  return pc?.getReceivers?.().map(item=>item.track).find(item=>item&&item.kind==='video'&&item.readyState!=='ended')||null;
+}
+function presentRemoteScreenVideo(track){
+  if(!remoteScreenExpected||remoteNativeScreenExpected||remoteScreenSuppressed)return;
+  const videoTrack=liveRemoteScreenVideoTrack(track);
+  remoteScreen.muted=true;remoteScreen.hidden=false;paintShareSurfaceDark(remoteScreenTile);
+  if(!videoTrack){prepareShareSurface(remoteScreen);watchDmShare('remote');return}
+  if(nativeRemotePlayer)cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true,keepVideo:true});
+  const stream=remoteScreenVideoStream&&remoteScreenVideoStream.getVideoTracks?.().includes(videoTrack)?remoteScreenVideoStream:new MediaStream([videoTrack]);
+  remoteScreenVideoTrack=videoTrack;remoteScreenVideoStream=stream;
+  const receiver=pc?.getReceivers?.().find(value=>value.track===videoTrack);
+  remoteScreenDecodeStop?.();
+  remoteScreenDecodeStop=receiver?monitorRemoteScreenDecode(receiver,videoTrack,null,()=>!remoteScreen.hidden&&!remoteScreenSuppressed):null;
+  disarmShareVideoReveal(remoteScreen);
+  try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{}
+  prepareShareSurface(remoteScreen);watchDmShare('remote');scheduleRemoteShareAudioBind();
+}
+function sendingLiveDisplayVideo(){
+  // Native AV1 has no video m-line. Counting that session as a live send
+  // dropped the friend's WebRTC offer while our audio renegotiation was open.
+  return screenSenders.some(sender=>sender?.track&&sender.track.kind==='video'&&sender.track.readyState==='live');
+}
 function setupPeer(){
   abortCurrentFileSession('Connection replaced');
   settleDirectRenegotiation();renegotiating++;
@@ -1003,7 +1028,7 @@ function setupPeer(){
       if(!screenGestureGuard){screenGestureGuard=true;document.addEventListener('pointerdown',play,{once:true});document.addEventListener('keydown',play,{once:true})}
       return;
     }
-    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){const next=e.transceiver?.receiver?.track;if(next&&next!==e.track&&next.kind==='audio'&&next.readyState!=='ended'){remoteVoiceTrack=next;monitorSpeaking('dm-friend',next);if(callActive)setRemoteCallAudio(true);return}remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');if(callActive&&pc&&!['failed','closed'].includes(pc.connectionState)){restoreRemoteDirectVoicePlayback();return}applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){if(nativeRemotePlayer)cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true});const receiver=pc.getReceivers().find(value=>value.track===e.track);remoteScreenDecodeStop?.();remoteScreenDecodeStop=receiver?monitorRemoteScreenDecode(receiver,e.track,null,()=>!remoteScreen.hidden&&!remoteScreenSuppressed):null;remoteScreen.muted=true;remoteScreen.hidden=false;disarmShareVideoReveal(remoteScreen);try{remoteScreen.srcObject=stream;remoteScreen.playbackRate=1}catch{};prepareShareSurface(remoteScreen);watchDmShare('remote');e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()}}}catch{}};
+    if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){const next=e.transceiver?.receiver?.track;if(next&&next!==e.track&&next.kind==='audio'&&next.readyState!=='ended'){remoteVoiceTrack=next;monitorSpeaking('dm-friend',next);if(callActive)setRemoteCallAudio(true);return}remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');if(callActive&&pc&&!['failed','closed'].includes(pc.connectionState)){restoreRemoteDirectVoicePlayback();return}applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){remoteScreenVideoTrack=e.track;remoteScreenVideoStream=stream;e.track.onunmute=()=>{if(remoteScreenExpected&&!remoteNativeScreenExpected)presentRemoteScreenVideo(e.track)};e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()};if(remoteScreenExpected&&!remoteNativeScreenExpected)presentRemoteScreenVideo(e.track)}}catch(error){console.warn('remote media track',error)}};
 }
 function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
   let latencyTargetMs=45;const applyLatencyTarget=value=>{latencyTargetMs=Math.min(NATIVE_SCREEN_LATENCY_CEILING_MS,value);try{receiver.playoutDelayHint=latencyTargetMs/1000}catch{}try{if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=latencyTargetMs}catch{}};applyLatencyTarget(latencyTargetMs);
@@ -1305,14 +1330,14 @@ function payloadTypesInSdp(sdp){return iceMath()?.payloadTypesInSdp(sdp)||new Se
 function takeFreeAudioPayloadType(used){return iceMath()?.takeFreeAudioPayloadType(used)||0}
 function unbundleOpusCollision(sdp){return iceMath()?.unbundleOpusCollision(sdp)??sdp}
 function patchOpusSection(section,kind){
-  const voice=kind==='voice',bitrate=relayVoiceMode?24000:voice?targetVoiceBitrate():256000,playback=relayVoiceMode?16000:48000,stereo=relayVoiceMode||voice?0:1,dtx=0;
+  const voice=kind==='voice',bitrate=relayVoiceMode?24000:voice?targetVoiceBitrate():256000,playback=relayVoiceMode?16000:48000,stereo=relayVoiceMode||voice?0:1,dtx=0,fec=voice?1:0,cbr=voice?1:0;
   const pt=(section.match(/a=rtpmap:(\d+) opus\//i)||[])[1]||'111';
-  const patched=section.replace(new RegExp('a=fmtp:'+pt+'[^\\r\\n]*','g'),m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate='+bitrate;else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate='+bitrate);if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate='+playback;else m=m.replace(/maxplaybackrate=\d+/,'maxplaybackrate='+playback);if(!m.includes('maxptime'))m+='; maxptime=20';else m=m.replace(/maxptime=\d+/,'maxptime=20');if(!m.includes('minptime'))m+='; minptime=10';else m=m.replace(/minptime=\d+/,'minptime=10');if(!m.includes('useinbandfec'))m+='; useinbandfec=1';if(!m.includes('usedtx'))m+='; usedtx='+dtx;else m=m.replace(/usedtx=[01]/,'usedtx='+dtx);if(!m.includes('cbr'))m+='; cbr=1';if(!m.includes('stereo'))m+='; stereo='+stereo;else m=m.replace(/stereo=[01]/,'stereo='+stereo);if(!m.includes('sprop-stereo'))m+='; sprop-stereo='+stereo;else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo='+stereo);return m});
-  return /a=fmtp:/.test(patched)?patched:patched.replace(new RegExp('(a=rtpmap:'+pt+' opus/[^\\r\\n]*)'),'$1\r\na=fmtp:'+pt+' minptime=10;useinbandfec=1;maxaveragebitrate='+bitrate+';maxplaybackrate='+playback+';maxptime=20;usedtx='+dtx+';cbr=1;stereo='+stereo+';sprop-stereo='+stereo);
+  const patched=section.replace(new RegExp('a=fmtp:'+pt+'[^\\r\\n]*','g'),m=>{if(!m.includes('maxaveragebitrate'))m+='; maxaveragebitrate='+bitrate;else m=m.replace(/maxaveragebitrate=\d+/,'maxaveragebitrate='+bitrate);if(!m.includes('maxplaybackrate'))m+='; maxplaybackrate='+playback;else m=m.replace(/maxplaybackrate=\d+/,'maxplaybackrate='+playback);if(!m.includes('maxptime'))m+='; maxptime=20';else m=m.replace(/maxptime=\d+/,'maxptime=20');if(!m.includes('minptime'))m+='; minptime=10';else m=m.replace(/minptime=\d+/,'minptime=10');if(!m.includes('useinbandfec'))m+='; useinbandfec='+fec;else m=m.replace(/useinbandfec=[01]/,'useinbandfec='+fec);if(!m.includes('usedtx'))m+='; usedtx='+dtx;else m=m.replace(/usedtx=[01]/,'usedtx='+dtx);if(!m.includes('cbr'))m+='; cbr='+cbr;else m=m.replace(/cbr=[01]/,'cbr='+cbr);if(!m.includes('stereo'))m+='; stereo='+stereo;else m=m.replace(/stereo=[01]/,'stereo='+stereo);if(!m.includes('sprop-stereo'))m+='; sprop-stereo='+stereo;else m=m.replace(/sprop-stereo=[01]/,'sprop-stereo='+stereo);return m});
+  return /a=fmtp:/.test(patched)?patched:patched.replace(new RegExp('(a=rtpmap:'+pt+' opus/[^\\r\\n]*)'),'$1\r\na=fmtp:'+pt+' minptime=10;useinbandfec='+fec+';maxaveragebitrate='+bitrate+';maxplaybackrate='+playback+';maxptime=20;usedtx='+dtx+';cbr='+cbr+';stereo='+stereo+';sprop-stereo='+stereo);
 }
 function patchOpusSdp(sdp){let audioIndex=0;return unbundleOpusCollision(sdp).split(/(?=^m=)/m).map(part=>part.startsWith('m=audio')?patchOpusSection(part,audioIndex++===0?'voice':'music'):part).join('')}
 function patchSdp(sdp){return patchOpusSdp(sdp)}
-function remoteCallSdp(sdp){return unbundleOpusCollision(sdp)}
+function remoteCallSdp(sdp){const cleaned=unbundleOpusCollision(sdp);return iceMath()?.normalizeInboundH264Fmtp?iceMath().normalizeInboundH264Fmtp(cleaned):cleaned}
 function monitorVoicePlayout(receiver,track){
   if(!receiver||!track)return ()=>{};
   let latencyTargetMs=28,stableWindows=0,finished=false,sampleInFlight=false;
@@ -3215,7 +3240,10 @@ function armDirectRenegotiationTimeout(target,generation){
 }
 async function answerDirectRenegotiation(sdp,reply){
   const target=pc,remoteSdp=validPeerSdp(sdp);if(!target||!remoteSdp||target.signalingState==='closed')return false;const polite=role==='join'||role==='answer',interrupted=renegPending,collision=interrupted||target.signalingState!=='stable';
-  if(collision&&!polite)return false;
+  // A Windows share arrives as this offer. Dropping it on glare threw away
+  // both the new video line and the computer-sound direction, so the host
+  // saw and heard nothing. Only keep our own offer while we are sending.
+  if(collision&&!polite&&sendingLiveDisplayVideo())return false;
   if(collision){renegotiating++;settleDirectRenegotiation();if(target.signalingState==='have-local-offer')try{await target.setLocalDescription({type:'rollback'})}catch{return false}else if(target.signalingState!=='stable')return false}
   if(target!==pc)return false;await target.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remoteSdp)});if(target!==pc)return false;await flushDirectIceCandidates(target);if(target!==pc)return false;applyInboundScreenCodecPreference(target);const answer=await target.createAnswer();if(target!==pc)return false;await target.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});await waitIce(target);if(target!==pc)return false;const sent=reply(localCallSdp(target))!==false;if(sent&&interrupted)queueMicrotask(()=>{if(target===pc&&target.signalingState==='stable')renegotiate().catch(()=>{})});return sent
 }
@@ -3288,6 +3316,28 @@ function primeScreenAudioContext(){
   clearTimeout(primedScreenAudioTimer);primedScreenAudioTimer=setTimeout(discardPrimedScreenAudioContext,120000);
 }
 function takeScreenAudioContext(){const ctx=primedScreenAudioCtx;primedScreenAudioCtx=null;clearTimeout(primedScreenAudioTimer);primedScreenAudioTimer=null;return ctx&&ctx.state!=='closed'?ctx:new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000})}
+function resampleStereoToRate(samples,fromRate,toRate){
+  const input=samples instanceof Float32Array?samples:new Float32Array(samples||0);
+  const from=Number(fromRate)||48000,to=Number(toRate)||from;
+  if(!input.length||Math.abs(from-to)<1)return input;
+  const frames=Math.floor(input.length/2);if(frames<2)return input;
+  const outFrames=Math.max(1,Math.round(frames*to/from)),out=new Float32Array(outFrames*2),step=from/to;
+  for(let i=0;i<outFrames;i++){const pos=i*step,i0=Math.min(frames-1,Math.floor(pos)),i1=Math.min(frames-1,i0+1),t=pos-i0;out[i*2]=input[i0*2]*(1-t)+input[i1*2]*t;out[i*2+1]=input[i0*2+1]*(1-t)+input[i1*2+1]*t}
+  return out;
+}
+function softenSharePcm(samples){
+  // Uninitialized capture buffers are NaN or huge values. A normal desktop
+  // signal already sits near full scale, so treating that as corrupt silenced
+  // whole packets and the far side heard the gaps as robotic audio.
+  let insane=0;
+  for(let i=0;i<samples.length;i++){
+    const sample=samples[i];
+    if(!Number.isFinite(sample)||Math.abs(sample)>4){samples[i]=0;insane++;continue}
+    if(sample>1)samples[i]=1;else if(sample<-1)samples[i]=-1;
+  }
+  if(samples.length&&insane>samples.length*0.2)samples.fill(0);
+  return samples;
+}
 async function attemptAudioContextResume(ctx,timeoutMs=300){
   let timer;try{await Promise.race([Promise.resolve(ctx.resume()),new Promise(resolve=>{timer=setTimeout(resolve,timeoutMs)})])}catch{}finally{clearTimeout(timer)}
 }
@@ -3314,7 +3364,7 @@ async function setupNativeScreenCapture(){
     return null;
   }
 
-  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubClean,unsubError,unsubFormat,addonData=false,formatReady=false,captureClosed=false,captureFailure='',outputTrack=null;const captureOwner={};
+  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubClean,unsubError,unsubFormat,addonData=false,formatReady=false,captureClosed=false,captureFailure='',outputTrack=null,captureRate=48000;const captureOwner={};
   const dispose=(stopCapture=isCurrent())=>{captureClosed=true;if(unsubClean)unsubClean();if(unsubError)unsubError();if(unsubFormat)unsubFormat();if(stopCapture)try{window.pairCapture.stop()}catch{}try{op?.port.close()}catch{}try{op?.disconnect()}catch{}};
   try{
     ctx=takeScreenAudioContext();
@@ -3330,7 +3380,8 @@ async function setupNativeScreenCapture(){
       const samples=new Float32Array(count*2);
       if(arr.length>=count*2)samples.set(arr.subarray(0,count*2));
       else for(let i=0;i<count;i++){const sample=arr[i]||0;samples[i*2]=sample;samples[i*2+1]=sample}
-      try{op.port.postMessage(samples,[samples.buffer]);addonData=true}catch(error){captureFailure='audio worklet input failed: '+(error?.message||error)}
+      const played=softenSharePcm(resampleStereoToRate(samples,captureRate,ctx.sampleRate||48000));
+      try{op.port.postMessage(played,[played.buffer]);addonData=true}catch(error){captureFailure='audio worklet input failed: '+(error?.message||error)}
     });
     unsubError=window.pairCapture.onError(msg=>{
       if(!isCurrent())return;captureFailure=String(msg||'native capture failed');
@@ -3350,7 +3401,7 @@ async function setupNativeScreenCapture(){
     // sharing could never be heard by the viewer: the route was torn down
     // before its first non-silent packet. The bounded AudioWorklet remains the
     // only path for samples once they arrive.
-    unsubFormat=window.pairCapture.onFormat?.(fmt=>{if(!isCurrent())return;if(fmt?.available!==false&&fmt?.isolated===true)formatReady=true;else if(fmt?.available!==false)captureFailure='isolated WASAPI process-loopback format unavailable'});
+    unsubFormat=window.pairCapture.onFormat?.(fmt=>{if(!isCurrent())return;if(Number(fmt?.sampleRate)>0)captureRate=Number(fmt.sampleRate);if(fmt?.available!==false&&fmt?.isolated===true)formatReady=true;else if(fmt?.available!==false)captureFailure='isolated WASAPI process-loopback format unavailable'});
     if(!isCurrent()){dispose(false);try{ctx.close()}catch{};return null}
     // Attach only after the addon confirms process isolation. PCM by itself is
     // not proof of isolation; an idle isolated route may produce none yet.
@@ -3466,7 +3517,8 @@ async function restoreDirectVoice(){
 async function setReservedScreenAudioTrack(track,target=pc){
   const voice=reservedVoiceSender(target),sender=reservedScreenAudioSender(target);if(!sender)throw new Error('reserved screen-audio sender is unavailable');
   if(sender===voice)throw new Error('reserved screen-audio sender resolved to the voice m-line');
-  if(track)try{shareAudioFadeIn?.()}catch{}
+  // The route exists before the first real packet. Opening the local monitor
+  // here fades in the capture startup click, which is the ear blast.
   const next=track||silentScreenAudioTrack(target);
   if(!next)return sender;
   if(sender.track===next)return sender;
@@ -3477,7 +3529,7 @@ async function setReservedScreenAudioTrack(track,target=pc){
     throw new Error('reserved screen-audio sender resolved to the voice m-line');
   }
   if(track){
-    try{const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=256000;parameters.encodings[0].priority='high';parameters.encodings[0].networkPriority='high';await sender.setParameters(parameters)}catch{}
+    try{const parameters=sender.getParameters();if(!parameters.encodings?.length)parameters.encodings=[{}];parameters.encodings[0].maxBitrate=256000;parameters.encodings[0].priority='high';parameters.encodings[0].networkPriority='high';if(parameters.codecs)parameters.codecs.forEach(c=>{if(String(c.mimeType||'').toLowerCase()!=='audio/opus')return;const p=c.parameters||(c.parameters={});p.stereo=1;p['sprop-stereo']=1;p.useinbandfec=0;p.usedtx=0;p.cbr=0;p.maxaveragebitrate=256000;p.maxplaybackrate=48000});await sender.setParameters(parameters)}catch{}
     try{if(nativeScreenChannel?.readyState==='open')nativeScreenChannel.send(JSON.stringify({t:'native-screen-audio',active:true}))}catch{}
     try{send({t:'screen-audio',active:true})}catch{}
     const transceiver=target?.getTransceivers?.().find(item=>item.sender===sender);
@@ -3543,7 +3595,7 @@ async function linuxShareAudioTrack(){
     op=new AudioWorkletNode(ctx,'knot-screen-audio',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
     unsubData=window.pairEnv.onLinuxShareAudio((buf,metadata)=>{if(!isCurrent())return;
       const capturedAt=Number(metadata?.capturedAt);if(Number.isFinite(capturedAt)&&Date.now()-capturedAt>2500)return;
-      const arr=new Float32Array(buf);if(!arr.length)return;
+      const arr=softenSharePcm(resampleStereoToRate(new Float32Array(buf),48000,ctx.sampleRate||48000));if(!arr.length)return;
       let peak=0;for(let i=0;i<arr.length;i++){const sample=Math.abs(arr[i]);if(sample>peak)peak=sample}
       if(peak>=1e-4){const first=received===false;received=true;if(first){logShareAudio('pcm live peak='+peak.toFixed(4)+' seq='+(metadata?.sequence||'?')+' n='+arr.length);try{shareAudioFadeIn?.()}catch{}}}
       try{op.port.postMessage(arr,[arr.buffer])}catch{op.port.postMessage(arr)}
@@ -3554,9 +3606,11 @@ async function linuxShareAudioTrack(){
     // and attach its live track as soon as PipeWire has created the isolated
     // route, so an app/game that starts producing audio later reaches the peer
     // instead of being rejected by an arbitrary first-PCM timeout.
-    op.connect(dest);const keepAlive=ctx.createGain();keepAlive.gain.value=0;op.connect(keepAlive);keepAlive.connect(ctx.destination);outputTrack=dest.stream.getAudioTracks()[0]||null;if(!outputTrack)throw new Error('PipeWire output track could not be created');
+    op.connect(dest);const monitor=ctx.createDynamicsCompressor();monitor.threshold.value=-8;monitor.knee.value=12;monitor.ratio.value=4;monitor.attack.value=0.005;monitor.release.value=0.25;const keepAlive=ctx.createGain();keepAlive.gain.value=0;op.connect(monitor);monitor.connect(keepAlive);keepAlive.connect(ctx.destination);outputTrack=dest.stream.getAudioTracks()[0]||null;if(!outputTrack)throw new Error('PipeWire output track could not be created');
     outputTrack._knotCaptureOwner=captureOwner;outputTrack._knotShareAudioHeard=()=>received===true;try{outputTrack.contentHint='music'}catch{}
-    shareAudioFadeIn=()=>{try{op.port.postMessage({type:'fade'})}catch{};try{const now=ctx.currentTime;keepAlive.gain.cancelScheduledValues(now);keepAlive.gain.setValueAtTime(keepAlive.gain.value,now);keepAlive.gain.linearRampToValueAtTime(1,now+.28);logShareAudio('local monitor fading in')}catch{}};
+    // Open from silence and stop below unity. Ramping whatever gain was already
+    // scheduled up to 1 played the PipeWire negotiation click at full scale.
+    shareAudioFadeIn=()=>{try{op.port.postMessage({type:'fade'})}catch{};try{const now=ctx.currentTime;keepAlive.gain.cancelScheduledValues(now);keepAlive.gain.setValueAtTime(0,now);keepAlive.gain.linearRampToValueAtTime(.62,now+.6);logShareAudio('local monitor fading in')}catch{}};
     try{unsubDebug=window.pairEnv.onLinuxShareAudioDebug?.(message=>logShareAudio(message))}catch{}
     let share=null;
     for(let routeAttempt=1;routeAttempt<=3;routeAttempt++){
@@ -3592,7 +3646,6 @@ logShareAudio('route ready source='+(share.source||'?')+' track='+outputTrack.re
 // return that lets the sharer keep hearing their own speakers. Say so instead
 // of leaving them to think the share muted their machine.
 if(share.localMonitor===false){outputTrack._knotShareLocalMonitorMissing=true;screenAudioDebug=' · captured · your speakers are silent while sharing';}
-try{shareAudioFadeIn?.()}catch{}
     screenOutCtx=ctx;screenOutDest=dest;screenNative=true;screenCaptureOwner=captureOwner;
     screenCaptureCleanup=()=>dispose(true);return outputTrack;
   }catch(e){
@@ -3670,7 +3723,7 @@ function applyScreenCodecPreference(connection,sender,selectedCodec=screenCodec)
 function applyInboundScreenCodecPreference(connection){
   try{
     const caps=RTCRtpReceiver.getCapabilities?.('video')||RTCRtpSender.getCapabilities?.('video');
-    const inbound=screenCodec==='H264'||screenCodec==='VP9'||screenCodec==='VP8'?screenCodec:'AV1';
+    const inbound=screenCodec==='H264'||screenCodec==='VP9'||screenCodec==='VP8'?screenCodec:compatibilityScreenCodec();
     const codecs=orderedScreenCodecs(caps,inbound);
     if(!codecs.length)return false;
     for(const transceiver of connection?.getTransceivers?.()||[]){
@@ -4160,7 +4213,7 @@ function setupRemoteShareAudioSink(audio){
     const src=ctx.createMediaStreamSource(st),gain=ctx.createGain();
     gain.gain.value=0;src.connect(gain);gain.connect(ctx.destination);
     shareAudioSource=src;shareAudioGain=gain;shareAudioStream=st;
-    gain.gain.linearRampToValueAtTime(target||1,ctx.currentTime+.28);
+    gain.gain.linearRampToValueAtTime(target,ctx.currentTime+.45);
     logShareAudio('viewer sink graph ctx='+ctx.state+' tracks='+tracks.map(t=>t.readyState+(t.muted?'/rtp-muted':'')).join(',')+' target='+(target||1));
     return true;
   }catch(error){logShareAudio('viewer sink failed '+(error?.message||error));return false}
@@ -4179,17 +4232,20 @@ function startRemoteShareElement(audio,{forceFade=false}={}){
   if(!audio)return audio;
   const target=Math.max(0,Math.min(1,Number(remoteScreen.volume)||0));
   if(remoteScreenSuppressed||target===0){audio.muted=true;audio.volume=0;audio._knotShareFade=0;teardownRemoteShareAudioSink();return audio}
-  const hear=()=>{
-    if(remoteScreenSuppressed||!audio.srcObject)return;
-    audio.muted=false;
-    audio.volume=Math.max(target,.35);
-    audio.play().catch(error=>logShareAudio('element play failed '+(error?.message||error)));
-    setupRemoteShareAudioSink(audio);
-    logShareAudio('playing vol='+audio.volume.toFixed(2)+' muted='+audio.muted+' paused='+audio.paused+' ctx='+(sfxCtx()?.state||'none'));
+  // One playback path only. The element and a WebAudio copy of the same
+  // stream together comb-filter into robotic audio and add up to the blast
+  // at the moment a share starts. The graph is the fallback if autoplay blocks.
+  teardownRemoteShareAudioSink();
+  audio.muted=false;audio.volume=0;audio._knotShareFade=performance.now();
+  const started=audio._knotShareFade,span=forceFade?420:280;
+  const rise=now=>{
+    if(audio._knotShareFade!==started||audio.muted||remoteScreenSuppressed||!audio.srcObject)return;
+    const t=Math.min(1,(now-started)/span);
+    audio.volume=target*t;
+    if(t<1)requestAnimationFrame(rise);
+    else audio._knotShareFade=0;
   };
-  audio.muted=false;
-  audio.volume=Math.max(target,.35);
-  audio.play().then(hear).catch(()=>hear());
+  audio.play().then(()=>{logShareAudio('playing vol=fade muted='+audio.muted+' paused='+audio.paused);requestAnimationFrame(rise)}).catch(error=>{logShareAudio('element play failed '+(error?.message||error));audio.muted=true;setupRemoteShareAudioSink(audio)});
   return audio;
 }
 function fadeRemoteShareAudio(audio,{force=false}={}){
@@ -4222,6 +4278,10 @@ function bindReservedRemoteScreenAudio({force=false}={}){
   const fading=!!audio._knotShareFade;
   track.enabled=true;
   track.onunmute=()=>{if(!remoteScreenExpected)return;bindReservedRemoteScreenAudio({force:true})};
+  // The late rebinds exist to catch a track that was not playing yet. Running
+  // them against a stream that is already fading restarts it from silence
+  // every few seconds, which is a pump, a click, and a stretch of missing sound.
+  if(same&&(audible||fading)){if(!audio.muted)audio.play().catch(()=>{});return audio}
   const routed=shareAudioStream&&shareAudioGain&&audio.srcObject&&audio._knotShareAudioTrack===track;
   if((!same||force)&&!routed){
     teardownRemoteShareAudioSink();
@@ -4618,7 +4678,9 @@ function makeScreenTile(video,label,kind){const tile=document.createElement('art
 function makeDmShareBadge(kind,label){const button=document.createElement('button');button.type='button';button.className='participant-share-badge';button.dataset.shareOwner=kind;button.innerHTML='<span aria-hidden="true">▣</span><small>'+label+'</small>';button.title='Watch '+label.toLowerCase();button.setAttribute('aria-label','Watch '+label.toLowerCase());button.onclick=event=>{event.stopPropagation();watchDmShare(kind)};return button}
 const localScreenTile=makeScreenTile(screenPreview,'Your stream','local'),remoteScreenTile=makeScreenTile(remoteScreen,'Friend’s stream','remote'),localShareBadge=makeDmShareBadge('local','Your stream'),remoteShareBadge=makeDmShareBadge('remote','Watch stream');screenVideos.replaceChildren(localScreenTile,remoteScreenTile);participantYou.prepend(localShareBadge);participantFriend.prepend(remoteShareBadge);
 const screenViewBar=document.createElement('div');screenViewBar.className='screen-view-bar';screenViewBar.innerHTML='<button type="button" data-screen-return title="Return to call" aria-label="Return to call">‹</button><button type="button" data-screen-volume title="Stream volume" aria-label="Stream volume">♫</button><button type="button" data-screen-fullscreen title="Fullscreen" aria-label="Fullscreen">⛶</button>';screenVideos.after(screenViewBar);
-const fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=screenVideos.parentElement;screenStage.classList.add('screen-stage');let nativeShareFullscreen=false;
+const fsBtn=screenViewBar.querySelector('[data-screen-fullscreen]'),screenStage=screenVideos.parentElement;screenStage.classList.add('screen-stage');let nativeShareFullscreen=false,screenStageHome=null;
+function mountShareStageFullscreen(){if(!screenStage||screenStage.parentElement===document.body)return;screenStageHome={parent:screenStage.parentElement,next:screenStage.nextSibling};document.body.append(screenStage)}
+function unmountShareStage(){const home=screenStageHome;screenStageHome=null;if(!home?.parent||!screenStage||screenStage.parentElement!==document.body)return;if(home.next&&home.next.parentNode===home.parent)home.parent.insertBefore(screenStage,home.next);else home.parent.append(screenStage)}
 const screenAudioBadge=document.createElement('span');screenAudioBadge.className='screen-audio-badge';screenStage.appendChild(screenAudioBadge);const syncScreenAudioBadge=()=>{const base=screenStatus.textContent||'Sharing';screenAudioBadge.textContent=lastShareAudioDiag?base+' · '+lastShareAudioDiag:base;screenAudioBadge.title=lastShareAudioDiag||base;screenAudioBadge.hidden=!screenExpanded};new MutationObserver(syncScreenAudioBadge).observe(screenStatus,{childList:true,characterData:true,subtree:true});
 function screenIsActive(){return !screenPreview.hidden||!remoteScreen.hidden}
 function setRemoteScreenWatching(watching){const next=watching===true;if(remoteScreenWatchAnnounced===next)return;remoteScreenWatchAnnounced=next;try{send({t:'screen-watch',active:next})}catch{}}
@@ -4651,19 +4713,22 @@ function updateScreenLayout(){
   localShareBadge.hidden=!hasLocal;remoteShareBadge.hidden=!hasRemote;localScreenTile.hidden=!screenExpanded||!hasLocal||focusedScreen!=='local';remoteScreenTile.hidden=!screenExpanded||!hasRemote||focusedScreen!=='remote'||remoteScreenSuppressed;screenViewBar.hidden=!screenExpanded;screenViewBar.querySelector('[data-screen-volume]').hidden=focusedScreen!=='remote';fsBtn.textContent=fullscreen?'✕':'⛶';fsBtn.title=fullscreen?'Exit fullscreen':'Fullscreen';syncScreenPlayback();syncScreenAudioBadge();renderDmVoiceUI();
 }
 function returnToSharePreview(){if(focusedScreen==='remote')setRemoteScreenWatching(false);screenExpanded=false;updateScreenLayout()}
-function exitShareFullscreen({collapse=false}={}){nativeShareFullscreen=false;screenStage.classList.remove('fs');document.body.classList.remove('screen-fullscreen');try{if(document.fullscreenElement===screenStage)document.exitFullscreen().catch(()=>{})}catch{}if(collapse)screenExpanded=false;updateScreenLayout()}
+function exitShareFullscreen({collapse=false}={}){nativeShareFullscreen=false;screenStage.classList.remove('fs');document.body.classList.remove('screen-fullscreen');unmountShareStage();try{if(document.fullscreenElement===screenStage)document.exitFullscreen().catch(()=>{})}catch{}if(collapse)screenExpanded=false;updateScreenLayout()}
 async function toggleRemoteFs(){const target=focusedScreen==='local'?screenPreview:remoteScreen;if(screenStage.classList.contains('fs')||document.fullscreenElement===screenStage){exitShareFullscreen();return}if(!screenExpanded||target.hidden)return;
   // Fullscreen the stage, not the <video>.  A video-only request is routinely
   // rejected by Electron's compositor and, when accepted, leaves the call
   // container's insets around it.  The stage owns the selected tile and its
   // controls, so it can fill the physical display reliably.
+  // The call card isolates and clips fixed descendants, so the stage has to
+  // leave that card before it can cover the rail, the chat, and the window.
   // Apply the viewport stage synchronously. Electron may resolve or reject the
   // native fullscreen request after a compositor frame; waiting for that event
   // previously left the share at its card size on both Linux and Windows.
+  mountShareStageFullscreen();
   nativeShareFullscreen=true;screenStage.classList.add('fs');document.body.classList.add('screen-fullscreen');
   try{if(!screenStage.requestFullscreen)throw new Error('stage fullscreen unavailable');await screenStage.requestFullscreen()}catch{}updateScreenLayout()}
 remoteScreenTile.addEventListener('contextmenu',event=>showShareContextMenu(event,{label:'Friend’s stream',volume:true,stopWatching:stopWatchingRemoteShare}));
 screenViewBar.onclick=event=>{if(event.target.closest('[data-screen-return]'))returnToSharePreview();else if(event.target.closest('[data-screen-volume]'))showShareContextMenu(event,{label:'Friend’s stream',volume:true,stopWatching:stopWatchingRemoteShare});else if(event.target.closest('[data-screen-fullscreen]'))toggleRemoteFs()};
 const screenLayoutObserver=new MutationObserver(updateScreenLayout);screenLayoutObserver.observe(screenPreview,{attributes:true,attributeFilter:['hidden']});screenLayoutObserver.observe(remoteScreen,{attributes:true,attributeFilter:['hidden']});updateScreenLayout();
 document.addEventListener('visibilitychange',resumeScreenPlayback);window.addEventListener('focus',resumeScreenPlayback);window.addEventListener('pageshow',resumeScreenPlayback);
-document.addEventListener('fullscreenchange',()=>{const is=document.fullscreenElement===screenStage;document.body.classList.toggle('screen-fullscreen',is);if(!is)screenStage.classList.remove('fs');updateScreenLayout()});document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if(!shareContextMenu.hidden){hideShareContextMenu();return}if(document.fullscreenElement===screenStage||screenStage.classList.contains('fs'))exitShareFullscreen();else if(screenExpanded)returnToSharePreview()});
+document.addEventListener('fullscreenchange',()=>{const native=document.fullscreenElement===screenStage;if(native)document.body.classList.add('screen-fullscreen');else if(!nativeShareFullscreen){document.body.classList.remove('screen-fullscreen');screenStage.classList.remove('fs');unmountShareStage()}updateScreenLayout()});document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if(!shareContextMenu.hidden){hideShareContextMenu();return}if(document.fullscreenElement===screenStage||screenStage.classList.contains('fs'))exitShareFullscreen();else if(screenExpanded)returnToSharePreview()});
