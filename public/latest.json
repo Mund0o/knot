@@ -1,11 +1,11 @@
 {
-  "version": "1.1.116",
-  "notes": "Voice calls connect again. The public call description no longer contains a blank line that Chromium rejected.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.116/pair-p2p-1.1.116.tar.gz",
-  "linuxSha256": "c70f2f56ba17477ae70c82db3b23f16dd18879da86de442f8fe039c43c9700a9",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.116/Knot-1.1.116.AppImage",
-  "linuxAppImageSha256": "e19f0f09d449390ae7a9f8e460d8d1c68a2e132377078497b1c17866d7b88992",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.116/Knot.Setup.1.1.116.exe",
-  "winSha256": "936fa10914d6c4110a04986a3f3f0bb4b73b855f1b1026ad2957f3c6e5c2d6e6",
-  "signature": "YTzlqxPCpH8fE1NloWU3hy8LFihuj8rfOSi8mp2ch3LtW3U7o1iHF0jSp/HydNXtNyukGBQ1FiDpm9jDnBOMCA=="
+  "version": "1.1.117",
+  "notes": "A Windows screen share now shows and plays on Linux. Fullscreen covers the window. Starting a share no longer blasts your ears, and computer audio no longer sounds robotic.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.117/pair-p2p-1.1.117.tar.gz",
+  "linuxSha256": "b30cb06f9d2c79984152a93bf687bc1f0ebbc3cf81cf85ee270f73763ede59e6",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.117/Knot-1.1.117.AppImage",
+  "linuxAppImageSha256": "af7cbbbb7d9cc49bd28f0c8a1c809f08b69eec64a32dcc1085661dbdfde5f559",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.117/Knot.Setup.1.1.117.exe",
+  "winSha256": "de4e874897bf584824b45f06a7e72744c7d5f832b3c6b9e7cb2cc5276121328a",
+  "signature": "Iaqn5y6NXmvFw/b+ktrcwDtKkuUbrGAApgCW8p+EovQlQged7U2wYW48QUs4z1oJf51HzGxlWPpLYg3pOT4FBg=="
 }
