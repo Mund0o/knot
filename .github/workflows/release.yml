@@ -84,7 +84,23 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm version ${{ needs.version.outputs.version }} --no-git-tag-version
+      # NVIDIA users decode shared screens on the GPU through this bundled
+      # nvidia-vaapi-driver (resources/nvidia-vaapi).
+      - name: Build the bundled NVIDIA VA-API driver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build libva-dev libdrm-dev libegl-dev
+          scripts/build-nvidia-vaapi.sh
       - run: npm run dist -- --publish never
+        env:
+          KNOT_REQUIRE_NVIDIA_VAAPI: '1'
+      - name: Check both Linux packages carry the NVIDIA driver
+        run: |
+          tar -tzf dist/pair-p2p-*.tar.gz | grep -q '/resources/nvidia-vaapi/nvidia_drv_video\.so$'
+          appimage=$(ls dist/Knot-*.AppImage)
+          chmod +x "$appimage"
+          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
+          test -s "$RUNNER_TEMP/squashfs-root/resources/nvidia-vaapi/nvidia_drv_video.so"
       - uses: actions/upload-artifact@v4
         with:
           name: release-linux

@@ -103,7 +103,13 @@
       "executableArgs": [
         "--ozone-platform=x11"
       ],
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "extraResources": [
+        {
+          "from": "vendor/nvidia-vaapi",
+          "to": "nvidia-vaapi"
+        }
+      ]
     },
     "win": {
       "target": [

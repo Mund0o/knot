@@ -21,3 +21,4 @@ dist-emoji-catalog/
 .publish-stage-*/
 .publish-backup-*/
 /build*.log
+/vendor/

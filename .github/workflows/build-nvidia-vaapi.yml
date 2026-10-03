@@ -1,0 +1,37 @@
+name: Build NVIDIA VA-API driver
+
+# Builds the nvidia-vaapi-driver that Knot's Linux packages carry, on the same
+# Ubuntu release as the release job, so a change to the pinned driver or its
+# build is proven before a release depends on it.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/build-nvidia-vaapi.sh'
+      - '.github/workflows/build-nvidia-vaapi.yml'
+  push:
+    paths:
+      - 'scripts/build-nvidia-vaapi.sh'
+      - '.github/workflows/build-nvidia-vaapi.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends meson ninja-build libva-dev libdrm-dev libegl-dev
+      - run: scripts/build-nvidia-vaapi.sh
+      - name: Load the driver with every symbol resolved
+        run: python3 -c "import ctypes; ctypes.CDLL('vendor/nvidia-vaapi/nvidia_drv_video.so').__vaDriverInit_1_0"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-vaapi
+          path: vendor/nvidia-vaapi
+          if-no-files-found: error
