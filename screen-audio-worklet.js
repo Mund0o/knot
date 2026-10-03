@@ -1,9 +1,17 @@
+// Capture is already clamped to full scale upstream. The previous soft-knee
+// shaper compressed everything above half scale (full scale played at ~0.75),
+// audibly flattening loud music and games. Pass samples through unchanged.
 function shapeShareSample(value) {
-  const abs = Math.abs(value);
-  if (!(abs > 0.5)) return Number.isFinite(value) ? value : 0;
-  const sign = value < 0 ? -1 : 1;
-  return sign * (0.5 + (1 - Math.exp(-(abs - 0.5) * 2)) * 0.39);
+  return Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
 }
+
+// Jitter budget at 48 kHz. IPC and render stalls routinely exceed 40 ms while a
+// 4K stream is being encoded; the old 40/80/160 ms limits dropped or replayed
+// audio at every stall, which the viewer heard as choking and robotic sound.
+const PREROLL_FRAMES = 2880;   // 60 ms before playback starts or resumes
+const TRIM_TARGET_FRAMES = 5760;   // trim back to 120 ms
+const TRIM_ABOVE_FRAMES = 11520;   // when more than 240 ms is queued
+const MAX_CHUNK_FRAMES = 9600;     // keep the newest 200 ms of one huge delivery
 
 class KnotScreenAudioProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -15,7 +23,7 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     // Fade in over ~40 ms at 48 kHz every time playback starts or resumes
     // after an underrun. Entering at full amplitude made any residual capture
     // discontinuity audible as a click or pop in the shared computer sound.
-    this.fadeInFrames = 1920;
+    this.fadeInFrames = 960;
     this.fadedIn = this.fadeInFrames;
     this.recentPeak = 0;
     this.playedFrames = 0;
@@ -23,7 +31,7 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     this.port.onmessage = event => {
       if (event.data && event.data.type === 'fade') {
         this.fadedIn = 0;
-        if (this.frames >= 1920) this.started = true;
+        if (this.frames >= PREROLL_FRAMES) this.started = true;
         return;
       }
       let samples = event.data instanceof Float32Array ? event.data : new Float32Array(event.data || 0);
@@ -32,17 +40,17 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
       // A single delayed IPC delivery can itself be larger than the whole
       // jitter budget. Keep its newest 80 ms rather than dropping the entire
       // chunk or playing its stale beginning.
-      if (frames > 3840) {
-        const droppedFrames = frames - 3840;
-        samples = samples.subarray((frames - 3840) * 2);
-        frames = 3840;
+      if (frames > MAX_CHUNK_FRAMES) {
+        const droppedFrames = frames - MAX_CHUNK_FRAMES;
+        samples = samples.subarray((frames - MAX_CHUNK_FRAMES) * 2);
+        frames = MAX_CHUNK_FRAMES;
         this.port.postMessage({ type: 'trim', droppedFrames, bufferedFrames: frames });
       }
       this.queue.push(samples);
       this.frames += frames;
-      // Keep 40–160 ms of stereo audio. If IPC or rendering stalls, trim back
-      // to about 80 ms instead of replaying seconds of stale desktop sound.
-      if (this.frames > 7680) this.trimTo(3840);
+      // Keep 60–240 ms of stereo audio. If IPC or rendering stalls, trim back
+      // to about 120 ms instead of replaying seconds of stale desktop sound.
+      if (this.frames > TRIM_ABOVE_FRAMES) this.trimTo(TRIM_TARGET_FRAMES);
     };
   }
 
@@ -70,7 +78,7 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
     left.fill(0);
     right.fill(0);
     if (!this.started) {
-      if (this.frames < 1920) return true;
+      if (this.frames < PREROLL_FRAMES) return true;
       this.started = true;
       this.fadedIn = 0;
     }
@@ -82,7 +90,7 @@ class KnotScreenAudioProcessor extends AudioWorkletProcessor {
         // Count the missing frames only. Adding the whole quantum made a
         // one-sample shortfall look like an 80 ms dropout.
         this.starved += left.length - frame;
-        if (this.starved > sampleRate * 0.08) {
+        if (this.starved > sampleRate * 0.15) {
           this.started = false;
           this.starved = 0;
           this.fadedIn = 0;

@@ -1084,3 +1084,12 @@ video.awaiting-frame,video.native-screen-waiting{opacity:0!important;background:
 html[data-theme] .screen-tile,html[data-theme] .screen-tile video,html[data-theme] .native-screen-canvas,html[data-theme] .native-screen-host,html[data-theme] .remote-screen,html[data-theme] .screen-preview,html[data-theme] #remoteScreen,html[data-theme] #screenPreview,html[data-theme] .server-stage-screens,html[data-theme] .server-stage-screens video,html[data-theme] #serverVoiceScreens,html[data-theme] #serverVoiceScreens video,html[data-theme] #serverVoiceScreenPreview{background:#050609!important;color-scheme:dark}
 @media(max-width:1280px){.screen-tile,.screen-tile video,.native-screen-canvas,.native-screen-host,.remote-screen,.screen-preview,#remoteScreen,#screenPreview,.server-stage-screens,.server-stage-screens video,#serverVoiceScreens video{background:#050609!important;color-scheme:dark}}
 @media(max-width:620px){.screen-tile,.screen-tile video,.native-screen-canvas,.native-screen-host,.remote-screen,.screen-preview,#remoteScreen,#screenPreview,.server-stage-screens,.server-stage-screens video,#serverVoiceScreens video{background:#050609!important;color-scheme:dark}}
+
+/* Watch Together inside a server voice stage. The stage heading is absolutely
+   positioned over the top 55px, so the in-flow YouTube link bar was drawn
+   underneath/over "Voice Connected", the channel name and timer. Reserve the
+   heading's band and let the stage grow with the panel. */
+.server-voice-stage:has(.watch-mount .watch-together:not([hidden])){flex:0 0 auto;max-height:none}
+.server-voice-stage .watch-mount:has(.watch-together:not([hidden])){position:relative;z-index:6;padding:58px 16px 0}
+.server-voice-stage .watch-mount:has(.watch-together:not([hidden]))+.server-stage-members{height:auto;min-height:330px;padding-top:18px}
+.server-voice-stage .watch-bar{pointer-events:auto}

@@ -1,3 +1,9 @@
+// Presence accuracy: a phone/laptop that sleeps or loses its network leaves a
+// half-open WebSocket that Cloudflare may not report for minutes. Clients ping
+// every ~25 s; a heartbeating socket that is silent for 80 s is closed, which
+// publishes the offline presence. Clients that never ping are left alone.
+const HEARTBEAT_IDLE_MS = 80 * 1000;
+const HEARTBEAT_SWEEP_MS = 30 * 1000;
 const MAX_ROOM_PEERS = 2;
 const MAX_SIGNAL_BYTES = 2 * 1024 * 1024;
 const MAX_DIRECTORY_BYTES = 768 * 1024;
@@ -482,8 +488,17 @@ export class PairDirectory {
     const attachment = socket.deserializeAttachment() || {};
     if (typeof message !== 'string') return socket.close(1003, 'control messages must be text');
     const bytes = new TextEncoder().encode(message).byteLength;
+    attachment.lastSeenAt = Date.now();
     if (bytes > MAX_DIRECTORY_BYTES || !this.withinRate(socket, attachment, bytes)) return;
     let value; try { value = JSON.parse(message); } catch { return; }
+    if (value?.type === 'ping') {
+      if (attachment.authed) {
+        if (!attachment.heartbeat) { attachment.heartbeat = true; socket.serializeAttachment(attachment); }
+        this.safeSend(socket, '{"type":"pong"}');
+        await this.armHeartbeatSweep();
+      }
+      return;
+    }
     if (!attachment.authed) return this.authenticate(socket, attachment, value);
     const user = await this.user(attachment.userId);
     if (!user) return socket.close(1008, 'account missing');
@@ -1266,6 +1281,28 @@ export class PairDirectory {
   requireGroupOwner(group, userId) { this.requireGroupMember(group, userId); if (group.owner !== userId) throw new Error('only the group owner can do that'); }
   safeSend(socket, message) { try { socket.send(message);return true; } catch { return false; } }
   withinRate(socket, attachment, bytes) { const now = Date.now(); if (!attachment.rateAt || now - attachment.rateAt >= 1000) { attachment.rateAt = now; attachment.rateBytes = 0;attachment.rateMessages = 0; } attachment.rateBytes = (attachment.rateBytes || 0) + bytes;attachment.rateMessages = (attachment.rateMessages || 0) + 1; socket.serializeAttachment(attachment); if (attachment.rateBytes <= MAX_SOCKET_BYTES_PER_SECOND && attachment.rateMessages <= MAX_SOCKET_MESSAGES_PER_SECOND) return true; socket.close(1008, 'rate limit'); return false; }
-  async webSocketClose(socket) { const attachment=socket.deserializeAttachment()||{},userId=attachment.userId;if(attachment.sfuPublisher)try{await this.closeSfuPublisher(socket,attachment,{id:userId})}catch{}if(attachment.voiceServerId){const entity=attachment.voiceScope==='group-dm'?await this.groupDm(attachment.voiceServerId):await this.server(attachment.voiceServerId);if(entity)this.broadcastVoiceStates(entity)}if(userId)await this.broadcastPresence(userId,[userId],socket); }
+  async armHeartbeatSweep() { try { if (await this.state.storage.getAlarm() == null) await this.state.storage.setAlarm(Date.now() + HEARTBEAT_SWEEP_MS); } catch {} }
+  async alarm() {
+    const now = Date.now(); let watching = false;
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() || {};
+      if (socket.readyState !== 1 || !attachment.authed || !attachment.heartbeat) continue;
+      if (now - (Number(attachment.lastSeenAt) || 0) > HEARTBEAT_IDLE_MS) {
+        try { socket.close(1001, 'heartbeat timeout'); } catch {}
+        try { await this.webSocketClose(socket); } catch {}
+      } else watching = true;
+    }
+    if (watching) await this.state.storage.setAlarm(Date.now() + HEARTBEAT_SWEEP_MS);
+  }
+  async webSocketClose(socket) {
+    const attachment=socket.deserializeAttachment()||{},userId=attachment.userId;
+    // Presence must be published even if voice/SFU cleanup throws; otherwise a
+    // user whose cleanup failed stayed "online" for everyone until a snapshot.
+    try { if(attachment.sfuPublisher)await this.closeSfuPublisher(socket,attachment,{id:userId}); } catch {}
+    try {
+      if(attachment.voiceServerId){const entity=attachment.voiceScope==='group-dm'?await this.groupDm(attachment.voiceServerId):await this.server(attachment.voiceServerId);if(entity)this.broadcastVoiceStates(entity)}
+    } catch {}
+    if(userId)await this.broadcastPresence(userId,[userId],socket);
+  }
   async webSocketError(socket) { return this.webSocketClose(socket); }
 }

@@ -15,8 +15,10 @@ let directoryTrustedConnection=false,recordConversationMessage=()=>{},directoryP
 // Directory/call state must exist before any asynchronous settings/profile
 // restoration can render the UI. Declaring it later created a startup TDZ race
 // that only showed up reliably when two complete app windows booted together.
+let directoryHeartbeatTimer=null,directoryLastHeard=0,directoryHeartbeatTick=0,directoryHeartbeatCount=0;
 let directorySocket=null,directoryReconnect=null,directoryBackoff=1000,directoryConnectGeneration=0,directoryStateRestored=false,directoryRevision=0,directoryEmptySnapshotRetry=false,directoryFeatures={groupSfu:false,encryptedFileRelay:false},accountAuthGeneration=0,directoryUserId='',directoryToken='',directoryAccountName='',transientDirectorySession=false,pendingAccountRemember=true,directorySnapshot={friends:[],servers:[],groupDms:[],members:{},voiceStates:{}},activePeerId='',dmPeerId='',dmCallPeerId='',activeServerId='',activeGroupDmId='',activeChannelId='',activeConversationKey='',historyRendering=false,dmConnectingPeerId='',pendingVoiceStartPeerId='',conversationScrollEpoch=0,conversationScrollObserver=null,conversationScrollTimer=null,conversationScrollLoadListener=null;
 let conversationHistories={},conversationRenderState=null,conversationLoadGeneration=0,serverVoiceStream=null,serverVoiceRawStream=null,serverVoiceNoisePipeline=null,serverVoiceAttempt=null,serverVoiceStarting=false,serverVoiceGen=0,serverScreenStream=null,serverNativeScreenSession=null,serverNativeLocalPlayer=null,serverNativeScreenAudioStream=null,serverNativeScreenInit=null,serverNativeFallbackInFlight=false,serverVoiceMuted=false,serverScreenStarting=false,serverScreenGen=0,joinedVoiceServerId='',joinedVoiceChannelId='',joinedVoiceScope='',joinedVoiceAt=0,voiceElapsedTimer=null,draggedChannelId='';const serverPeers=new Map(),conversationDrafts=new Map(),HISTORY_PAGE_SIZE=80,HISTORY_DOM_LIMIT=120,HISTORY_CACHE_LIMIT=2000;
+let endingCall=null,pushToTalkCapturing=false;
 let serverSilentAudioCtx=null,serverSilentAudioStream=null,serverSilentScreenAudioTrack=null;
 let groupSfuPilotEnabled=false,groupSfuPilot=null,groupSfuStarting=false;const groupSfuPending=new Map(),groupSfuAudios=new Map();
 let encryptedFileRelayEnabled=false,fileRelayBatchActive=false;const fileRelayPending=new Map(),fileRelayReceiving=new Set();
@@ -1021,7 +1023,7 @@ function setupPeer(){
       // after its video track is replaced, leaving Windows standard shares
       // visibly live but silent. The dedicated element gives standard and AV1
       // shares the same reliable playback, output-device, and volume route.
-      const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio._knotShareAudioTrack=e.track;audio.muted=true;audio.volume=0;e.track.enabled=true;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
+      holdScreenAudioJitter(e.receiver);const audio=ensureNativeRemoteAudio();audio.srcObject=stream;audio._knotShareAudioTrack=e.track;audio.muted=true;audio.volume=0;e.track.enabled=true;e.track.onended=()=>{if(audio.srcObject===stream){audio.pause();audio.srcObject=null}};
       applyMediaElementOutput(audio).catch(()=>{});
       const play=()=>{if(!remoteScreenExpected||remoteScreenSuppressed||audio.srcObject!==stream)return;e.track.enabled=true;startRemoteShareElement(audio,{forceFade:audio.volume<=.05})};
       updateScreenLayout();play();
@@ -1743,6 +1745,9 @@ const THEME_CONCEPTS=[
   ['dune','Dune','Desert dark','Warm oval desert stage'],
   ['zenith','Zenith','Quiet ink','Restrained hairline discs'],
   ['pulp','Pulp','Dark comic','Ink and cream speech balloons'],
+  ['pebble','Pebble','Messenger','Light messenger bubbles with a centered title'],
+  ['drift','Drift','Chat first','Full-bleed chat with a hover drawer'],
+  ['marquee','Marquee','Stories strip','Conversations as a top strip of avatars'],
 ];
 const themeGrid=document.querySelector('.theme-grid');
 for(const [theme,name,summary,title] of THEME_CONCEPTS){
@@ -1940,7 +1945,12 @@ async function signInKnotAccount(usernameElement,passwordElement,status){
 async function maybeShowAccountOnboarding(){const dialog=$('#accountDialog');if(!window.pairEnv?.isApp||!dialog||dialog.open||directoryAccountName||(await ss('accountOnboardingDismissed'))==='yes')return;dialog.showModal();setTimeout(()=>$('#authUsername')?.focus(),0)}
 function installAccountOnboarding(){const dialog=$('#accountDialog'),signup=$('#authSignupTab'),signin=$('#authSigninTab'),submit=$('#authSubmit'),username=$('#authUsername'),password=$('#authPassword'),status=$('#authStatus'),remember=$('#authRemember');if(!dialog)return;let mode='signup';if(remember)remember.checked=true;const paint=next=>{mode=next==='signin'?'signin':'signup';submit.disabled=false;signup.classList.toggle('active',mode==='signup');signin.classList.toggle('active',mode==='signin');signup.setAttribute('aria-selected',String(mode==='signup'));signin.setAttribute('aria-selected',String(mode==='signin'));password.autocomplete=mode==='signup'?'new-password':'current-password';submit.textContent=mode==='signup'?'Create secure account':'Sign in securely';status.textContent=mode==='signup'?'Usernames are unique. The 600,000-round password protection runs on this device; only a derived verifier crosses WSS/TLS.':'Sign in to restore the same profile, identity, friends, and servers on this computer. Your password never leaves this device.';$('#authContinueLocal').textContent='Continue with a device-only identity'};signup.onclick=()=>paint('signup');signin.onclick=()=>paint('signin');submit.onclick=()=>mode==='signup'?createKnotAccount(username,password,status):signInKnotAccount(username,password,status);password.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();submit.click()}});$('#authContinueLocal').onclick=async()=>{if(directoryAccountName&&!/^[a-f0-9]{64}$/.test(directoryToken)){status.textContent='Sign in to restore this account. Continuing locally would create a new device identity.';paint('signin');return}const savedId=await ss('directoryUserId');let storedToken=false;try{storedToken=!!await ssHas('directoryToken')}catch{}if((/^[a-f0-9]{32}$/.test(savedId||'')||storedToken)&&!/^[a-f0-9]{64}$/.test(directoryToken)){status.textContent='Sign in to restore this account. Continuing locally would create a new device identity.';paint('signin');return}if(!directoryAccountName)await ssSet('accountOnboardingDismissed','yes');if(!/^[a-f0-9]{64}$/.test(directoryToken)){directoryUserId=clientHex(16);directoryToken=clientHex(32);await ssSet('directoryUserId',directoryUserId);await ssSet('directoryToken',directoryToken)}dialog.close();void connectDirectory()};dialog.addEventListener('cancel',event=>{if(directoryAccountName&&!/^[a-f0-9]{64}$/.test(directoryToken))event.preventDefault();else void ssSet('accountOnboardingDismissed','yes')});paint('signup')}
 function directoryUser(id){return (directorySnapshot.friends||[]).find(friend=>friend.id===id)||directorySnapshot.members?.[id]||(id===directoryUserId?directorySnapshot.self:null)||null}
-function friendOnLan(id){return lanNeighbors.get(id)||null}
+// Beacons arrive every 2 s. A neighbor that has been silent longer than this has
+// left the network; without expiry a friend seen once showed "On this Wi-Fi" forever.
+const LAN_NEIGHBOR_FRESH_MS=10000;
+function lanNeighborFresh(neighbor){return !!neighbor&&(Date.now()-(Number(neighbor.at)||0)<LAN_NEIGHBOR_FRESH_MS||(!!neighbor.socketId&&lanSockets.has(neighbor.socketId)))}
+function friendOnLan(id){const neighbor=lanNeighbors.get(id);return lanNeighborFresh(neighbor)?neighbor:null}
+setInterval(()=>{let removed=false;for(const [id,neighbor] of lanNeighbors)if(!lanNeighborFresh(neighbor)){lanNeighbors.delete(id);removed=true}if(removed){try{renderFriends();syncActiveDmTransport();refreshDirectoryState()}catch{}}},5000);
 function friendReachable(id){const friend=directoryUser(id);return !!(friend&&(friend.online||friendOnLan(id)))}
 function directoryDisplayUser(id,{online=false}={}){return directoryUser(id)||(/^[a-f0-9]{32}$/.test(String(id||''))?{id,name:'Knot member',username:'',image:'',frame:normalizeFrame(),deviceKey:null,online}:null)}
 function groupDm(id){return (directorySnapshot.groupDms||[]).find(group=>group.id===id)||null}
@@ -2118,6 +2128,7 @@ async function directoryAvatar({includeHidden=false}={}){
 async function accountRecoveryProfile(){await profileSettingsReady;return{name:profileName,image:await directoryAvatar({includeHidden:true}),frame:normalizeFrame(profileFrame)}}
 async function directoryProfile(){const accountProfile=await accountRecoveryProfile(),image=profileSharing?accountProfile.image:'';return {name:profileName,image,frame:normalizeFrame(profileFrame),deviceKey:await devicePublicKey(),accountProfile:{name:accountProfile.name,frame:accountProfile.frame,imageFromPublic:profileSharing,...(!profileSharing?{image:accountProfile.image}:{})}}}
 directoryProfilePush=()=>{const generation=++directoryProfileGeneration;clearTimeout(directoryProfileTimer);directoryProfileTimer=setTimeout(async()=>{try{await profileSettingsReady;const profile=await directoryProfile();if(generation===directoryProfileGeneration)directorySend({type:'update-profile',...profile})}catch(error){console.warn('directory profile',error)}},100)};
+function refreshDirectoryState(){const up=directorySocket?.readyState===WebSocket.OPEN;setDirectoryState(up,up?'Online':'Offline — retrying')}
 function setDirectoryState(online,text){const lan=lanNeighbors.size,presence=$('#directoryPresence');presence?.classList.toggle('online',online||lan>0);presence?.classList.toggle('lan',!online&&lan>0);if($('#directoryStatus'))$('#directoryStatus').textContent=!online&&lan?((text&&text!=='Online'?text:'House is local')+' · '+lan+' on this Wi-Fi'):text;}
 function storeConversationEntry(key,entry,{persist=true}={}){
   if(!key||!entry||typeof entry.text!=='string')return false;const list=conversationHistories[key]||(conversationHistories[key]=[]);if(entry.id&&list.some(item=>item.id===entry.id))return false;list.push(entry);list.sort((a,b)=>(Number(a.time)||0)-(Number(b.time)||0)||String(a.id||'').localeCompare(String(b.id||'')));if(list.length>HISTORY_CACHE_LIMIT){const removed=list.length-HISTORY_CACHE_LIMIT;list.splice(0,removed);if(conversationRenderState?.key===key){conversationRenderState.first=Math.max(0,conversationRenderState.first-removed);conversationRenderState.last=Math.max(0,conversationRenderState.last-removed)}}
@@ -2229,11 +2240,14 @@ function persistDirectoryRoster(){
 function restoreDirectoryRosterCache(raw){
   try{
     const cached=typeof raw==='string'?JSON.parse(raw):raw;if(!cached||typeof cached!=='object')return false;
-    const friends=Array.isArray(cached.friends)?cached.friends.map(compactDirectoryUser).filter(Boolean):[];
+    // A cached roster is only a name/avatar cache. Presence from a previous run is
+    // never true now, so friends restore as offline until the server says otherwise.
+    const offline=user=>user?{...user,online:false}:user;
+    const friends=Array.isArray(cached.friends)?cached.friends.map(compactDirectoryUser).filter(Boolean).map(offline):[];
     const servers=Array.isArray(cached.servers)?cached.servers.map(compactDirectoryEntity).filter(Boolean):[];
     const groupDms=Array.isArray(cached.groupDms)?cached.groupDms.map(compactDirectoryEntity).filter(Boolean):[];
     if(!friends.length&&!servers.length&&!groupDms.length)return false;
-    directorySnapshot={...directorySnapshot,self:compactDirectoryUser(cached.self)||directorySnapshot.self,friends,servers,groupDms};
+    directorySnapshot={...directorySnapshot,self:offline(compactDirectoryUser(cached.self))||directorySnapshot.self,friends,servers,groupDms};
     return true;
   }catch{return false}
 }
@@ -2459,6 +2473,7 @@ function beginServerNativeScreen(peerId,state,meta,channel){
   let fallbackRequested=false;const fallback=()=>{if(fallbackRequested)return;fallbackRequested=true;const fire=()=>{try{if(channel.readyState==='open')channel.send(JSON.stringify({t:'native-screen-fallback',serverId:state.context.serverId}))}catch{}try{if(state.channel?.readyState==='open')state.channel.send(JSON.stringify({t:'native-screen-fallback',serverId:state.context.serverId}))}catch{}};fire();[400,1200,2500].forEach(delay=>setTimeout(()=>{if(state.nativeScreenPlayer)fire()},delay))};try{state.nativeScreenPlayer=createNativeScreenPlayer(video,meta.codec||'AV1',fallback,meta)}catch(error){fallback();clearServerNativeScreen(state,{keepChannel:true,keepAudio:true});setServerStatus(error.message);return false}prepareShareSurface(video);channel._nativeReceive=nativeScreenReceiveState(state.nativeScreenPlayer,meta,fallback);try{state.nativeBufferingStop?.()}catch{}state.nativeBufferingStop=monitorNativeScreenBuffering(channel,{isActive:()=>document.visibilityState==='visible'&&!!state.screen&&!state.screen.hidden});drainNativeScreenPreMeta(channel);ackReady();bindServerReservedScreenAudio(peerId,state);if(!serverFocusedShareId)watchServerShare(peerId);renderServerVoiceUI();return true
 }
 function addServerNativeScreenAudio(state,track,stream){
+  holdScreenAudioJitter(state?.pc?.getReceivers?.().find(item=>item.track===track));
   const selected=serverFocusedShareId===stream._knotPeerId||serverFocusedShareId===state.screen?.dataset.peerId;
   if(state.screenAudio?.srcObject?.getAudioTracks?.()[0]===track||state.screenAudio?.srcObject===stream){state.nativeScreenAudioExpected=false;if(!selected)state.screenAudio.muted=true;else{state.screenAudio.muted=true;state.screenAudio.play().then(()=>{if(state.screenAudio&&(state.screenAudio.srcObject===stream||state.screenAudio.srcObject?.getAudioTracks?.()[0]===track)){state.screenAudio.muted=false;if(state.screenAudio.volume<=.05){state.screenAudio.volume=0;fadeRemoteShareAudio(state.screenAudio,{force:true})}}}).catch(()=>{})}track.onunmute=()=>{if(state.screenAudio){state.screenAudio.srcObject=new MediaStream([track]);state.screenAudio.muted=true;state.screenAudio.play().then(()=>{if(state.screenAudio)state.screenAudio.muted=false}).catch(()=>{})}};renderServerShareExperience();return}
   if(state.screenAudio){try{state.screenAudio.remove()}catch{}}const audio=document.createElement('audio');audio.autoplay=true;audio.hidden=true;audio.srcObject=stream;audio.volume=selected?0:remoteScreen.volume;audio.muted=true;document.body.append(audio);state.screenAudio=audio;state.nativeScreenAudioExpected=false;applyMediaElementOutput(audio).catch(()=>{});if(selected)audio.play().then(()=>{if(state.screenAudio!==audio)return;audio.muted=false;fadeRemoteShareAudio(audio,{force:true})}).catch(()=>{});track.onended=()=>{if(state.screenAudio===audio){audio.remove();state.screenAudio=null}};renderServerShareExperience()
@@ -2702,9 +2717,9 @@ async function connectDirectory(){
   setDirectoryState(false,'Connecting…');const socket=new WebSocket(directoryAddress());directorySocket=socket;
   socket.onopen=async()=>{if(directorySocket!==socket)return;directoryBackoff=1000;try{const profile=await directoryProfile();if(directorySocket===socket&&socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'hello',directoryVersion:2,userId:directoryUserId,token:directoryToken,...profile}))}catch(error){console.warn('directory profile',error);if(directorySocket===socket&&socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'hello',directoryVersion:2,userId:directoryUserId,token:directoryToken,name:profileName}))}};
   socket.onmessage=event=>{try{
-    if(directorySocket!==socket)return;
+    if(directorySocket!==socket)return;directoryLastHeard=Date.now();
     const value=JSON.parse(event.data),wireBytes=enc.encode(event.data).byteLength;if(value.type==='snapshot')recordMetric('directory.snapshot_bytes',wireBytes);else if(['profile-update','presence-update','entity-update','voice-states','directory-delta'].includes(value.type))recordMetric('directory.delta_bytes',wireBytes);
-    if(value.type==='authenticated'){directoryFeatures={groupSfu:value.features?.groupSfu===true,encryptedFileRelay:value.features?.encryptedFileRelay===true};syncGroupSfuSettingUi();syncFileRelaySettingUi();directoryAccountName=value.username||directoryAccountName;if(directoryAccountName){ssSet('directoryAccountName',directoryAccountName);const connectedMessage='Signed in as @'+directoryAccountName+'. Connected.';if($('#accountStatus'))$('#accountStatus').textContent=connectedMessage;if($('#authStatus'))$('#authStatus').textContent=connectedMessage}renderAccountSummary();setDirectoryState(true,'Online');directoryProfilePush();if(callActive)publishCallState(true);void maybeShowAccountOnboarding();void startLanHouse()}
+    if(value.type==='authenticated'){directoryFeatures={groupSfu:value.features?.groupSfu===true,encryptedFileRelay:value.features?.encryptedFileRelay===true};syncGroupSfuSettingUi();syncFileRelaySettingUi();directoryAccountName=value.username||directoryAccountName;if(directoryAccountName){ssSet('directoryAccountName',directoryAccountName);const connectedMessage='Signed in as @'+directoryAccountName+'. Connected.';if($('#accountStatus'))$('#accountStatus').textContent=connectedMessage;if($('#authStatus'))$('#authStatus').textContent=connectedMessage}renderAccountSummary();setDirectoryState(true,'Online');startDirectoryHeartbeat(socket);directoryProfilePush();if(callActive)publishCallState(true);void maybeShowAccountOnboarding();void startLanHouse()}
     else if(value.type==='account-session'){(async()=>{directoryAccountName=value.username||'';try{await persistAccountSession({username:directoryAccountName,remember:pendingAccountRemember})}catch(error){const message=error?.message||'Account created, but this device could not save the session. Sign in again — your photo stays here.';if($('#accountStatus'))$('#accountStatus').textContent=message;if($('#authStatus'))$('#authStatus').textContent=message;return}$('#accountPassword').value='';$('#accountStatus').textContent='Account created. You can now sign in on another operating system.';const authStatus=$('#authStatus'),submit=$('#authSubmit'),continueButton=$('#authContinueLocal');if(authStatus)authStatus.textContent='✓ You’re signed up as @'+directoryAccountName+'. Your account is ready.';if(submit)submit.disabled=true;if(continueButton)continueButton.textContent='Continue to Knot';renderAccountSummary()})()}
     else if(value.type==='snapshot')updateDirectorySnapshot(value);
     else if(value.type==='profile-update')applyDirectoryProfileUpdate(value);
@@ -2751,8 +2766,40 @@ async function connectDirectory(){
     else if(value.type==='peer-signal'&&['server','group-dm'].includes(value.context?.type))handleServerSignal(value).catch(error=>console.warn('peer signal',error))
     else if(value.type==='error'){const message=value.message||'Knot directory request failed',requestId=String(value.requestId||''),sfuPending=groupSfuPending.get(requestId),relayPending=fileRelayPending.get(requestId);if(sfuPending){groupSfuPending.delete(requestId);sfuPending.reject(new Error(message))}if(relayPending){fileRelayPending.delete(requestId);relayPending.reject(new Error(message))}if(value.action==='turn-credentials')turnCredentialPending?.reject(new Error(message));if(value.action==='create-account'){if($('#accountStatus'))$('#accountStatus').textContent=message;if($('#authStatus'))$('#authStatus').textContent=message}else pairHint.textContent=message;const dialog=$('#serverDialog');if(dialog?.open&&['create-server','redeem-invite'].includes(value.action)){pendingServerSelection=false;$('#serverDialogStatus').textContent=message;dialog.querySelectorAll('form button').forEach(button=>button.disabled=false)}const groupDialog=$('#groupDmDialog');if(groupDialog?.open&&['create-group-dm','add-group-member','update-group-dm','remove-group-member','leave-group-dm'].includes(value.action)){pendingGroupSelection=null;pendingGroupUpdateId='';$('#groupDmStatus').textContent=message;groupDialog.querySelectorAll('button,input').forEach(control=>control.disabled=false)}}
   }catch(error){console.warn('directory message',error)}};
-  socket.onclose=event=>{if(directorySocket!==socket)return;directorySocket=null;const disconnected=new Error('Knot signaling disconnected');for(const pending of groupSfuPending.values())pending.reject(disconnected);groupSfuPending.clear();for(const pending of fileRelayPending.values())pending.reject(disconnected);fileRelayPending.clear();if(event.code===1008&&/authenticat|account|credential|session/i.test(event.reason||'')&&!/too many account sessions/i.test(event.reason||'')){setDirectoryState(false,'Sign in required');const dialog=$('#accountDialog');if(dialog&&!dialog.open)dialog.showModal();$('#authSigninTab')?.click();if($('#authStatus'))$('#authStatus').textContent='Your saved session expired or was revoked. Sign in again — your photo and other settings stay on this device.';return}setDirectoryState(false,'Offline — retrying');directoryReconnect=setTimeout(()=>{if(!directorySocket)void connectDirectory()},directoryBackoff);directoryBackoff=Math.min(30000,directoryBackoff*2)};socket.onerror=()=>{if(directorySocket===socket)setDirectoryState(false,'Connection error')};
+  socket.onclose=event=>{if(directorySocket!==socket)return;directorySocket=null;stopDirectoryHeartbeat();markDirectoryPresenceUnknown();const disconnected=new Error('Knot signaling disconnected');for(const pending of groupSfuPending.values())pending.reject(disconnected);groupSfuPending.clear();for(const pending of fileRelayPending.values())pending.reject(disconnected);fileRelayPending.clear();if(event.code===1008&&/authenticat|account|credential|session/i.test(event.reason||'')&&!/too many account sessions/i.test(event.reason||'')){setDirectoryState(false,'Sign in required');const dialog=$('#accountDialog');if(dialog&&!dialog.open)dialog.showModal();$('#authSigninTab')?.click();if($('#authStatus'))$('#authStatus').textContent='Your saved session expired or was revoked. Sign in again — your photo and other settings stay on this device.';return}setDirectoryState(false,'Offline — retrying');directoryReconnect=setTimeout(()=>{if(!directorySocket)void connectDirectory()},directoryBackoff);directoryBackoff=Math.min(30000,directoryBackoff*2)};socket.onerror=()=>{if(directorySocket===socket)setDirectoryState(false,'Connection error')};
 }
+// --- Presence accuracy -------------------------------------------------------
+// Without the server, nobody's status is known. Showing the last-known "online"
+// for friends while we are disconnected (or after sleep) is how offline people
+// appeared online.
+function markDirectoryPresenceUnknown(){
+  const off=user=>user&&user.online?{...user,online:false}:user,members={};
+  for(const [id,user] of Object.entries(directorySnapshot.members||{}))members[id]=off(user);
+  directorySnapshot={...directorySnapshot,self:off(directorySnapshot.self),friends:(directorySnapshot.friends||[]).map(off),members};
+  try{renderFriends();if(activeServerId&&!activeGroupDmId)renderServerMembers();if(activePeerId)syncActiveDmTransport()}catch{}
+}
+function stopDirectoryHeartbeat(){clearInterval(directoryHeartbeatTimer);directoryHeartbeatTimer=null}
+// A socket can look open for minutes after sleep or a network drop. Tear it down
+// through the normal close path so presence is cleared and a reconnect starts.
+function forceDirectoryReconnect(socket,reason='heartbeat timeout'){
+  if(!socket||directorySocket!==socket)return;stopDirectoryHeartbeat();
+  const onclose=socket.onclose;socket.onclose=null;socket.onmessage=null;try{socket.close()}catch{}
+  clearTimeout(directoryReconnect);directoryBackoff=1000;onclose?.call(socket,{code:4000,reason});
+}
+function startDirectoryHeartbeat(socket){
+  stopDirectoryHeartbeat();directoryLastHeard=directoryHeartbeatTick=Date.now();directoryHeartbeatCount=0;
+  directoryHeartbeatTimer=setInterval(()=>{
+    if(directorySocket!==socket||socket.readyState!==WebSocket.OPEN){stopDirectoryHeartbeat();return}
+    const now=Date.now(),slept=now-directoryHeartbeatTick>60000;directoryHeartbeatTick=now;
+    if(slept||now-directoryLastHeard>70000)return forceDirectoryReconnect(socket,slept?'resumed from sleep':'heartbeat timeout');
+    try{socket.send('{"type":"ping"}')}catch{return forceDirectoryReconnect(socket,'send failed')}
+    // Self-heal any missed presence delta with a full roster every ~10 minutes.
+    if(++directoryHeartbeatCount%24===0&&!document.hidden)directorySend({type:'snapshot-request'});
+  },25000);
+}
+window.addEventListener('offline',()=>forceDirectoryReconnect(directorySocket,'network offline'));
+window.addEventListener('online',()=>{if(directorySocket?.readyState===WebSocket.OPEN)forceDirectoryReconnect(directorySocket,'network changed');else if(!directorySocket){clearTimeout(directoryReconnect);directoryBackoff=1000;void connectDirectory()}});
+document.addEventListener('visibilitychange',()=>{if(document.hidden||directorySocket?.readyState!==WebSocket.OPEN)return;if(Date.now()-directoryLastHeard>40000)try{directorySocket.send('{"type":"ping"}')}catch{forceDirectoryReconnect(directorySocket,'send failed')}});
 function installFriendNavigation(){const search=$('#friendSearch');search.oninput=renderFriends;search.onkeydown=event=>{if(event.key!=='Enter')return;const first=$('#friendList .friend-entry');if(first){event.preventDefault();first.click()}};$('#friendsHome').onclick=()=>{search.value='';activePeerId='';activeGroupDmId='';showFriends();showFriendsLanding();search.focus()};const clearVisibleUnread=()=>{if(document.visibilityState!=='visible'||!document.hasFocus())return;if(activeGroupDmId)clearDmUnread(activeGroupDmId);else if(activePeerId&&!activeServerId)clearDmUnread(activePeerId)};window.addEventListener('focus',clearVisibleUnread);document.addEventListener('visibilitychange',clearVisibleUnread)}
 function installChannelDialog(){const dialog=$('#channelDialog'),form=$('#channelForm'),input=$('#newChannelName'),kind=$('#channelDialogKind'),status=$('#channelDialogStatus'),submit=form.querySelector('.primary');let channelType='text';const open=type=>{if(!canEditServer())return;channelType=type==='voice'?'voice':'text';kind.textContent=channelType.toUpperCase()+' CHANNEL';input.placeholder=channelType==='voice'?'New voice':'new-channel';input.value=channelType==='voice'?'New voice':'new-channel';status.textContent='';submit.disabled=false;dialog.showModal();setTimeout(()=>input.select(),0)};$('#addTextChannel').onclick=()=>open('text');$('#addVoiceChannel').onclick=()=>open('voice');$('#closeChannelDialog').onclick=()=>dialog.close();dialog.addEventListener('click',event=>{const box=dialog.getBoundingClientRect();if(event.target===dialog&&(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom))dialog.close()});form.onsubmit=event=>{event.preventDefault();const server=activeServer(),name=cleanClientName(input.value,channelType==='voice'?'New voice':'new-channel');if(!canEditServer(server)){dialog.close();return}if(!directorySend({type:'create-channel',serverId:server.id,channelType,name})){status.textContent='Knot is offline. Reconnect before creating a channel.';return}pendingChannelCreation={serverId:server.id,type:channelType,beforeIds:new Set(server.channels.map(channel=>channel.id))};status.textContent='Creating '+name+'…';submit.disabled=true}}
 function installServerDialog(){const dialog=$('#serverDialog'),status=$('#serverDialogStatus'),createForm=$('#createServerForm'),joinForm=$('#joinServerForm'),name=$('#newServerName'),code=$('#serverInviteCode'),buttons=[...dialog.querySelectorAll('form button')];const setBusy=text=>{status.textContent=text;buttons.forEach(button=>button.disabled=true)};const open=()=>{status.textContent='';buttons.forEach(button=>button.disabled=false);dialog.showModal();setTimeout(()=>name.select(),0)};$('#addServer').onclick=open;$('#closeServerDialog').onclick=()=>dialog.close();dialog.addEventListener('close',()=>{buttons.forEach(button=>button.disabled=false);if(!pendingServerSelection)status.textContent=''});dialog.addEventListener('click',event=>{const box=dialog.getBoundingClientRect();if(event.target===dialog&&(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom))dialog.close()});code.addEventListener('input',()=>{code.value=code.value.replace(/\D/g,'').slice(0,5)});createForm.onsubmit=event=>{event.preventDefault();const serverName=cleanClientName(name.value,'New server');if(!directorySend({type:'create-server',name:serverName})){status.textContent='Knot is offline. Reconnect before creating a server.';return}pendingServerSelection=true;setBusy('Creating '+serverName+'…')};joinForm.onsubmit=event=>{event.preventDefault();const invite=code.value.trim();if(!/^\d{5}$/.test(invite)){status.textContent='Enter the five-digit server invite code.';code.focus();return}if(!directorySend({type:'redeem-invite',code:invite})){status.textContent='Knot is offline. Reconnect before joining a server.';return}pendingServerSelection=true;setBusy('Joining server…')}}
@@ -2894,7 +2941,7 @@ function rememberLanNeighbor(peerId,info){
   const previous=lanNeighbors.get(peerId)||{};
   lanNeighbors.set(peerId,{...previous,...info,at:Date.now()});
   if(!activePeerId&&!activeServerId&&!activeGroupDmId)showFriendsLanding();
-  renderFriends();syncActiveDmTransport();setDirectoryState(directorySocket?.readyState===WebSocket.OPEN,'Online');
+  renderFriends();syncActiveDmTransport();refreshDirectoryState();
 }
 async function startLanHouse(){
   if(!window.pairLan||!directoryUserId)return;
@@ -3176,7 +3223,7 @@ async function startCall(){
 }
 // Tear down the call and release the mic. `silent` skips UI churn when called
 // from a disconnect.
-let endingCall=null;
+
 async function endCall(silent){
   if(endingCall)return endingCall;
   callActive=false;callStarting=false;
@@ -3317,13 +3364,32 @@ function primeScreenAudioContext(){
 }
 function takeScreenAudioContext(){const ctx=primedScreenAudioCtx;primedScreenAudioCtx=null;clearTimeout(primedScreenAudioTimer);primedScreenAudioTimer=null;return ctx&&ctx.state!=='closed'?ctx:new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000})}
 function resampleStereoToRate(samples,fromRate,toRate){
-  const input=samples instanceof Float32Array?samples:new Float32Array(samples||0);
-  const from=Number(fromRate)||48000,to=Number(toRate)||from;
-  if(!input.length||Math.abs(from-to)<1)return input;
-  const frames=Math.floor(input.length/2);if(frames<2)return input;
-  const outFrames=Math.max(1,Math.round(frames*to/from)),out=new Float32Array(outFrames*2),step=from/to;
-  for(let i=0;i<outFrames;i++){const pos=i*step,i0=Math.min(frames-1,Math.floor(pos)),i1=Math.min(frames-1,i0+1),t=pos-i0;out[i*2]=input[i0*2]*(1-t)+input[i1*2]*t;out[i*2+1]=input[i0*2+1]*(1-t)+input[i1*2+1]*t}
-  return out;
+  // One-shot helper kept for tests/callers without stream state.
+  return createStereoResampler(fromRate,toRate)(samples);
+}
+// Streaming linear resampler. Capture arrives in short chunks; resampling each
+// chunk from phase zero slipped or repeated a sample at every boundary, a
+// periodic click Opus turned into a buzzing, robotic tone. Phase and the last
+// frame carry across chunks so the output is one continuous signal.
+function createStereoResampler(fromRate,toRate){
+  let from=Number(fromRate)||48000,to=Number(toRate)||from,phase=0,prevL=0,prevR=0,havePrev=false;
+  return function(samples,nextFromRate){
+    const input=samples instanceof Float32Array?samples:new Float32Array(samples||0);
+    if(Number(nextFromRate)>0&&Number(nextFromRate)!==from){from=Number(nextFromRate);phase=0;havePrev=false}
+    if(Math.abs(from-to)<1||!input.length)return input;
+    const frames=Math.floor(input.length/2);if(!frames)return input;
+    const step=from/to,out=[];
+    // Sample position 0 is the carried previous frame, 1..frames are this chunk.
+    const at=(index,channel)=>index===0?(channel?prevR:prevL):input[(index-1)*2+channel];
+    if(!havePrev){prevL=input[0];prevR=input[1];havePrev=true}
+    while(phase<frames){
+      const i0=Math.floor(phase),t=phase-i0;
+      out.push(at(i0,0)*(1-t)+at(i0+1,0)*t,at(i0,1)*(1-t)+at(i0+1,1)*t);
+      phase+=step;
+    }
+    phase-=frames;prevL=input[(frames-1)*2];prevR=input[(frames-1)*2+1];
+    return Float32Array.from(out);
+  };
 }
 function softenSharePcm(samples){
   // Uninitialized capture buffers are NaN or huge values. A normal desktop
@@ -3364,12 +3430,12 @@ async function setupNativeScreenCapture(){
     return null;
   }
 
-  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubClean,unsubError,unsubFormat,addonData=false,formatReady=false,captureClosed=false,captureFailure='',outputTrack=null,captureRate=48000;const captureOwner={};
+  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubClean,unsubError,unsubFormat,addonData=false,formatReady=false,captureClosed=false,captureFailure='',outputTrack=null,captureRate=48000;let shareResample=()=>new Float32Array(0);const captureOwner={};
   const dispose=(stopCapture=isCurrent())=>{captureClosed=true;if(unsubClean)unsubClean();if(unsubError)unsubError();if(unsubFormat)unsubFormat();if(stopCapture)try{window.pairCapture.stop()}catch{}try{op?.port.close()}catch{}try{op?.disconnect()}catch{}};
   try{
     ctx=takeScreenAudioContext();
     await ensureCaptureAudioContextRunning(ctx);
-    dest=ctx.createMediaStreamDestination();dest.channelCount=2;
+    dest=ctx.createMediaStreamDestination();dest.channelCount=2;shareResample=createStereoResampler(captureRate,ctx.sampleRate||48000);
     await ctx.audioWorklet.addModule(new URL('screen-audio-worklet.js',location.href));
     op=new AudioWorkletNode(ctx,'knot-screen-audio',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});
     op.connect(dest);
@@ -3380,7 +3446,7 @@ async function setupNativeScreenCapture(){
       const samples=new Float32Array(count*2);
       if(arr.length>=count*2)samples.set(arr.subarray(0,count*2));
       else for(let i=0;i<count;i++){const sample=arr[i]||0;samples[i*2]=sample;samples[i*2+1]=sample}
-      const played=softenSharePcm(resampleStereoToRate(samples,captureRate,ctx.sampleRate||48000));
+      const played=softenSharePcm(shareResample(samples,captureRate));
       try{op.port.postMessage(played,[played.buffer]);addonData=true}catch(error){captureFailure='audio worklet input failed: '+(error?.message||error)}
     });
     unsubError=window.pairCapture.onError(msg=>{
@@ -4267,6 +4333,11 @@ function fadeRemoteShareAudio(audio,{force=false}={}){
   requestAnimationFrame(tick);
   return audio;
 }
+// Screen shares burst several Mbps onto the same path as their sound. Chromium's
+// adaptive audio jitter buffer shrinks between bursts and then conceals the next
+// late packet, which is the choked/robotic sound. Hold a 120 ms floor on screen
+// audio receivers; it stays well inside the video presentation latency.
+function holdScreenAudioJitter(receiver){try{if(receiver&&'jitterBufferTarget'in receiver)receiver.jitterBufferTarget=120}catch{}}
 function bindReservedRemoteScreenAudio({force=false}={}){
   const sender=screenAudioTransceiver?.sender||screenAudioTransceiver;
   const track=screenAudioTransceiver?.receiver?.track||pc?.getTransceivers?.().find(item=>item.sender===sender)?.receiver?.track;
@@ -4276,7 +4347,7 @@ function bindReservedRemoteScreenAudio({force=false}={}){
   const keepVolume=audio.volume;
   const audible=!audio.muted&&keepVolume>.05&&!audio.paused&&!!audio.srcObject&&!audio._knotShareFade;
   const fading=!!audio._knotShareFade;
-  track.enabled=true;
+  track.enabled=true;holdScreenAudioJitter(pc?.getReceivers?.().find(item=>item.track===track));
   track.onunmute=()=>{if(!remoteScreenExpected)return;bindReservedRemoteScreenAudio({force:true})};
   // The late rebinds exist to catch a track that was not playing yet. Running
   // them against a stream that is already fading restarts it from silence

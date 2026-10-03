@@ -51,15 +51,15 @@ try {
   const oversized = new WorkletProcessor(), oversizedPcm = new Float32Array(10000 * 2);
   for (let frame = 0; frame < 10000; frame++) oversizedPcm[frame * 2] = oversizedPcm[frame * 2 + 1] = frame;
   oversized.port.onmessage({ data: oversizedPcm });
-  assert.strictEqual(oversized.frames, 3840, 'oversized worklet packet exceeded the stale-audio target');
-  assert.strictEqual(oversized.queue[0][0], 6160, 'worklet retained the stale beginning of an oversized packet');
+  assert.strictEqual(oversized.frames, 9600, 'oversized worklet packet exceeded the stale-audio target');
+  assert.strictEqual(oversized.queue[0][0], 400, 'worklet retained the stale beginning of an oversized packet');
 
   const queued = new WorkletProcessor();
-  for (let packet = 0; packet < 9; packet++) {
+  for (let packet = 0; packet < 13; packet++) {
     const pcm = new Float32Array(960 * 2); pcm.fill(packet);
     queued.port.onmessage({ data: pcm });
   }
-  assert.strictEqual(queued.frames, 3840, 'worklet queue did not trim back to 80 ms');
+  assert.strictEqual(queued.frames, 5760, 'worklet queue did not trim back to 120 ms');
   // Resume replays no stale audio: after the short de-click fade-in, every
   // played sample must come from the newest trimmed window (packet 5).
   const played = [];
@@ -70,14 +70,14 @@ try {
   }
   assert.strictEqual(played[0], 0, 'resume did not start from the fade-in floor');
   for (let frame = 512; frame < played.length; frame++) {
-    const expected = Math.min(1, 5 + Math.floor(frame / 960));
+    const expected = Math.min(1, 7 + Math.floor(frame / 960));
     assert.strictEqual(played[frame], expected, 'worklet played stale queued audio after a renderer stall');
   }
   const mainSource = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const addonSource = fs.readFileSync(path.join(__dirname, '..', 'addon', 'pair-capture.cc'), 'utf8');
   const preloadSource = fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8');
   const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  assert(mainSource.includes('NATIVE_AUDIO_MAX_INFLIGHT = 3') && mainSource.includes("ipcMain.on('pair:cleanAudioAck'"), 'native audio IPC is not acknowledgement-bounded');
+  assert(mainSource.includes('NATIVE_AUDIO_MAX_INFLIGHT = 10') && mainSource.includes("ipcMain.on('pair:cleanAudioAck'"), 'native audio IPC is not acknowledgement-bounded');
   assert(mainSource.includes("'module-loopback'") && mainSource.includes('source=${sink}.monitor') && !mainSource.includes("'module-combine-sink'"), 'Linux desktop audio regressed to the PipeWire fan-out route that can starve capture under load');
   assert(!addonSource.includes('initSystemLoopback') && !addonSource.includes('"system-loopback"'), 'Windows capture can still fall back to unsafe whole-system loopback');
   assert(!addonSource.includes('WaitForSingleObject(state.event,INFINITE)') && addonSource.includes('kActivationTimeoutMs') && addonSource.includes('ERROR_TIMEOUT'), 'Windows process-loopback activation is not timeout bounded');

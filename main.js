@@ -50,8 +50,10 @@ let activeShareSourceId = null;
 let linuxShareAudio = null;
 let linuxShareAudioStart = null, linuxShareAudioStopping = null, linuxShareAudioGeneration = 0;
 const LINUX_AUDIO_PACKET_BYTES = 48000 * .02 * 2 * 4;
-const LINUX_AUDIO_MAX_INFLIGHT = 3;
-const LINUX_AUDIO_MAX_BUFFER_BYTES = LINUX_AUDIO_PACKET_BYTES * 6;
+// 20 ms packets. Allow ~200 ms in flight and ~300 ms queued so a busy renderer
+// (4K encode) delaying its acks does not make the main process discard audio.
+const LINUX_AUDIO_MAX_INFLIGHT = 10;
+const LINUX_AUDIO_MAX_BUFFER_BYTES = LINUX_AUDIO_PACKET_BYTES * 15;
 let nativeScreenService = null;
 let selectedPrimaryGpu = null;
 let emojiWorker = null, emojiWorkerSequence = 0, emojiRefreshPromise = null;
@@ -308,7 +310,7 @@ function trimLinuxShareAudio(state, targetBytes = LINUX_AUDIO_MAX_BUFFER_BYTES) 
 function flushLinuxShareAudio(state) {
   if (linuxShareAudio !== state || !state.webContents || state.webContents.isDestroyed()) return;
   const now = Date.now();
-  if (state.pcmInflight.size >= LINUX_AUDIO_MAX_INFLIGHT && state.pcmOldestInflightAt && now - state.pcmOldestInflightAt > 500) {
+  if (state.pcmInflight.size >= LINUX_AUDIO_MAX_INFLIGHT && state.pcmOldestInflightAt && now - state.pcmOldestInflightAt > 1200) {
     // The renderer may have crashed or stalled after accepting an IPC message.
     // Drop stale accounting and audio, then probe it with current sound only.
     state.pcmInflight.clear();state.pcmOldestInflightAt = 0;
@@ -722,7 +724,11 @@ try {
 // pins a discrete render node, while integrated-only machines retain their real
 // compositor/video GPU instead of being forced through CPU rendering.
 if (hardwareAccelerationEnabled) {
-  const wayland = process.platform === 'linux' && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY);
+  // Knot launches under XWayland (--ozone-platform=x11) on Wayland sessions.
+  // Wayland-only compositor tuning must follow Chromium's real backend, not the
+  // session type, or it is applied to an X11 compositor.
+  const x11Ozone = process.argv.includes('--ozone-platform=x11') || process.env.OZONE_PLATFORM === 'x11';
+  const wayland = process.platform === 'linux' && !x11Ozone && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY);
   if (process.platform === 'linux') {
     const primaryGpu = linuxMainGpu();selectedPrimaryGpu=primaryGpu;
     if (applyLinuxMainGpuEnvironment(primaryGpu) && applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: primaryGpu, wayland })) {
@@ -1366,8 +1372,8 @@ const NATIVE_CAPTURE_ABI = 'knot-screen-audio-v4';
 const NATIVE_AUDIO_FRAME_BYTES = 2 * Float32Array.BYTES_PER_ELEMENT;
 const NATIVE_AUDIO_PACKET_FRAMES = 960; // 20 ms at 48 kHz
 const NATIVE_AUDIO_PACKET_BYTES = NATIVE_AUDIO_PACKET_FRAMES * NATIVE_AUDIO_FRAME_BYTES;
-const NATIVE_AUDIO_MAX_BUFFER_BYTES = NATIVE_AUDIO_PACKET_BYTES * 6;
-const NATIVE_AUDIO_MAX_INFLIGHT = 3;
+const NATIVE_AUDIO_MAX_BUFFER_BYTES = NATIVE_AUDIO_PACKET_BYTES * 15;
+const NATIVE_AUDIO_MAX_INFLIGHT = 10;
 let nativeAudioIpc = null;
 let nativeAudioNextSequence = 1;
 let nativeCaptureGeneration = 0;
@@ -1414,7 +1420,7 @@ function flushNativeAudioIpc() {
   // accounting after a bounded timeout, trim buffered history, and let the
   // newest packet probe the recovered renderer. Late sequence acknowledgements
   // are ignored and cannot release a current packet.
-  if (state.inflight.size >= NATIVE_AUDIO_MAX_INFLIGHT && state.oldestInflightAt && Date.now() - state.oldestInflightAt > 500) {
+  if (state.inflight.size >= NATIVE_AUDIO_MAX_INFLIGHT && state.oldestInflightAt && Date.now() - state.oldestInflightAt > 1200) {
     state.inflight.clear();state.oldestInflightAt = 0;
     while (state.bufferedBytes > NATIVE_AUDIO_PACKET_BYTES * 4 && state.chunks.length) {
       const head = state.chunks.shift();state.bufferedBytes -= head.data.length;

@@ -7,11 +7,12 @@ assert(linux);
 for (const name of ['force-high-performance-gpu', 'enable-gpu-rasterization', 'enable-zero-copy', 'disable-software-rasterizer', 'ignore-gpu-blocklist']) {
   assert(linux.switches.has(name), `missing ${name}`);
 }
-assert.strictEqual(linux.switches.get('hardware-video-device-path'), nvidia.renderNode);
+assert(!linux.switches.has('hardware-video-device-path'), 'NVIDIA VA-API pinning paints received video white');
 assert.strictEqual(linux.switches.get('use-webgpu-adapter'), 'opengles');
-for (const name of ['CanvasOopRasterization', 'AcceleratedVideoDecoder', 'AcceleratedVideoEncoder', 'AcceleratedVideoDecodeLinuxGL', 'AcceleratedVideoDecodeLinuxZeroCopyGL', 'VaapiOnNvidiaGPUs', 'WebRTCPipeWireCapturer']) {
+for (const name of ['CanvasOopRasterization', 'AcceleratedVideoDecoder', 'AcceleratedVideoEncoder', 'AcceleratedVideoDecodeLinuxGL', 'AcceleratedVideoDecodeLinuxZeroCopyGL', 'WebRTCPipeWireCapturer']) {
   assert(linux.enableFeatures.includes(name), `missing ${name}`);
 }
+assert(!linux.enableFeatures.includes('VaapiOnNvidiaGPUs'));
 assert(linux.disableFeatures.includes('Vulkan'));
 assert(linux.disableFeatures.includes('WebRtcHideLocalIpsWithMdns'));
 assert(WEBRTC_ICE_DISABLE_FEATURES.includes('WebRtcHideLocalIpsWithMdns'));

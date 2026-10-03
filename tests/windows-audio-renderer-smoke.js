@@ -28,7 +28,7 @@ app.whenReady().then(async () => {
       analyser.fftSize=256;mute.gain.value=0;node.port.onmessage=event=>diagnostics.push(event.data);
       node.connect(destination);node.connect(analyser).connect(mute).connect(ctx.destination);
       const packet=new Float32Array(10000*2);
-      for(let frame=6160;frame<10000;frame++){packet[frame*2]=.25;packet[frame*2+1]=.25}
+      for(let frame=400;frame<10000;frame++){packet[frame*2]=.25;packet[frame*2+1]=.25}
       node.port.postMessage(packet,[packet.buffer]);
       const samples=new Float32Array(analyser.fftSize);let peak=0;
       for(let attempt=0;attempt<30&&peak<.1;attempt++){
@@ -36,7 +36,7 @@ app.whenReady().then(async () => {
         analyser.getFloatTimeDomainData(samples);for(const sample of samples)peak=Math.max(peak,Math.abs(sample));
       }
       const trim=diagnostics.find(value=>value?.type==='trim');
-      assert(trim?.droppedFrames===6160&&trim?.bufferedFrames===3840,'worklet did not discard the stale beginning of an oversized IPC packet');
+      assert(trim?.droppedFrames===400&&trim?.bufferedFrames===9600,'worklet did not discard the stale beginning of an oversized IPC packet');
       assert(peak>.1,'valid stereo PCM did not flow through the real AudioWorklet output');
       assert(destination.stream.getAudioTracks().length===1,'worklet did not create a WebRTC-compatible stereo track');
       node.disconnect();await ctx.close();

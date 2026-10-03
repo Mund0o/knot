@@ -32,16 +32,19 @@ function gpuAccelerationPolicy({ platform = process.platform, gpu = null, waylan
 
   if (platform === 'linux') {
     if (!gpu) return null;
-    switches.set('hardware-video-device-path', gpu.renderNode);
+    // NVIDIA is excluded from VA-API pinning. nvidia-vaapi-driver hands
+    // Chromium DMA-BUF frames that its GL/Skia compositor cannot import
+    // (OzoneImageBacking::ProduceSkiaGanesh failed to create GL representation),
+    // so every received WebRTC video, including screen shares, painted solid
+    // white. NVIDIA decodes in software here; native NVENC capture is separate.
+    if (gpu.vendor !== '0x10de') switches.set('hardware-video-device-path', gpu.renderNode);
     // Chromium's Linux encoder feature is opt-in. Decode is enabled in builds
     // with VA-API, but keeping it explicit prevents a field trial from moving a
     // supported codec back to the CPU.
     enableFeatures.push(...LINUX_ACCELERATED_FEATURES);
     if (wayland) enableFeatures.push('AcceleratedVideoDecodeLinuxZeroCopyGL');
     if (gpu.vendor === '0x10de') {
-      // nvidia-vaapi-driver exposes NVDEC through VA-API. Chromium otherwise
-      // rejects NVIDIA VA-API even when the selected card supports the codec.
-      enableFeatures.push('VaapiOnNvidiaGPUs');
+      // Do not enable VaapiOnNvidiaGPUs: it produces white video (see above).
       // GPU blocklisting is incompatible with the explicit "use my main GPU"
       // setting. Driver bug workarounds remain enabled; only the blanket
       // software downgrade is bypassed.

@@ -43,9 +43,9 @@
   function voiceBitrateBps({ relay = false, uploadMbps } = {}) {
     if (relay) return 24000;
     const cap = effectiveUploadCapMbps(uploadMbps, Infinity);
-    if (Number.isFinite(cap) && cap >= 20) return 96000;
-    if (Number.isFinite(cap) && cap >= 8) return 64000;
-    return 48000;
+    if (Number.isFinite(cap) && cap >= 20) return 128000;
+    if (Number.isFinite(cap) && cap >= 8) return 96000;
+    return 64000;
   }
 
   function preferAudioRed(uploadMbps) {

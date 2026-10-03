@@ -17,9 +17,9 @@ assert.ok(Math.abs(effectiveUploadCapMbps(20, Infinity) - 14.5) < 0.01);
 assert.ok(effectiveUploadCapMbps(40, 10) < effectiveUploadCapMbps(40, Infinity), 'live uplink must be allowed to tighten the probe');
 
 assert.strictEqual(voiceBitrateBps({ relay: true }), 24000);
-assert.strictEqual(voiceBitrateBps({ uploadMbps: 4 }), 48000);
-assert.strictEqual(voiceBitrateBps({ uploadMbps: 12 }), 64000);
-assert.strictEqual(voiceBitrateBps({ uploadMbps: 40 }), 96000);
+assert.strictEqual(voiceBitrateBps({ uploadMbps: 4 }), 64000);
+assert.strictEqual(voiceBitrateBps({ uploadMbps: 12 }), 96000);
+assert.strictEqual(voiceBitrateBps({ uploadMbps: 40 }), 128000);
 
 assert.strictEqual(preferAudioRed(4), false);
 assert.strictEqual(preferAudioRed(20), true);

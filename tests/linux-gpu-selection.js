@@ -58,9 +58,7 @@ try {
     KNOT_PRIMARY_GPU_INTEGRATED: '0',
     __NV_PRIME_RENDER_OFFLOAD: '1',
     __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
-    __VK_LAYER_NV_optimus: 'NVIDIA_only',
-    LIBVA_DRIVER_NAME: 'nvidia',
-    NVD_BACKEND: 'direct'
+    __VK_LAYER_NV_optimus: 'NVIDIA_only'
   });
   const amdEnv = { LIBVA_DRIVER_NAME: 'nvidia', NVD_BACKEND: 'direct', __NV_PRIME_RENDER_OFFLOAD: '1' };
   assert.strictEqual(applyLinuxMainGpuEnvironment(candidates.find(item => item.pciAddress === '0000:07:00.0'), amdEnv), true);
