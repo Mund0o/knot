@@ -1,11 +1,11 @@
 {
-  "version": "1.1.122",
-  "notes": "Calls and screen shares recover from network drops, messages wait and resend when you're offline, your mic comes back after a headset disconnects, and NVIDIA Linux decodes shared screens on the GPU with a bundled driver.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.122/pair-p2p-1.1.122.tar.gz",
-  "linuxSha256": "d1f4940f64d0b18d0879f9b4d5a58e3d5ac6d7b74860eb3a71fc354778488ad5",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.122/Knot-1.1.122.AppImage",
-  "linuxAppImageSha256": "e79d9e9d820db17542864707108ab52a8166e999c81ca744b2004d11c9a17498",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.122/Knot.Setup.1.1.122.exe",
-  "winSha256": "18a878ff9a579a285008a860c9dc9217217c9dffc5480d86b1cd071d5d9af4c4",
-  "signature": "CoPmEbwIcQKyEFoVC7oMYPcvcOPWuudsXRpvqBOLAMf0JJ1pcLT1JQbtKsT62HBLg/SbY3U3GL9OXNjWOl4XBg=="
+  "version": "1.1.123",
+  "notes": "A friend's share now shows its fps, bitrate and decoder, and whether sound is really playing; stuck share sound restarts itself; NVIDIA GPU decoding that can't keep up switches to the CPU, with a switch in Settings.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.123/pair-p2p-1.1.123.tar.gz",
+  "linuxSha256": "eb52de85bb1970abf574a096e9e67a1764563c44b9cbe1c6e6d61d6e848479d5",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.123/Knot-1.1.123.AppImage",
+  "linuxAppImageSha256": "55756da69ae03e1708e9db25c19a2143f850a1da4ae174c20b1f76f3d56dc81e",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.123/Knot.Setup.1.1.123.exe",
+  "winSha256": "506d04a24519618c28bc99394d22a9d2255fc67f010c33994868eff16d76e6d7",
+  "signature": "b4ZQO16jdvE2HLpNY8dtu79wmasqGcDN18M6cmp64+gOi3a4wl5Bc4IB6MHXv3BO9DNRoU4qrU0Vj6VWR70lDw=="
 }
