@@ -192,7 +192,9 @@ contextBridge.exposeInMainWorld('pairEnv', {
 // or excludes Knot's process tree, so Knot voice never enters these samples.
 // Only available when the native addon is built and loaded.
 contextBridge.exposeInMainWorld('pairCapture', {
-  start: () => ipcRenderer.send('pair:startCapture'),
+  // allowSystemMix lets Windows fall back to the whole device mix when
+  // process isolation is unavailable (Windows 10 without the update).
+  start: options => ipcRenderer.send('pair:startCapture', { allowSystemMix: options?.allowSystemMix === true }),
   stop: () => ipcRenderer.send('pair:stopCapture'),
   // Register for isolated desktop/application audio data from the native addon.
   onCleanAudio: cb => {

@@ -581,7 +581,7 @@ if(state?.pcmWatchdog){clearInterval(state.pcmWatchdog);state.pcmWatchdog=null;}
 function isPairRenderer(event) {
   return event.sender === mainWin?.webContents && event.senderFrame === event.sender?.mainFrame && event.senderFrame?.url === PAIR_RENDERER_URL;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'networkCapacity', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'directoryRosterCache', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'shareSystemMixFallback', 'networkCapacity', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'directoryRosterCache', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
@@ -1499,10 +1499,12 @@ function loadNativeCapture(win) {
   if (win && !win.isDestroyed()) try { win.send('pair:captureError', errMsg); } catch {}
   return null;
 }
-function startNativeCapture(win) {
+function startNativeCapture(win, { allowSystemMix = false } = {}) {
   const addon = loadNativeCapture(win);
   if (!addon) { return; }
-  if (addon._running) return;
+  // A capture left running by an abandoned share would swallow this start and
+  // never report a format. Restart it so every start answers with one.
+  if (addon._running) stopNativeCapture();
   console.log('native capture: starting...');
   const generation = ++nativeCaptureGeneration;
   resetNativeAudioIpc(win);
@@ -1534,7 +1536,8 @@ function startNativeCapture(win) {
         setImmediate(() => { if (generation !== nativeCaptureGeneration) return;addon._running = false;resetNativeAudioIpc();try { addon.stop(); } catch {} });
       },
       targetPid,
-      includeTarget
+      includeTarget,
+      allowSystemMix === true
     );
     addon._running = true;
     const fmt = addon.getFormat();
@@ -1565,10 +1568,10 @@ ipcMain.on('pair:cleanAudioAck', (event, sequenceValue) => {
   state.oldestInflightAt = state.inflight.size ? Date.now() : 0;
   flushNativeAudioIpc();
 });
-ipcMain.on('pair:startCapture', (event) => {
+ipcMain.on('pair:startCapture', (event, options) => {
   if (!isPairRenderer(event)) return;
   console.log('native capture: IPC startCapture');
-  startNativeCapture(event.sender);
+  startNativeCapture(event.sender, { allowSystemMix: options?.allowSystemMix === true });
 });
 ipcMain.on('pair:stopCapture', event => {
   if (!isPairRenderer(event)) return;

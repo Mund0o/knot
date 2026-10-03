@@ -57,7 +57,7 @@ const nativeScreenSource = fs.readFileSync(path.join(__dirname, '..', 'native-sc
 if (!nativeVideoSource.includes('function webmAv1FrameMeta') || !nativeScreenSource.includes('webmAv1FrameMeta(data, fps)') || !rendererSource.includes('webmAv1FrameMeta') || rendererSource.includes('decodeQueueSize>180') || !rendererSource.includes('NATIVE_SCREEN_LATENCY_TARGET_MS=110') || !rendererSource.includes('NATIVE_SCREEN_LATENCY_CEILING_MS=260') || !rendererSource.includes('decodeQueueSize||0)>=maxDecodeQueue')) {
   throw new Error('Native AV1 still copies every payload to classify keys or lets decode sit above the 260 ms ceiling');
 }
-if (!rendererSource.includes('dispose(true)') || !rendererSource.includes("stopServerVoice(){serverVoiceGen++") || !rendererSource.includes("if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{};cleanupNativeScreenCapture()")) {
+if (!rendererSource.includes('dispose(true)') || !rendererSource.includes("stopServerVoice(){serverVoiceGen++") || !rendererSource.includes("stopShareAudioCapture();cleanupNativeScreenCapture()") || !rendererSource.includes("if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}\n  else if(window.pairEnv?.platform==='win32')try{window.pairCapture?.stop?.()}catch{}")) {
   throw new Error('Canceling a server/group share can still leak the PipeWire share sink');
 }
 if (!mainSource.includes("capture.kill('SIGKILL')") || !mainSource.includes('linuxShareAudio = null;\n    try { capture.kill') || !mainSource.includes("state.capture.kill('SIGKILL')")) {

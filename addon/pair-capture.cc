@@ -29,6 +29,7 @@ typedef struct AUDIOCLIENT_ACTIVATION_PARAMS {
 #define VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK L"VAD\\Process_Loopback"
 #endif
 #endif
+#include <mmreg.h>
 #include <propvarutil.h>
 #include <thread>
 #include <atomic>
@@ -49,7 +50,8 @@ static constexpr DWORD kCaptureCancelTimeoutMs = 500;
 
 // Windows process loopback lets us capture the system mix while excluding
 // Knot's process tree. This is the same class of capture Discord uses to keep
-// its own voice playback out of a stream. It needs Windows 10 build 20348+.
+// its own voice playback out of a stream. Windows 10 needs a recent update for
+// it; without one, start() can fall back to the default output's whole mix.
 class ActivationHandler final : public IActivateAudioInterfaceCompletionHandler, public IAgileObject {
   std::atomic<ULONG> refs{1};
   HANDLE eventHandle=nullptr;
@@ -94,13 +96,24 @@ public:
   UINT32 bufFrames=0;
   HANDLE captureEvent=nullptr;
   bool comInitialized=false;
+  // Process loopback signals its event per packet. The whole-device fallback
+  // is polled instead: loopback event delivery is not reliable on every
+  // Windows 10 audio driver.
+  bool eventDriven=true;
+  bool isolated=true;
+  bool floatSamples=false;
+  HRESULT isolationError=S_OK;
+  // Process isolation cannot appear without an OS update, and a failed
+  // activation can take its full timeout. Go straight to the fallback after
+  // the first failure instead of paying that delay on every start.
+  HRESULT knownIsolationError=S_OK;
   std::thread captureThread;
   Napi::ThreadSafeFunction dataCb,errCb;
 
   Capture()=default;
   ~Capture(){stop();}
 
-  void start(Napi::Function dataCbFn,Napi::Function errCbFn,DWORD targetPid,bool includeTarget){
+  void start(Napi::Function dataCbFn,Napi::Function errCbFn,DWORD targetPid,bool includeTarget,bool allowSystemMix){
     if(runningFlag.load())return;
     dataCb=Napi::ThreadSafeFunction::New(
       dataCbFn.Env(),dataCbFn,Napi::String::New(dataCbFn.Env(),"data"),4,1
@@ -108,7 +121,7 @@ public:
     errCb=Napi::ThreadSafeFunction::New(
       errCbFn.Env(),errCbFn,Napi::String::New(errCbFn.Env(),"err"),1,1
     );
-    HRESULT hr=initWasapi(targetPid,includeTarget);
+    HRESULT hr=initWasapi(targetPid,includeTarget,allowSystemMix);
     if(FAILED(hr)){
       if(dataCb){dataCb.Release();dataCb=nullptr;}
       if(errCb){errCb.Release();errCb=nullptr;}
@@ -148,17 +161,37 @@ public:
     o.Set("sampleRate",Napi::Number::New(env,(double)mixFormat->nSamplesPerSec));
     o.Set("channels",Napi::Number::New(env,(double)mixFormat->nChannels));
     o.Set("bitsPerSample",Napi::Number::New(env,(double)mixFormat->wBitsPerSample));
-    o.Set("sampleType",mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT?Napi::String::New(env,"float"):Napi::String::New(env,"pcm"));
-    o.Set("isolated",Napi::Boolean::New(env,true));
-    o.Set("mode",Napi::String::New(env,"process-loopback"));
+    o.Set("sampleType",Napi::String::New(env,floatSamples?"float":"pcm"));
+    o.Set("isolated",Napi::Boolean::New(env,isolated));
+    o.Set("mode",Napi::String::New(env,isolated?"process-loopback":"system-mix"));
+    if(FAILED(isolationError)){
+      char code[16];sprintf(code,"0x%08lX",(unsigned long)isolationError);
+      o.Set("isolationError",Napi::String::New(env,code));
+    }
     return o;
   }
 
 private:
-  HRESULT initWasapi(DWORD targetPid,bool includeTarget){
+  HRESULT initWasapi(DWORD targetPid,bool includeTarget,bool allowSystemMix){
     HRESULT hr=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
     if(SUCCEEDED(hr))comInitialized=true;
     else if(hr!=RPC_E_CHANGED_MODE)return hr;
+    isolated=true;eventDriven=true;isolationError=S_OK;
+    hr=allowSystemMix&&FAILED(knownIsolationError)?knownIsolationError:initProcessLoopback(targetPid,includeTarget);
+    if(SUCCEEDED(hr)||!allowSystemMix)return hr;
+    knownIsolationError=hr;
+    // Windows 10 releases without the process-loopback update reject the
+    // virtual device. The default output's loopback works everywhere, but it
+    // includes Knot's own playback, so the renderer labels it as such.
+    isolationError=hr;
+    releaseStream();
+    hr=initSystemMix();
+    if(SUCCEEDED(hr)){isolated=false;eventDriven=false;}
+    return hr;
+  }
+
+  HRESULT initProcessLoopback(DWORD targetPid,bool includeTarget){
+    HRESULT hr=S_OK;
 
     // A window/application share captures its owning process and descendants,
     // matching Discord's application-audio model. A full-display share captures
@@ -202,6 +235,8 @@ private:
     mixFormat=requested;
     hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_EVENTCALLBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,0,0,mixFormat,nullptr);
     if(FAILED(hr))return hr;
+    hr=readSampleLayout();
+    if(FAILED(hr))return hr;
     hr=audioClient->GetBufferSize(&bufFrames);
     if(FAILED(hr))return hr;
     captureEvent=CreateEvent(nullptr,FALSE,FALSE,nullptr);
@@ -216,10 +251,80 @@ private:
     return audioClient->Start();
   }
 
+  static WAVEFORMATEX* pcm48kStereo(){
+    auto* format=(WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
+    if(!format)return nullptr;
+    ZeroMemory(format,sizeof(WAVEFORMATEX));
+    format->wFormatTag=WAVE_FORMAT_PCM;format->nChannels=2;format->nSamplesPerSec=48000;format->wBitsPerSample=16;
+    format->nBlockAlign=format->nChannels*format->wBitsPerSample/8;format->nAvgBytesPerSec=format->nSamplesPerSec*format->nBlockAlign;
+    return format;
+  }
+
+  HRESULT initSystemMix(){
+    HRESULT hr=CoCreateInstance(__uuidof(MMDeviceEnumerator),nullptr,CLSCTX_ALL,__uuidof(IMMDeviceEnumerator),(void**)&enumerator);
+    if(FAILED(hr))return hr;
+    hr=enumerator->GetDefaultAudioEndpoint(eRender,eConsole,&device);
+    if(FAILED(hr))return hr;
+    // 200 ms of shared buffer, drained every 10 ms by the polling loop.
+    const REFERENCE_TIME bufferDuration=2000000;
+    hr=device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,(void**)&audioClient);
+    if(FAILED(hr))return hr;
+    // Prefer the same 48 kHz stereo PCM as the isolated route. Not every
+    // Windows 10 audio stack converts loopback streams, so fall back to the
+    // device's own mix format and let the renderer resample it.
+    mixFormat=pcm48kStereo();
+    if(!mixFormat)return E_OUTOFMEMORY;
+    hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK|AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM|AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,bufferDuration,0,mixFormat,nullptr);
+    if(FAILED(hr)){
+      CoTaskMemFree(mixFormat);mixFormat=nullptr;
+      audioClient->Release();audioClient=nullptr;
+      hr=device->Activate(__uuidof(IAudioClient),CLSCTX_ALL,nullptr,(void**)&audioClient);
+      if(FAILED(hr))return hr;
+      hr=audioClient->GetMixFormat(&mixFormat);
+      if(FAILED(hr))return hr;
+      hr=audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED,AUDCLNT_STREAMFLAGS_LOOPBACK,bufferDuration,0,mixFormat,nullptr);
+      if(FAILED(hr))return hr;
+    }
+    hr=readSampleLayout();
+    if(FAILED(hr))return hr;
+    hr=audioClient->GetBufferSize(&bufFrames);
+    if(FAILED(hr))return hr;
+    // Not registered with the client; stop() sets it to wake the poll early.
+    captureEvent=CreateEvent(nullptr,FALSE,FALSE,nullptr);
+    if(!captureEvent)return E_FAIL;
+    hr=audioClient->GetService(__uuidof(IAudioCaptureClient),(void**)&captureClient);
+    if(FAILED(hr))return hr;
+    return audioClient->Start();
+  }
+
+  // Resolve WAVE_FORMAT_EXTENSIBLE to its sample type. KSDATAFORMAT_SUBTYPE_*
+  // GUIDs carry the plain format tag in Data1.
+  HRESULT readSampleLayout(){
+    if(!mixFormat||mixFormat->nChannels<1||!mixFormat->nBlockAlign)return AUDCLNT_E_UNSUPPORTED_FORMAT;
+    WORD tag=mixFormat->wFormatTag;
+    if(tag==WAVE_FORMAT_EXTENSIBLE&&mixFormat->cbSize>=sizeof(WAVEFORMATEXTENSIBLE)-sizeof(WAVEFORMATEX))
+      tag=(WORD)reinterpret_cast<WAVEFORMATEXTENSIBLE*>(mixFormat)->SubFormat.Data1;
+    const WORD bits=mixFormat->wBitsPerSample;
+    floatSamples=tag==WAVE_FORMAT_IEEE_FLOAT&&bits==32;
+    if(floatSamples||(tag==WAVE_FORMAT_PCM&&(bits==16||bits==24||bits==32)))return S_OK;
+    return AUDCLNT_E_UNSUPPORTED_FORMAT;
+  }
+
+  float sampleAt(const BYTE* frame,int channel)const{
+    const int bytes=mixFormat->wBitsPerSample/8;
+    const BYTE* p=frame+(size_t)channel*(size_t)bytes;
+    if(floatSamples){float value;std::memcpy(&value,p,sizeof(value));return value;}
+    if(bytes==2){INT16 value;std::memcpy(&value,p,sizeof(value));return value/32768.0f;}
+    if(bytes==3){const INT32 value=(INT32)(((UINT32)p[0]<<8)|((UINT32)p[1]<<16)|((UINT32)p[2]<<24));return value/2147483648.0f;}
+    INT32 value;std::memcpy(&value,p,sizeof(value));return value/2147483648.0f;
+  }
+
   void loop(){
     HRESULT hr=S_OK;
     while(runningFlag.load()){
-      if(WaitForSingleObject(captureEvent,500)!=WAIT_OBJECT_0)continue;
+      const DWORD wait=WaitForSingleObject(captureEvent,eventDriven?500:10);
+      if(!runningFlag.load())break;
+      if(eventDriven&&wait!=WAIT_OBJECT_0)continue;
       UINT32 pktLen=0;
       hr=captureClient->GetNextPacketSize(&pktLen);
       if(FAILED(hr)){emitHr("GetNextPacketSize failed",hr);runningFlag.store(false);break;}
@@ -243,39 +348,22 @@ private:
   void process(BYTE* data,UINT32 frames,bool silent=false){
     const int ch=mixFormat&&mixFormat->nChannels>0?mixFormat->nChannels:2;
     const int outCh=2;
-    // Process-loopback already excludes Knot's process tree, so call playback is
-    // not in this mix. Keep a full stereo pass-through for music/game audio
-    // instead of collapsing to mono or running a soft canceller that can
-    // smear desktop sound.
+    // Process loopback excludes Knot's process tree, so call playback is not in
+    // this mix (the system-mix fallback is labelled instead). Keep a full
+    // stereo pass-through for music/game audio instead of collapsing to mono or
+    // running a soft canceller that can smear desktop sound.
     float* buf=(float*)calloc((size_t)frames*(size_t)outCh,sizeof(float));
     if(!buf)return;
-    if(silent||!data){
-      // calloc already initialized the interleaved stereo output to silence.
-    }else if(mixFormat->wFormatTag==WAVE_FORMAT_IEEE_FLOAT){
-      float* f=(float*)data;
+    if(!silent&&data){
+      const size_t stride=mixFormat->nBlockAlign;
       for(UINT32 i=0;i<frames;i++){
-        float L=f[i*ch+0];
-        float R=ch>1?f[i*ch+1]:L;
+        const BYTE* frame=data+(size_t)i*stride;
+        const float L=sampleAt(frame,0);
         buf[i*outCh+0]=L;
-        buf[i*outCh+1]=R;
-      }
-    }else if(mixFormat->wBitsPerSample==16){
-      INT16* ps=(INT16*)data;
-      for(UINT32 i=0;i<frames;i++){
-        float L=ps[i*ch+0]/32768.0f;
-        float R=ch>1?ps[i*ch+1]/32768.0f:L;
-        buf[i*outCh+0]=L;
-        buf[i*outCh+1]=R;
-      }
-    }else{
-      INT32* pl=(INT32*)data;
-      for(UINT32 i=0;i<frames;i++){
-        float L=pl[i*ch+0]/2147483648.0f;
-        float R=ch>1?pl[i*ch+1]/2147483648.0f:L;
-        buf[i*outCh+0]=L;
-        buf[i*outCh+1]=R;
+        buf[i*outCh+1]=ch>1?sampleAt(frame,1):L;
       }
     }
+    // Silent or missing packets keep calloc's interleaved zeroes.
 
     UINT32 fCopy=frames;
     const auto capturedAtMs=std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -303,14 +391,18 @@ private:
   }
 
   void cleanup(){
+    releaseStream();
+    if(comInitialized){CoUninitialize();comInitialized=false;}
+  }
+
+  void releaseStream(){
     if(captureEvent){CloseHandle(captureEvent);captureEvent=nullptr;}
     if(captureClient){captureClient->Release();captureClient=nullptr;}
     if(audioClient){audioClient->Release();audioClient=nullptr;}
     if(mixFormat){CoTaskMemFree(mixFormat);mixFormat=nullptr;}
     if(device){device->Release();device=nullptr;}
     if(enumerator){enumerator->Release();enumerator=nullptr;}
-    if(comInitialized){CoUninitialize();comInitialized=false;}
-    bufFrames=0;
+    bufFrames=0;floatSamples=false;
   }
 };
 
@@ -319,7 +411,8 @@ static Napi::Value Start(const Napi::CallbackInfo& info){
   if(!info[0].IsFunction()||!info[1].IsFunction())throw Napi::Error::New(info.Env(),"args: dataCallback, errorCallback");
   DWORD targetPid=info.Length()>2&&info[2].IsNumber()?(DWORD)info[2].As<Napi::Number>().Uint32Value():GetCurrentProcessId();
   bool includeTarget=info.Length()>3&&info[3].IsBoolean()&&info[3].As<Napi::Boolean>().Value();
-  cap->start(info[0].As<Napi::Function>(),info[1].As<Napi::Function>(),targetPid,includeTarget);
+  bool allowSystemMix=info.Length()>4&&info[4].IsBoolean()&&info[4].As<Napi::Boolean>().Value();
+  cap->start(info[0].As<Napi::Function>(),info[1].As<Napi::Function>(),targetPid,includeTarget,allowSystemMix);
   return info.Env().Undefined();
 }
 static Napi::Value WindowProcessId(const Napi::CallbackInfo& info){

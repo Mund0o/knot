@@ -168,6 +168,12 @@ function setupPermanentAudioSink(){
     }
     const ctx=sfxCtx();const st=remoteAudio.srcObject;
     if(!ctx||!st||!st.getAudioTracks().length)return;
+    // A MediaStreamAudioSourceNode stays on the track it was built from, even
+    // when the stream's tracks change later. ontrack and the voice restore swap
+    // the friend's voice track inside this same stream, so key the route on the
+    // track itself or the call goes silent until someone rejoins.
+    const live=st.getAudioTracks().filter(track=>track.readyState==='live'),voiceTrack=live.includes(remoteVoiceTrack)?remoteVoiceTrack:live[live.length-1];
+    if(!voiceTrack)return;
     if(ctx.state==='suspended'){
       // Guard against stacking listeners: only register one resume retry at a
       // time. Without this, every ontrack/call-ring before the first user
@@ -179,11 +185,11 @@ function setupPermanentAudioSink(){
       return
     }
     if(ctx._pairSinkArmed)ctx._pairSinkArmed=false;
-    if(ctx.audioSink&&ctx.audioSinkStream===st){if(ctx.state==='suspended')try{ctx.resume()}catch{};return}
+    if(ctx.audioSink&&ctx.audioSinkTrack===voiceTrack){if(ctx.state==='suspended')try{ctx.resume()}catch{};return}
     if(ctx.audioSink){try{ctx.audioSink.disconnect()}catch{}}
     if(!ctx.audioGain){ctx.audioGain=ctx.createGain();ctx.audioGain.connect(ctx.destination)}
     let routed=false;
-    try{const src=ctx.createMediaStreamSource(st);src.connect(ctx.audioGain);ctx.audioSink=src;ctx.audioSinkStream=st;routed=true}catch{}
+    try{const src=ctx.createMediaStreamSource(new MediaStream([voiceTrack]));src.connect(ctx.audioGain);ctx.audioSink=src;ctx.audioSinkTrack=voiceTrack;routed=true}catch{}
     ctx.audioUsesElement=!routed;
     if(!routed){const value=Math.max(0,Math.min(1,(Number(volumeSlider.value)||100)/100));remoteAudio.volume=value;remoteAudio.muted=false}
     (async()=>{try{const saved=parseFloat(await ss('volume'));setCallVolume(saved>0&&saved<=1?Math.round(saved*100):100,false)}catch{setCallVolume(Number(volumeSlider.value)||100,false)}})()
@@ -1529,7 +1535,7 @@ function renderTransferSetupStatus(){const badge=$('#transferRouteBadge'),setBad
 function saveTcpSettings(){const port=validTcpPort(tcpListenPortInput?.value);if(!port){tcpListenPortInput.value=String(tcpFilePort);return}tcpFilePort=port;fileTransportMode=['auto','webrtc','tcp'].includes(fileTransportSetting?.value)?fileTransportSetting.value:'auto';tcpAutoRetryEpoch=-1;tcpAutoRetryAt=0;if(fileTransportMode==='webrtc'&&directFileId)closeTcpLane();ssSet('tcpListenPort',String(port));ssSet('fileTransport',fileTransportMode);renderTransferSetupStatus()}
 if(fileTransportSetting&&tcpListenPortInput){fileTransportSetting.onchange=saveTcpSettings;tcpListenPortInput.onchange=saveTcpSettings}
 $('#checkTransferSetup')?.addEventListener('click',renderTransferSetupStatus);
-let screenCursor='always',screenContentHint='motion',screenBitrateMbps=20,screenBitrateExplicit=false,screenCodec='auto',shareResolution='source',shareFrameRate=60,screenAudioOn=true,networkCapacity=null,networkLiveUploadMbps=NaN,hardwareScreenCodec='',remoteVoicePlayoutStop=null;
+let screenCursor='always',screenContentHint='motion',screenBitrateMbps=20,screenBitrateExplicit=false,screenCodec='auto',shareResolution='source',shareFrameRate=60,screenAudioOn=true,shareSystemMixFallback=true,networkCapacity=null,networkLiveUploadMbps=NaN,hardwareScreenCodec='',remoteVoicePlayoutStop=null;
 function abortScreenSharePicker(){screenSharePickerEpoch++;const cancel=screenSharePickerCancel;screenSharePickerCancel=null;if(cancel)cancel();discardPrimedScreenAudioContext();try{window.pairEnv?.setPendingSource?.(null)}catch{}}
 function shareSourceType(source){if(source?.type==='screen'||String(source?.id||'').startsWith('screen:'))return'screen';return'application'}
 function excludedScreenSource(source){return /\bnvidia\s+broadcast\b/i.test(String(source?.name||''))}
@@ -1564,11 +1570,11 @@ function addScreenShareSettings(){
   const tab=document.createElement('button');tab.type='button';tab.className='settings-tab';tab.dataset.settingsTab='screen';tab.setAttribute('role','tab');tab.setAttribute('aria-selected','false');tab.textContent='Screen sharing';
   const page=document.createElement('section');page.className='settings-section settings-page';page.dataset.settingsPage='screen';page.setAttribute('role','tabpanel');page.hidden=true;
   const maxSlider=sliderBitrateMaxMbps();
-  page.innerHTML='<div><h3>Screen sharing</h3><p>Your source resolution and frame-rate choice stay fixed. Motion mode may temporarily reduce encoded resolution under real network pressure to preserve smooth cadence; Detail mode preserves pixels instead.</p></div><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic — hardware-friendly</option><option value="H264">H.264 — widest support</option><option value="AV1">AV1 — best compression</option><option value="VP9">VP9</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">20 Mbps</output></span><input id="screenBitrateSetting" type="range" min="2" max="'+maxSlider+'" value="20" step="1" /><small id="screenBitrateCapHint" class="settings-hint">After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).</small></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — preserve smooth games/video</option><option value="detail">Detail — preserve text resolution</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Native AV1 uses the discrete NVIDIA or AMD encoder, syncs capture to content, keeps lookahead off, targets about 110 ms, and never lets live latency go past 260 ms. A launch speed probe raises the budget toward the GPU encoder’s useful ceiling (about 200 Mbps at 4K60 on NVIDIA) when your upload can carry it; the bitrate slider never offers more than the safe rate for the measured path. Software encode stays on the conservative curve. Live native share keeps that encode rate and skips stale pictures instead of cutting bitrate; a sustained decoder failure switches only that viewer to a capped compatibility codec.</p><div class="settings-inline-actions"><button id="testScreenAudio" type="button">Test isolated computer audio</button></div><p id="screenAudioTestStatus" class="settings-hint" aria-live="polite">Checks the same isolated audio route used by a real share.</p>';
+  page.innerHTML='<div><h3>Screen sharing</h3><p>Your source resolution and frame-rate choice stay fixed. Motion mode may temporarily reduce encoded resolution under real network pressure to preserve smooth cadence; Detail mode preserves pixels instead.</p></div><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic — hardware-friendly</option><option value="H264">H.264 — widest support</option><option value="AV1">AV1 — best compression</option><option value="VP9">VP9</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">20 Mbps</output></span><input id="screenBitrateSetting" type="range" min="2" max="'+maxSlider+'" value="20" step="1" /><small id="screenBitrateCapHint" class="settings-hint">After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).</small></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — preserve smooth games/video</option><option value="detail">Detail — preserve text resolution</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Native AV1 uses the discrete NVIDIA or AMD encoder, syncs capture to content, keeps lookahead off, targets about 110 ms, and never lets live latency go past 260 ms. A launch speed probe raises the budget toward the GPU encoder’s useful ceiling (about 200 Mbps at 4K60 on NVIDIA) when your upload can carry it; the bitrate slider never offers more than the safe rate for the measured path. Software encode stays on the conservative curve. Live native share keeps that encode rate and skips stale pictures instead of cutting bitrate; a sustained decoder failure switches only that viewer to a capped compatibility codec.</p><label class="settings-toggle"><input id="screenSystemMixSetting" type="checkbox" checked /><span>Whole-PC sound when isolated capture is unavailable</span><small>Windows 10 without the app-isolation update cannot leave Knot out of the share. This fallback shares all PC sound, so the people watching may hear an echo of their own voice.</small></label><div class="settings-inline-actions"><button id="testScreenAudio" type="button">Test isolated computer audio</button></div><p id="screenAudioTestStatus" class="settings-hint" aria-live="polite">Checks the same isolated audio route used by a real share.</p>';
   document.querySelector('.settings-tabs').append(tab);document.querySelector('.settings-pages').append(page);tab.onclick=()=>openSettingsTab('screen');
   const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),codec=$('#screenCodecSetting'),contentHint=$('#screenContentHintSetting'),cursor=$('#screenCursorSetting');
   const updateBitrate=()=>{const max=sliderBitrateMaxMbps();bitrate.max=String(max);screenBitrateMbps=Math.max(2,Math.min(max,Number(bitrate.value)||20));bitrate.value=String(screenBitrateMbps);bitrateValue.textContent=screenBitrateMbps+' Mbps';bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/Math.max(1,max-2)*100)+'%');ssSet('screenBitrate',String(screenBitrateMbps));const hint=$('#screenBitrateCapHint');if(hint)hint.textContent=screenShareHasProbe()?'This slider tops out at '+max+' Mbps, the safe rate for your measured connection. Fast links can still use up to 200 Mbps.':'After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).'};
-  bitrate.oninput=()=>{screenBitrateExplicit=true;ssSet('screenBitrateExplicit','yes');updateBitrate()};enableRangeDrag(bitrate);codec.onchange=()=>{screenCodec=['auto','H264','AV1','VP9','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};$('#testScreenAudio').onclick=()=>testScreenAudioIsolation($('#testScreenAudio'),$('#screenAudioTestStatus'));
+  bitrate.oninput=()=>{screenBitrateExplicit=true;ssSet('screenBitrateExplicit','yes');updateBitrate()};enableRangeDrag(bitrate);codec.onchange=()=>{screenCodec=['auto','H264','AV1','VP9','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};$('#testScreenAudio').onclick=()=>testScreenAudioIsolation($('#testScreenAudio'),$('#screenAudioTestStatus'));const systemMix=$('#screenSystemMixSetting');systemMix.onchange=()=>{shareSystemMixFallback=systemMix.checked;ssSet('shareSystemMixFallback',shareSystemMixFallback?'on':'off')};
   return async()=>{
     const [savedBitrateValue,bitrateExplicit]=await Promise.all([ss('screenBitrate'),ss('screenBitrateExplicit')]),savedBitrate=Number(savedBitrateValue),legacyDefault=bitrateExplicit!=='yes'&&savedBitrate===12;screenBitrateExplicit=bitrateExplicit==='yes';screenBitrateMbps=savedBitrateValue!==null&&savedBitrateValue!==''&&Number.isFinite(savedBitrate)&&!legacyDefault?Math.max(2,Math.min(sliderBitrateMaxMbps(),savedBitrate)):20;bitrate.value=String(screenBitrateMbps);updateBitrate();
     const savedCodec=await ss('screenCodec');screenCodec=['auto','H264','AV1','VP9','VP8'].includes(savedCodec)?savedCodec:'auto';codec.value=screenCodec;
@@ -1577,6 +1583,7 @@ function addScreenShareSettings(){
     const [savedResolution,explicitResolution]=await Promise.all([ss('shareResolution'),ss('shareResolutionExplicit')]);shareResolution=explicitResolution==='yes'&&['source','720','1080','1440','2160'].includes(savedResolution)?savedResolution:'source';
     const savedFps=Number(await ss('shareFrameRate'));shareFrameRate=savedFps===30?30:60;
     const savedAudio=await ss('shareSystemAudio');screenAudioOn=savedAudio==null?true:savedAudio==='on';
+    const savedMix=await ss('shareSystemMixFallback');shareSystemMixFallback=savedMix!=='off';const mixToggle=$('#screenSystemMixSetting');if(mixToggle)mixToggle.checked=shareSystemMixFallback;
   };
 }
 const restoreScreenShareSettings=addScreenShareSettings();
@@ -2639,7 +2646,7 @@ async function attachServerScreenAudio(gen,stream){
     else setServerStatus('Sharing · computer sound live',true);
   }catch(error){console.warn('[AUDIO] server screen attach failed:',error?.message||error);discardTrack()}
 }
-async function stopServerScreenShare(){const stream=serverScreenStream,nativeSession=serverNativeScreenSession;serverScreenGen++;serverScreenStarting=false;if(!stream&&!nativeSession){if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{};cleanupNativeScreenCapture();if(!networkCapacity)void startNetworkCapacityProbe();return}serverScreenStream=null;serverNativeScreenSession=null;nativeLiveBudgetMbps=NaN;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);serverNativeLocalPlayer?.destroy();serverNativeLocalPlayer=null;serverNativeScreenInit=null;if(serverNativeScreenAudioStream){serverNativeScreenAudioStream.getTracks().forEach(track=>track.stop());serverNativeScreenAudioStream=null}stream?.getTracks().forEach(track=>track.stop());if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{};cleanupNativeScreenCapture();const preview=$('#serverVoiceScreenPreview');preview.pause();preview.srcObject=null;try{preview.removeAttribute('src');preview.load()}catch{}preview.hidden=true;serverFocusedShareId=serverFocusedShareId===directoryUserId?'':serverFocusedShareId;const stops=[];for(const [peerId,state] of serverPeers){if(state.channel?.readyState==='open')try{state.channel.send(JSON.stringify({t:'server-screen-end',serverId:state.context.serverId}))}catch{}if(state.nativeSendChannel){if(state.nativeSendChannel.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-end',serverId:state.context.serverId}))}catch{}try{state.nativeSendChannel.close()}catch{}state.nativeSendChannel=null}await setServerScreenAudioTrack(state,null).catch(()=>{});for(const sender of state.screenSenders||[])try{state.pc.removeTrack(sender)}catch{}state.screenSenders=[];stops.push(renegotiateServerPeer(peerId,state))}await Promise.allSettled(stops);if(!networkCapacity)void startNetworkCapacityProbe();renderServerVoiceUI()}
+async function stopServerScreenShare(){const stream=serverScreenStream,nativeSession=serverNativeScreenSession;serverScreenGen++;serverScreenStarting=false;if(!stream&&!nativeSession){stopShareAudioCapture();cleanupNativeScreenCapture();if(!networkCapacity)void startNetworkCapacityProbe();return}serverScreenStream=null;serverNativeScreenSession=null;nativeLiveBudgetMbps=NaN;if(nativeSession)window.pairNativeScreen?.stop(nativeSession.id);serverNativeLocalPlayer?.destroy();serverNativeLocalPlayer=null;serverNativeScreenInit=null;if(serverNativeScreenAudioStream){serverNativeScreenAudioStream.getTracks().forEach(track=>track.stop());serverNativeScreenAudioStream=null}stream?.getTracks().forEach(track=>track.stop());stopShareAudioCapture();cleanupNativeScreenCapture();const preview=$('#serverVoiceScreenPreview');preview.pause();preview.srcObject=null;try{preview.removeAttribute('src');preview.load()}catch{}preview.hidden=true;serverFocusedShareId=serverFocusedShareId===directoryUserId?'':serverFocusedShareId;const stops=[];for(const [peerId,state] of serverPeers){if(state.channel?.readyState==='open')try{state.channel.send(JSON.stringify({t:'server-screen-end',serverId:state.context.serverId}))}catch{}if(state.nativeSendChannel){if(state.nativeSendChannel.readyState==='open')try{state.nativeSendChannel.send(JSON.stringify({t:'native-screen-end',serverId:state.context.serverId}))}catch{}try{state.nativeSendChannel.close()}catch{}state.nativeSendChannel=null}await setServerScreenAudioTrack(state,null).catch(()=>{});for(const sender of state.screenSenders||[])try{state.pc.removeTrack(sender)}catch{}state.screenSenders=[];stops.push(renegotiateServerPeer(peerId,state))}await Promise.allSettled(stops);if(!networkCapacity)void startNetworkCapacityProbe();renderServerVoiceUI()}
 function disposeServerVoiceAttempt(attempt){
   if(!attempt||attempt.committed)return;for(const stream of new Set([attempt.stream,attempt.raw].filter(Boolean)))try{stream.getTracks().forEach(track=>track.stop())}catch{}stopVoiceNoisePipeline(attempt.pipeline);attempt.stream=attempt.raw=attempt.pipeline=null;
 }
@@ -2659,7 +2666,7 @@ async function joinServerVoice(channelOverride=null){
   }catch(error){if(gen===serverVoiceGen&&serverVoiceAttempt===attempt){callStatus.textContent='Could not join voice: '+(error?.message||error);callStatus.className='call-status';syncServerMesh();renderServerVoiceUI()}}
   finally{disposeServerVoiceAttempt(attempt);if(serverVoiceAttempt===attempt)serverVoiceAttempt=null;if(gen===serverVoiceGen&&serverVoiceStarting){serverVoiceStarting=false;if(activeGroupDmId){renderCallButtonState('start','Start group call','Start group voice call');renderFriends()}else if(activeServerId){const voice=activeChannel()?.type==='voice';renderCallButtonState('start',voice?'Join voice':'Start call',voice?'Join voice channel':'Start voice call');renderChannels()}renderServerVoiceUI()}}
 }
-function stopServerVoice(){serverVoiceGen++;serverVoiceStarting=false;const pending=serverVoiceAttempt;serverVoiceAttempt=null;disposeServerVoiceAttempt(pending);abortScreenSharePicker();serverScreenGen++;serverScreenStarting=false;if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{};stopSpeakingMonitor('server:'+directoryUserId);const serverId=joinedVoiceServerId||activeServerId,channelId=joinedVoiceChannelId,scope=joinedVoiceScope||'server';if(channelId&&serverId)directorySend(scope==='group-dm'?{type:'voice-state',groupId:serverId,channelId,joined:false}:{type:'voice-state',serverId,channelId,joined:false});void closeGroupSfu();if(serverScreenSharing())stopServerScreenShare();const streams=[serverVoiceStream,serverVoiceRawStream];serverVoiceStream=null;serverVoiceRawStream=null;for(const stream of new Set(streams.filter(Boolean)))try{stream.getTracks().forEach(track=>track.stop())}catch{}stopVoiceNoisePipeline(serverVoiceNoisePipeline);serverVoiceNoisePipeline=null;joinedVoiceServerId='';joinedVoiceChannelId='';joinedVoiceScope='';joinedVoiceAt=0;serverVoiceMuted=false;serverFocusedShareId='';serverSuppressedShares.clear();clearInterval(voiceElapsedTimer);closeServerMesh();renderServerVoiceUI();closeWatchTogether();if(activeGroupDmId){renderCallButtonState('start','Start group call','Start group voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderFriends()}else if(activeServerId){const voice=activeChannel()?.type==='voice';renderCallButtonState('start',voice?'Join voice':'Start call',voice?'Join voice channel':'Start voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderChannels()}}
+function stopServerVoice(){serverVoiceGen++;serverVoiceStarting=false;const pending=serverVoiceAttempt;serverVoiceAttempt=null;disposeServerVoiceAttempt(pending);abortScreenSharePicker();serverScreenGen++;serverScreenStarting=false;if(!screenActive&&!screenStarting)stopShareAudioCapture();stopSpeakingMonitor('server:'+directoryUserId);const serverId=joinedVoiceServerId||activeServerId,channelId=joinedVoiceChannelId,scope=joinedVoiceScope||'server';if(channelId&&serverId)directorySend(scope==='group-dm'?{type:'voice-state',groupId:serverId,channelId,joined:false}:{type:'voice-state',serverId,channelId,joined:false});void closeGroupSfu();if(serverScreenSharing())stopServerScreenShare();const streams=[serverVoiceStream,serverVoiceRawStream];serverVoiceStream=null;serverVoiceRawStream=null;for(const stream of new Set(streams.filter(Boolean)))try{stream.getTracks().forEach(track=>track.stop())}catch{}stopVoiceNoisePipeline(serverVoiceNoisePipeline);serverVoiceNoisePipeline=null;joinedVoiceServerId='';joinedVoiceChannelId='';joinedVoiceScope='';joinedVoiceAt=0;serverVoiceMuted=false;serverFocusedShareId='';serverSuppressedShares.clear();clearInterval(voiceElapsedTimer);closeServerMesh();renderServerVoiceUI();closeWatchTogether();if(activeGroupDmId){renderCallButtonState('start','Start group call','Start group voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderFriends()}else if(activeServerId){const voice=activeChannel()?.type==='voice';renderCallButtonState('start',voice?'Join voice':'Start call',voice?'Join voice channel':'Start voice call');callStatus.textContent='Voice off';callStatus.className='call-status';renderChannels()}}
 async function sendServerMessage(text,gif){const server=activeServer(),channel=activeChannel();if(!server||!channel||channel.type!=='text')return false;const groupDmEntity=isGroupDm(server),groupKey=await serverTextKey(server,{create:true});if(!groupKey){await requestServerTextKey(server);pairHint.textContent=groupDmEntity?'Waiting for a group member to share this group’s current secure key.':'Waiting for an online member to share this server’s secure text key.';return false}const id=clientHex(16),time=Date.now(),payload=chatPayload(text,gif),epoch=Number(server.keyEpoch)||1,scope=groupDmEntity?'group-dm':'server',aad=relayAad(scope,id,directoryUserId,'',server.id,groupDmEntity?channel.id+'@'+epoch:channel.id),cipher=await sealRelay(groupKey.key,JSON.stringify({payload,time}),aad),envelope=groupDmEntity?{type:'relay-text',scope,id,groupId:server.id,channelId:channel.id,keyEpoch:epoch,cipher}:{type:'relay-text',scope,id,serverId:server.id,channelId:channel.id,cipher};if(!directorySend(envelope)){pairHint.textContent='Encrypted text relay is offline.';return false}const entry=normalizeServerHistoryEntry({id,text,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,fallbackUrl:gif.fallbackUrl||null,emoji:gif.emoji===true}:null,author:{id:directoryUserId,name:profileName,image:'',frame:normalizeFrame(profileFrame)},time},server,directoryUserId);if(entry)storeServerHistory(server.id,channel.id,[entry]);pairHint.textContent=groupDmEntity?'Encrypted group message sent. Offline members will receive it when they return.':'Encrypted live message sent.';return true}
 function directoryProfilesChanged(before,after){
   const collect=snapshot=>{const users=new Map();for(const user of [...(snapshot?.friends||[]),...Object.values(snapshot?.members||{})])if(user?.id)users.set(user.id,user);return users},left=collect(before),right=collect(after);if(left.size!==right.size)return true;
@@ -3106,7 +3113,7 @@ function disconnectRoom({preserveCall=false}={}){const resumeCall=!!preserveCall
   screenGen++;
   screenStarting=false;
   if(nativeScreenSession)try{window.pairNativeScreen?.stop(nativeScreenSession.id)}catch{}nativeScreenSession=null;if(nativeScreenChannel)try{nativeScreenChannel.close()}catch{}nativeScreenChannel=null;nativeLocalPlayer?.destroy();nativeLocalPlayer=null;nativeScreenAnnounced=false;if(nativeScreenAudioStream){nativeScreenAudioStream.getTracks().forEach(track=>track.stop());nativeScreenAudioStream=null}
-  if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+  if(!serverScreenSharing())stopShareAudioCapture()
   screenActive=false;screenAudioDebug='';
   screenStatsGeneration++;if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;
   const hadServerPulse=[...serverPeers.values()].some(state=>!state.closing&&state.channel?.readyState==='open');
@@ -3430,7 +3437,7 @@ async function setupNativeScreenCapture(){
     return null;
   }
 
-  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubClean,unsubError,unsubFormat,addonData=false,formatReady=false,captureClosed=false,captureFailure='',outputTrack=null,captureRate=48000;let shareResample=()=>new Float32Array(0);const captureOwner={};
+  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubClean,unsubError,unsubFormat,addonData=false,formatReady=false,systemMix=false,captureClosed=false,captureFailure='',outputTrack=null,captureRate=48000;let shareResample=()=>new Float32Array(0);const captureOwner={};
   const dispose=(stopCapture=isCurrent())=>{captureClosed=true;if(unsubClean)unsubClean();if(unsubError)unsubError();if(unsubFormat)unsubFormat();if(stopCapture)try{window.pairCapture.stop()}catch{}try{op?.port.close()}catch{}try{op?.disconnect()}catch{}};
   try{
     ctx=takeScreenAudioContext();
@@ -3467,7 +3474,10 @@ async function setupNativeScreenCapture(){
     // sharing could never be heard by the viewer: the route was torn down
     // before its first non-silent packet. The bounded AudioWorklet remains the
     // only path for samples once they arrive.
-    unsubFormat=window.pairCapture.onFormat?.(fmt=>{if(!isCurrent())return;if(Number(fmt?.sampleRate)>0)captureRate=Number(fmt.sampleRate);if(fmt?.available!==false&&fmt?.isolated===true)formatReady=true;else if(fmt?.available!==false)captureFailure='isolated WASAPI process-loopback format unavailable'});
+    // Windows 10 without process-loopback support can only offer the whole
+    // device mix, which includes Knot's own playback. Use it only when the
+    // user allows the fallback, and say so in the share status.
+    unsubFormat=window.pairCapture.onFormat?.(fmt=>{if(!isCurrent())return;if(Number(fmt?.sampleRate)>0)captureRate=Number(fmt.sampleRate);if(fmt?.available===false)return;if(fmt?.isolated===true){formatReady=true;systemMix=false}else if(fmt?.mode==='system-mix'&&shareSystemMixFallback){formatReady=true;systemMix=true;logShareAudio('isolated capture unavailable ('+(fmt.isolationError||'unknown')+') · using whole-PC sound')}else captureFailure='isolated WASAPI process-loopback format unavailable'+(fmt?.isolationError?' ('+fmt.isolationError+')':'')});
     if(!isCurrent()){dispose(false);try{ctx.close()}catch{};return null}
     // Attach only after the addon confirms process isolation. PCM by itself is
     // not proof of isolation; an idle isolated route may produce none yet.
@@ -3480,8 +3490,10 @@ async function setupNativeScreenCapture(){
         await delay(120*handshake);
         if(!isCurrent()||captureFailure)break;
       }
-      window.pairCapture.start();
-      const deadline=Date.now()+2500;
+      window.pairCapture.start({allowSystemMix:shareSystemMixFallback});
+      // A refused isolated activation can use its full 5 s timeout before the
+      // whole-PC fallback reports a format.
+      const deadline=Date.now()+(shareSystemMixFallback?6500:2500);
       while(isCurrent()&&!formatReady&&!captureFailure&&Date.now()<deadline)await delay(40);
       if(formatReady||captureFailure||!isCurrent())break;
     }
@@ -3493,7 +3505,7 @@ async function setupNativeScreenCapture(){
     }
     screenOutCtx=ctx;screenOutDest=dest;screenCaptureOwner=captureOwner;
     screenNative=true;
-    outputTrack=dest.stream.getAudioTracks()[0];if(outputTrack){outputTrack._knotCaptureOwner=captureOwner;outputTrack._knotShareAudioHeard=()=>addonData===true}
+    outputTrack=dest.stream.getAudioTracks()[0];if(outputTrack){outputTrack._knotCaptureOwner=captureOwner;outputTrack._knotShareAudioHeard=()=>addonData===true;outputTrack._knotSystemMix=systemMix}
     try{if(outputTrack)outputTrack.contentHint='music'}catch{}
     shareAudioFadeIn=()=>{try{op.port.postMessage({type:'fade'})}catch{}};
     screenCaptureCleanup=()=>dispose(true);if(!outputTrack){cleanupNativeScreenCapture(captureOwner);return null}return outputTrack;
@@ -3604,6 +3616,12 @@ async function setReservedScreenAudioTrack(track,target=pc){
   }
   return sender;
 }
+// Ending a share must release the OS capture even when its audio was still
+// starting: the in-flight setup is no longer current and will not stop it.
+function stopShareAudioCapture(){
+  if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+  else if(window.pairEnv?.platform==='win32')try{window.pairCapture?.stop?.()}catch{}
+}
 function cleanupNativeScreenCapture(owner=null){
   if(owner&&owner!==screenCaptureOwner)return false;
   screenCaptureAttempt++;
@@ -3632,14 +3650,23 @@ async function testScreenAudioIsolation(button,status){
       unsubs.push(window.pairCapture?.onFormat?.(value=>{if(value?.available!==false)format=value}));
       unsubs.push(window.pairCapture?.onCleanAudio?.((_buf,count)=>{frames+=Number(count)||0}));
       unsubs.push(window.pairCapture?.onError?.(message=>{error=String(message||'capture failed')}));
-      window.pairCapture?.start?.();
-      const deadline=Date.now()+2500;while(!frames&&!error&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,40));
-      if(error)throw new Error(error);if(!frames)throw new Error('WASAPI process-loopback initialized but delivered no PCM packets');
-      status.dataset.state='ready';status.textContent=`Ready — WASAPI process isolation delivered ${frames.toLocaleString()} frames${format?.sampleRate?' at '+format.sampleRate.toLocaleString()+' Hz':''}${format?.channels?' · '+format.channels+' channels':''}.`;
+      window.pairCapture?.start?.({allowSystemMix:shareSystemMixFallback});
+      const deadline=Date.now()+(shareSystemMixFallback?6500:2500);while(!frames&&!error&&format?.mode!=='system-mix'&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,40));
+      if(format?.mode==='system-mix'){const settle=Date.now()+1500;while(!frames&&!error&&Date.now()<settle)await new Promise(resolve=>setTimeout(resolve,40))}
+      if(error)throw new Error(error);
+      const rate=format?.sampleRate?' at '+format.sampleRate.toLocaleString()+' Hz':'',channels=format?.channels?' · '+format.channels+' channels':'';
+      if(format?.mode==='system-mix'){
+        // A device loopback delivers nothing while the PC is silent, so an
+        // empty test is not a failure on this route.
+        status.dataset.state='ready';status.textContent=`Isolated capture is unavailable on this Windows (${format.isolationError||'unknown error'}). Whole-PC fallback is ready${frames?` and delivered ${frames.toLocaleString()} frames`:' (play some sound to hear it)'}${rate}${channels}. Viewers may hear an echo of their own voice.`;
+        return;
+      }
+      if(!frames)throw new Error('WASAPI process-loopback initialized but delivered no PCM packets');
+      status.dataset.state='ready';status.textContent=`Ready — WASAPI process isolation delivered ${frames.toLocaleString()} frames${rate}${channels}.`;
     }else throw new Error('isolated computer-audio capture is available in the Windows and Linux apps');
   }catch(error){
     const message=String(error?.message||error||'unknown error').replace(/\s+/g,' ').slice(0,240);
-    status.dataset.state='error';status.textContent='Unavailable — '+message+'. Screen video remains safe; Knot will not fall back to an echoing whole-system mix.';
+    status.dataset.state='error';status.textContent='Unavailable — '+message+'. Screen video remains safe'+(window.pairEnv?.platform==='win32'&&!shareSystemMixFallback?'; turn on whole-PC sound above to use the Windows 10 fallback.':'.');
   }finally{
     if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
     else try{window.pairCapture?.stop?.()}catch{}
@@ -4394,7 +4421,7 @@ async function confirmShareAudioHeard(track,stillWanted){
 // PipeWire could not build the muted monitor return, so the sharer is not
 // hearing their own speakers. That is worth reporting even once sound is live.
 const missingMonitor=track?._knotShareLocalMonitorMissing===true;
-const suffix=missingMonitor?' · your speakers are silent while sharing':'';
+const suffix=(missingMonitor?' · your speakers are silent while sharing':'')+(track?._knotSystemMix===true?' · whole-PC sound, viewers may hear their own voice':'');
 const started=Date.now();
 while(stillWanted()&&Date.now()-started<2000){
 if(track?._knotShareAudioHeard?.()===true)return ' · sound live'+suffix;
@@ -4666,7 +4693,7 @@ async function stopScreenShare(fromEnd, {silent=false}={}){
   // live. Stopping it first (or replaceTrack(null)) can recycle onto the mic.
   if(pc)try{await setReservedScreenAudioTrack(null)}catch{}
   if(nativeScreenAudioStream){nativeScreenAudioStream.getTracks().forEach(track=>track.stop());nativeScreenAudioStream=null}
-  if(window.pairEnv?.platform==='linux')window.pairEnv.stopLinuxShareAudio?.();
+  stopShareAudioCapture();
   screenActive=false;friendWatchingScreen=false;screenAudioDebug='';
   screenStatsGeneration++;if(screenStatsTimer){clearInterval(screenStatsTimer);screenStatsTimer=null}screenStatsLast=null;
   shareBudgetApplied.delete(directBudgetKey());
@@ -4713,7 +4740,7 @@ async function applyLiveShareAudioToggle(){
     if(nativeScreenAudioStream){nativeScreenAudioStream.getTracks().forEach(track=>track.stop());nativeScreenAudioStream=null}
     if(serverNativeScreenAudioStream){serverNativeScreenAudioStream.getTracks().forEach(track=>track.stop());serverNativeScreenAudioStream=null}
     cleanupNativeScreenCapture();
-    if(window.pairEnv?.platform==='linux')try{window.pairEnv.stopLinuxShareAudio?.()}catch{}
+    stopShareAudioCapture()
     screenAudioDebug=' · sound off';
     if(screenActive)screenStatus.textContent='Sharing'+screenAudioDebug;
     return;
