@@ -35,9 +35,9 @@ app.whenReady().then(async () => {
       osc.frequency.value=440;osc.connect(inputDest);osc.start();await input.resume();
       const pipeline=await createDeepFilterMicrophone(inputDest.stream),analyser=pipeline.context.createAnalyser(),mute=pipeline.context.createGain();pipeline.processor.setSuppressionLevel(0);
       analyser.fftSize=512;mute.gain.value=0;pipeline.node.connect(analyser).connect(mute).connect(pipeline.context.destination);
-      await new Promise(resolve=>setTimeout(resolve,700));
-      const samples=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(samples);
-      const peak=Math.max(...samples.map(Math.abs));
+      // The model outputs silence for about a second while it warms up.
+      const samples=new Float32Array(analyser.fftSize);let peak=0;
+      for(const until=Date.now()+5000;peak<=.001&&Date.now()<until;){await new Promise(resolve=>setTimeout(resolve,100));analyser.getFloatTimeDomainData(samples);peak=Math.max(...samples.map(Math.abs))}
       assert(pipeline.stream.getAudioTracks().length===1,'DeepFilter did not return one microphone track');
       assert(peak>.001,'DeepFilter worklet produced only silence');
       osc.stop();inputDest.stream.getTracks().forEach(track=>track.stop());pipeline.source.disconnect();pipeline.node.disconnect();pipeline.destination.disconnect();pipeline.processor.destroy();for(const url of pipeline.urls)URL.revokeObjectURL(url);await pipeline.context.close();await input.close();
