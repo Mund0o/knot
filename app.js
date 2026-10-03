@@ -1106,7 +1106,9 @@ function monitorNativeScreenBuffering(channel,{isActive}={}){
     // black still increments paintedFrames and used to skip this recovery.
     const deadPicture=!!stats.pictureDead&&Number(stats.width)>=32&&Number(stats.height)>=32;
     if(painted>0&&!deadPicture){blackStalls=0;return}
-    if(!(bytes>=40000||state?.haveInit))return;
+    // No key picture has reached the decoder yet: the link is slow, not the
+    // decoder. Switching decoders or recapturing would not make it arrive.
+    if(!deadPicture&&(!state?.firstKeyAt||performance.now()-state.firstKeyAt<NATIVE_FIRST_PICTURE_GRACE_MS)){blackStalls=0;return}
     blackStalls++;
     if(blackStalls>=2&&state.player?.advanceBackend?.(new Error(deadPicture?'Native AV1 painted a black picture':'Native AV1 produced no picture'))){
       advancedBackend=true;
@@ -4472,12 +4474,21 @@ function scheduleRemoteShareAudioBind(){
   // Force-rebind the reserved receiver so a silent placeholder track is bounced.
   remoteShareAudioBindTimers=[400,1200,2500,5000,8000].map(delay=>setTimeout(()=>{if(!remoteScreenExpected)return;bindReservedRemoteScreenAudio({force:true})},delay));
 }
-function armNativeScreenArrive(){
+// A fallback makes the sharer start a new capture, which reopens their screen
+// picker. On a slow or lossy link the first 4K key picture can take seconds to
+// arrive, and a standard WebRTC share would cross the same link, so wait for a
+// key picture before blaming the decoder.
+const NATIVE_FIRST_PICTURE_GRACE_MS=4000;
+function armNativeScreenArrive(startedAt=performance.now()){
   clearTimeout(remoteNativeArriveTimer);
   remoteNativeArriveTimer=setTimeout(()=>{
     if(!remoteScreenExpected||!remoteNativeScreenExpected)return;
-    const stats=nativeRemotePlayer?.stats?.()||{};
+    const stats=nativeRemotePlayer?.stats?.()||{},receive=remoteNativeScreenChannel?._nativeReceive;
     if(nativeRemotePlayer&&(Number(stats.paintedFrames)||0)>0)return;
+    if(!receive?.firstKeyAt||performance.now()-receive.firstKeyAt<NATIVE_FIRST_PICTURE_GRACE_MS){
+      if(performance.now()-startedAt>=2500)screenStatus.textContent='Friend’s screen is loading slowly · waiting for the first picture';
+      armNativeScreenArrive(startedAt);return;
+    }
     screenStatus.textContent='Friend’s AV1 stream did not start · asking for a compatibility share';
     try{if(remoteNativeScreenChannel?.readyState==='open')remoteNativeScreenChannel.send(JSON.stringify({t:'native-screen-fallback'}))}catch{}
     try{send({t:'native-screen-fallback'})}catch{}
@@ -4513,7 +4524,11 @@ function removeNativeReceiveSequence(state,seq){const complete=state.complete.ge
 function appendNativeReceiveEntry(state,entry){
   if(entry.kind==='init'){state.latestInit=entry.data;if(state.haveInit){state.resetBeforeKey=true;return true}state.haveInit=true;return state.player?.append(entry.data,entry)!==false}
   if(state.resetBeforeKey){if(!entry.key)return true;state.resetBeforeKey=false;if(typeof state.player?.reset!=='function'||state.player.reset()===false)return false}
-  return state.player?.append(entry.data,entry)!==false
+  const appended=state.player?.append(entry.data,entry)!==false;
+  // Only a complete key picture handed to the decoder can prove the decoder
+  // broken. Before that, a missing picture is a slow or lossy connection.
+  if(appended&&entry.kind==='cluster'&&entry.key&&!state.firstKeyAt)state.firstKeyAt=performance.now();
+  return appended
 }
 function drainNativeScreenReceive(channel){
   const state=channel?._nativeReceive;if(!state)return;
