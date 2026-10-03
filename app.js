@@ -1255,46 +1255,88 @@ async function probeHardwareDecode(){
   for(const [name,codec] of Object.entries(codecs)){try{const result=await VideoDecoder.isConfigSupported({codec,codedWidth:3840,codedHeight:2160,hardwareAcceleration:'prefer-hardware'});if(result?.supported)supported.push(name)}catch{}}
   localHardwareDecode=supported;announceNetBudget();renderVideoDecodeStatus();
 }
-// A 256×256 AV1 key picture: red, green, blue and yellow quadrants. The
-// NVIDIA import failure painted decoded video solid white, so a decode that
-// does not reproduce all four colours on a canvas is treated as broken.
-const GPU_DECODE_PROBE_AV1='EgAKCwAAAAO///m18gCAMlEQAIUAAACAAAAA68fVXIEzpCPenX/mHoCPWvdZlL9zvF4JoisrpHVpVZypCqMU9LBvqXy4A9OFXRkrkmsctzqNmMhDYDEp8X1ZH+dlFRwx8UA=';
-async function verifyVideoDecodePicture({hardwareAcceleration='prefer-hardware',timeoutMs=8000}={}){
-  if(typeof VideoDecoder!=='function'||typeof EncodedVideoChunk!=='function')return 'unsupported';
-  const config={codec:'av01.0.00M.08',codedWidth:256,codedHeight:256,hardwareAcceleration};
-  try{if(!(await VideoDecoder.isConfigSupported(config))?.supported)return 'unsupported'}catch{return 'unsupported'}
-  let decoder=null,frame=null;
+// The NVIDIA decode check decodes a short clip on the GPU and on the CPU and
+// compares the last pictures. Decoding is exactly specified, so a correct GPU
+// decode matches the CPU one up to colour conversion, while the faults of older
+// nvidia-vaapi-driver builds (every picture white; AV1 stretched and smeared
+// after each key frame) do not. Pictures are compared by the correlation of
+// their brightness, which a colour-range difference barely moves (0.996) but a
+// geometry fault does (0.93 for the AV1 stretch alone). AV1 is checked when the GPU decodes it, H.264
+// otherwise (GeForce RTX 20 and GTX 16). The clips live in gpu-decode-probe.js,
+// loaded only when the check runs.
+const GPU_DECODE_COMPARE_LAST=10,GPU_DECODE_MIN_CORRELATION=.99;
+function loadGpuDecodeProbe(){
+  if(window.KnotGpuDecodeProbe)return Promise.resolve(window.KnotGpuDecodeProbe);
+  return new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='gpu-decode-probe.js';script.onload=()=>window.KnotGpuDecodeProbe?resolve(window.KnotGpuDecodeProbe):reject(new Error('decode check clips missing'));script.onerror=()=>reject(new Error('decode check clips unavailable'));document.head.append(script)});
+}
+// Returns null when this decoder type cannot take the clip at all.
+async function decodeProbeClip(clip,hardwareAcceleration,{frames=clip.frames,timeoutMs=8000}={}){
+  const config={codec:clip.codec,codedWidth:clip.width,codedHeight:clip.height,hardwareAcceleration};
+  try{if(!(await VideoDecoder.isConfigSupported(config))?.supported)return null}catch{return null}
+  const canvas=document.createElement('canvas');canvas.width=clip.width;canvas.height=clip.height;const context=canvas.getContext('2d',{willReadFrequently:true});
+  const pictures=[];let decoded=0,decoder=null;
   try{
-    const data=Uint8Array.from(atob(GPU_DECODE_PROBE_AV1),character=>character.charCodeAt(0));
-    frame=await new Promise((resolve,reject)=>{
-      const timer=setTimeout(()=>reject(new Error('decode timed out')),timeoutMs);
-      decoder=new VideoDecoder({output:value=>{clearTimeout(timer);resolve(value)},error:error=>{clearTimeout(timer);reject(error)}});
-      decoder.configure(config);decoder.decode(new EncodedVideoChunk({type:'key',timestamp:0,data}));decoder.flush().catch(()=>{});
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error('decode timed out')),timeoutMs),fail=error=>{clearTimeout(timer);reject(error)};
+      decoder=new VideoDecoder({output:frame=>{try{decoded++;if(decoded>frames.length-GPU_DECODE_COMPARE_LAST){context.drawImage(frame,0,0,clip.width,clip.height);pictures.push(context.getImageData(0,0,clip.width,clip.height).data)}}catch(error){fail(error)}finally{frame.close()}},error:fail});
+      decoder.configure(config);
+      frames.forEach((data,index)=>decoder.decode(new EncodedVideoChunk({type:index===0?'key':'delta',timestamp:index*33333,data:Uint8Array.from(atob(data),character=>character.charCodeAt(0))})));
+      decoder.flush().then(()=>{clearTimeout(timer);resolve()},fail);
     });
-    const canvas=document.createElement('canvas');canvas.width=256;canvas.height=256;const context=canvas.getContext('2d');context.drawImage(frame,0,0,256,256);
-    for(const [x,y,r,g,b] of [[64,64,255,0,0],[192,64,0,255,0],[64,192,0,0,255],[192,192,255,255,0]]){
-      const pixel=context.getImageData(x,y,1,1).data;
-      if(Math.abs(pixel[0]-r)>60||Math.abs(pixel[1]-g)>60||Math.abs(pixel[2]-b)>60)return 'broken';
-    }
-    return 'ok';
-  }catch{return 'broken'}
-  finally{try{frame?.close()}catch{}try{decoder?.close()}catch{}}
+  }finally{try{decoder?.close()}catch{}}
+  return {decoded,pictures};
+}
+function probeLuma(picture){const luma=new Float64Array(picture.length/4);for(let i=0,j=0;i<picture.length;i+=4,j++)luma[j]=.299*picture[i]+.587*picture[i+1]+.114*picture[i+2];return luma}
+// The lowest brightness correlation over the compared pictures (1 = same
+// picture up to brightness and contrast, 0 = unrelated or flat).
+function probePictureCorrelation(a,b){
+  if(!a||!b||a.decoded!==b.decoded||a.pictures.length!==b.pictures.length||!a.pictures.length)return 0;
+  let lowest=1;
+  for(let k=0;k<a.pictures.length;k++){
+    const x=probeLuma(a.pictures[k]),y=probeLuma(b.pictures[k]);if(x.length!==y.length)return 0;
+    let mx=0,my=0;for(let i=0;i<x.length;i++){mx+=x[i];my+=y[i]}mx/=x.length;my/=y.length;
+    let sxy=0,sxx=0,syy=0;for(let i=0;i<x.length;i++){const dx=x[i]-mx,dy=y[i]-my;sxy+=dx*dy;sxx+=dx*dx;syy+=dy*dy}
+    lowest=Math.min(lowest,sxx&&syy?sxy/Math.sqrt(sxx*syy):0);
+  }
+  return lowest;
+}
+// Mean absolute difference per colour channel (0-255), for diagnostics.
+function probePictureDifference(a,b){
+  if(!a||!b||a.decoded!==b.decoded||a.pictures.length!==b.pictures.length||!a.pictures.length)return Infinity;
+  let total=0,count=0;
+  for(let i=0;i<a.pictures.length;i++){const x=a.pictures[i],y=b.pictures[i];if(x.length!==y.length)return Infinity;for(let j=0;j<x.length;j+=4){total+=Math.abs(x[j]-y[j])+Math.abs(x[j+1]-y[j+1])+Math.abs(x[j+2]-y[j+2]);count+=3}}
+  return total/count;
+}
+async function verifyGpuDecodeAgainstSoftware({gpu='prefer-hardware',reference='prefer-software',decode=decodeProbeClip}={}){
+  if(typeof VideoDecoder!=='function'||typeof EncodedVideoChunk!=='function')return {verdict:'unsupported'};
+  let probe;try{probe=await loadGpuDecodeProbe()}catch{return {verdict:'unsupported'}}
+  for(const codec of ['av1','h264']){
+    const clip=probe[codec];let onGpu,onCpu;
+    try{onGpu=await decode(clip,gpu)}catch(error){return {verdict:'broken',codec,error:String(error?.message||error)}}
+    if(!onGpu)continue;
+    try{onCpu=await decode(clip,reference)}catch{onCpu=null}
+    if(!onCpu)return {verdict:'unsupported',codec};
+    const correlation=probePictureCorrelation(onGpu,onCpu),difference=probePictureDifference(onGpu,onCpu);
+    return {verdict:correlation>=GPU_DECODE_MIN_CORRELATION?'ok':'broken',codec,correlation:+correlation.toFixed(4),difference:Number.isFinite(difference)?+difference.toFixed(2):null};
+  }
+  return {verdict:'unsupported'};
 }
 // Runs only when this launch enabled NVIDIA VA-API. Any result but 'ok' makes
-// the main process record it and restart Knot on CPU decode.
+// the main process record it for this driver build and restart Knot without it.
 async function verifyNvidiaVideoDecode(){
   if(!window.pairEnv?.nvidiaVaapiDriver)return;
-  const verdict=await verifyVideoDecodePicture();
-  console.log('[gpu] NVIDIA video decode check:',verdict);
-  try{window.pairEnv.reportNvidiaDecode?.(verdict)}catch{}
+  const result=await verifyGpuDecodeAgainstSoftware();
+  console.log('[gpu] NVIDIA video decode check:',JSON.stringify(result));
+  try{window.pairEnv.reportNvidiaDecode?.(result.verdict)}catch{}
 }
 function renderVideoDecodeStatus(){
   const status=document.getElementById('videoDecodeStatus');if(!status)return;
   const hardware=Array.isArray(localHardwareDecode)?localHardwareDecode:null;
   if(!hardware){status.textContent='Checking how this computer decodes shared screens…';return}
   if(hardware.includes('AV1')){status.textContent='Shared screens you watch decode on your GPU ('+hardware.join(', ')+').';return}
-  const nvidia=window.pairEnv?.primaryGpuVendor==='0x10de';
-  status.textContent='Shared screens you watch decode on your CPU, so sharers keep their bitrate lower for you.'+(nvidia?' To decode on your NVIDIA GPU, install nvidia-vaapi-driver 0.0.18 or newer and restart Knot.':'');
+  if(hardware.length){status.textContent='Shared screens you watch decode on your GPU in '+hardware.join(', ')+'. AV1 shares decode on your CPU, so sharers keep their bitrate lower for you.';return}
+  const nvidia=window.pairEnv?.primaryGpuVendor==='0x10de',state=window.pairEnv?.nvidiaVaapiState||'';
+  status.textContent='Shared screens you watch decode on your CPU, so sharers keep their bitrate lower for you.'+(!nvidia?'':state==='failed'?' Knot’s NVIDIA video decoder did not pass its check on this computer, so it stays off. Updating your NVIDIA driver and restarting Knot checks it again.':state==='missing'?' This build of Knot has no NVIDIA video decoder; install nvidia-vaapi-driver and restart Knot.':'');
 }
 // A decoder that advertised hardware support can still fail on a real stream.
 function noteSoftwareDecode(codec){
