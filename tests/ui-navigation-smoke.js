@@ -361,8 +361,11 @@ app.whenReady().then(async () => {
       const voiceTrack={enabled:false,stop(){}};
       navigator.mediaDevices.getUserMedia=async()=>({getAudioTracks:()=>[voiceTrack],getTracks:()=>[voiceTrack]});
       voiceButton.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));
-      await new Promise(resolve=>setTimeout(resolve,20));
-      assert(joinedVoiceChannelId===voiceId&&joinedVoiceServerId===serverId&&document.querySelector('#voiceChannelList .voice-channel-member'),'double click did not join voice or render its member');
+      // Joining first sets up noise suppression, whose audio module can take
+      // longer than a few milliseconds to load on a cold start.
+      const joinedVoice=()=>joinedVoiceChannelId===voiceId&&joinedVoiceServerId===serverId&&document.querySelector('#voiceChannelList .voice-channel-member');
+      for(const until=Date.now()+2000;!joinedVoice()&&Date.now()<until;)await new Promise(resolve=>setTimeout(resolve,10));
+      assert(joinedVoice(),'double click did not join voice or render its member');
       assert(!document.querySelector('#serverVoiceDock').hidden&&!document.querySelector('#serverVoiceStage').hidden,'connected voice controls did not appear');
       assert(document.querySelectorAll('#serverVoiceDock .server-voice-actions button').length===3&&!document.querySelector('#serverVoiceFocus')&&!document.querySelector('#serverVoiceLeave'),'redundant compact voice controls remained');
       assert(document.querySelector('#serverVoiceShare svg')&&document.querySelector('#serverVoiceHangup svg'),'clear share or hang-up icon is missing');
