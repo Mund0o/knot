@@ -332,6 +332,21 @@ async function findLinuxBundle(root, executable) {
   return matches.length === 1 ? matches[0] : null;
 }
 
+// A Linux update swaps the app in place. When this account cannot write where
+// Knot lives (unpacked under /opt, for example), say so before downloading
+// rather than quitting into a swap that cannot happen.
+async function assertLinuxUpdateTargetWritable() {
+  const target = process.env.APPIMAGE ? path.resolve(process.env.APPIMAGE) : process.resourcesPath ? path.dirname(process.resourcesPath) : '';
+  if (!target) return;
+  const parent = path.dirname(target);
+  try { await fsp.access(parent, fs.constants.W_OK); }
+  catch {
+    const error = new Error(`${PRODUCT_NAME} is installed in ${parent}, which this account cannot change. Download the new version from https://github.com/Mund0o/knot/releases and install it there yourself`);
+    error.permanent = true;
+    throw error;
+  }
+}
+
 async function handOffLinuxReplacement(target, replacement, executable, stage) {
   const resolvedTarget=path.resolve(target),resolvedStage=await fsp.realpath(stage),updatesRoot=await fsp.realpath(updateDirectory()),resolvedReplacement=await fsp.realpath(replacement);
   if(resolvedTarget===path.parse(resolvedTarget).root||resolvedTarget===path.resolve(os.homedir())||resolvedTarget===path.resolve(app.getPath('appData')))throw new Error('unsafe Linux update target');
@@ -351,7 +366,11 @@ backup="$4"
 executable="$5"
 stage="$6"
 while kill -0 "$pid" 2>/dev/null; do sleep 1; done
-if [ -e "$target" ]; then mv "$target" "$backup" || exit 1; fi
+if [ -e "$target" ] && ! mv "$target" "$backup"; then
+  if [ -d "$target" ]; then "$target/$executable" >/dev/null 2>&1 & else "$target" >/dev/null 2>&1 & fi
+  rm -rf "$stage"
+  exit 1
+fi
 if mv "$replacement" "$target"; then
   if [ -d "$target" ]; then "$target/$executable" >/dev/null 2>&1 & else "$target" >/dev/null 2>&1 & fi
   replacement_pid=$!
@@ -410,6 +429,7 @@ async function install(manifest) {
   installing = true;
   let stage = null;
   try {
+    if (process.platform === 'linux') await assertLinuxUpdateTargetWritable();
     await fsp.mkdir(updateDirectory(), { recursive: true, mode: 0o700 });
     stage = await fsp.mkdtemp(path.join(updateDirectory(), 'stage-'));
     activeUpdateStages.add(path.resolve(stage));
@@ -514,7 +534,8 @@ async function installAvailableUpdate() {
   } catch (error) {
     console.log('[updater] install failed:', error.message);
     // Offer the same update again. A dropped download resumes from its bytes.
-    report('available', `Update download stopped: ${error.message}. Click Download to try again; it picks up where it left off.`, { version: manifest.version, canInstall: true, notes: releaseNotes(manifest.notes) });
+    const message = error.permanent ? `${error.message}.` : `Update download stopped: ${error.message}. Click Download to try again; it picks up where it left off.`;
+    report('available', message, { version: manifest.version, canInstall: true, notes: releaseNotes(manifest.notes) });
     return false;
   }
 }
