@@ -19,11 +19,24 @@ const { UPDATE_PUBLIC_KEY, SIGNED_MANIFEST_FIELDS, canonicalManifestPayload } = 
 // CDN can serve an older latest.json for several minutes after a release,
 // making an otherwise valid Windows update look like "no update".
 const DEFAULT_FEED = 'https://api.github.com/repos/Mund0o/knot/contents/public/latest.json?ref=master';
+// The same signed file from GitHub's raw CDN. It can lag a release by a few
+// minutes, but it is a separate host and is not subject to the API's
+// per-address rate limit, so a flaky or shared connection still gets an answer.
+// The manifest is signature-checked either way.
+const FALLBACK_FEED = 'https://raw.githubusercontent.com/Mund0o/knot/master/public/latest.json';
 const CHECK_INTERVAL = 30 * 60 * 1000;
+// A check makes a few quick attempts, alternating feeds. When all of them
+// fail the next round comes minutes later rather than after a full interval.
+const CHECK_RETRY_DELAYS_MS = [3000, 8000, 15000];
+const CHECK_BACKOFF_MS = [2, 5, 10, 30].map(minutes => minutes * 60 * 1000);
+// Downloads resume from the bytes already on disk after a dropped connection.
+const DOWNLOAD_RETRY_DELAYS_MS = [2000, 4000, 8000, 15000, 30000, 30000, 30000, 30000, 30000, 30000, 30000];
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_UPDATE_BYTES = 4 * 1024 * 1024 * 1024;
 const STALE_UPDATE_STAGE_MS = 15 * 60 * 1000;
 let timer = null;
+let retryTimer = null;
+let checkFailures = 0;
 let checking = false;
 let installing = false;
 let availableManifest = null;
@@ -40,7 +53,7 @@ function releaseNotes(value) {
 
 function report(state, message = '', extra = {}) {
   updateStatus = { state, message, ...extra };
-  for (const win of BrowserWindow.getAllWindows()) {
+  for (const win of BrowserWindow?.getAllWindows?.() || []) {
     if (!win.isDestroyed()) win.webContents.send('pair:updateStatus', updateStatus);
   }
 }
@@ -119,14 +132,16 @@ function isNewer(local, remote) {
   return false;
 }
 
-function request(url, maxBytes, onResponse) {
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function request(url, maxBytes, onResponse, { headers = {}, statuses = [200] } = {}) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': `Knot-Updater/${app.getVersion()}`, Accept: 'application/vnd.github+json' } }, response => {
+    const req = https.get(url, { headers: { 'User-Agent': `Knot-Updater/${app?.getVersion?.() || 'dev'}`, Accept: 'application/vnd.github+json', ...headers } }, response => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
         return resolve({ redirect: new URL(response.headers.location, url).href });
       }
-      if (response.statusCode !== 200) {
+      if (!statuses.includes(response.statusCode)) {
         response.resume();
         return reject(new Error(`HTTP ${response.statusCode}`));
       }
@@ -159,7 +174,7 @@ async function fetchText(url, depth = 0) {
 }
 
 async function fetchManifest(feedUrl) {
-  const url = feedUrl.includes('/contents/public/latest.json') ? feedUrl : `${feedUrl.replace(/\/$/, '')}/latest.json`;
+  const url = feedUrl.includes('/contents/public/latest.json') || /\/latest\.json$/.test(feedUrl) ? feedUrl : `${feedUrl.replace(/\/$/, '')}/latest.json`;
   const text = await fetchText(url);
   if (!url.startsWith('https://api.github.com/')) return JSON.parse(text);
   const envelope = JSON.parse(text);
@@ -167,38 +182,89 @@ async function fetchManifest(feedUrl) {
   return JSON.parse(Buffer.from(envelope.content.replace(/\s/g, ''), 'base64').toString('utf8'));
 }
 
-async function download(url, output, expectedHash, onProgress, depth = 0) {
-  if (depth > 3 || !trustedArtifactUrl(url)) throw new Error('unsafe update URL');
+// One request for the bytes after `offset`. Resolves when the response body
+// has fully arrived; a dropped or stalled connection rejects so the caller can
+// resume. A server that ignores Range (200) restarts the file from zero.
+async function downloadPart(url, output, offset, onProgress, depth = 0) {
+  if (depth > 3 || !trustedArtifactUrl(url)) throw Object.assign(new Error('unsafe update URL'), { fatal: true });
+  const headers = offset > 0 ? { Range: `bytes=${offset}-` } : {};
   const result = await request(url, MAX_UPDATE_BYTES, (response, resolve, reject) => {
-    const file = fs.createWriteStream(output, { mode: 0o700, flags: 'wx' });
-    const hash = crypto.createHash('sha256');
-    let size = 0;
-    const total = Number(response.headers['content-length'] || 0);
+    if (response.statusCode === 416) {
+      response.resume();
+      const total = Number(String(response.headers['content-range'] || '').match(/^bytes \*\/(\d+)$/)?.[1]);
+      if (Number.isSafeInteger(total) && total === offset) return resolve({ total });
+      return reject(Object.assign(new Error('update download could not resume'), { restart: true }));
+    }
+    let start = 0, total = 0;
+    if (response.statusCode === 206) {
+      const range = String(response.headers['content-range'] || '').match(/^bytes (\d+)-(\d+)\/(\d+)$/);
+      start = Number(range?.[1]);total = Number(range?.[3]);
+      if (!range || start !== offset || !Number.isSafeInteger(total)) {
+        response.resume();
+        return reject(Object.assign(new Error('update download could not resume'), { restart: true }));
+      }
+    } else total = Number(response.headers['content-length'] || 0);
+    if (total && (!Number.isSafeInteger(total) || total > MAX_UPDATE_BYTES)) {
+      response.resume();
+      return reject(Object.assign(new Error('update is too large'), { fatal: true }));
+    }
+    const file = fs.createWriteStream(output, { mode: 0o600, flags: start > 0 ? 'a' : 'w' });
+    let written = start, ended = false, settled = false;
     const fail = error => {
-      file.destroy();
+      if (settled) return;settled = true;
       response.destroy();
-      reject(error);
+      file.end(() => reject(error));
     };
     response.on('data', chunk => {
-      size += chunk.length;
-      if (size > MAX_UPDATE_BYTES) return fail(new Error('update is too large'));
-      hash.update(chunk);
-      onProgress?.(size, Number.isSafeInteger(total) && total > 0 ? total : 0);
+      written += chunk.length;
+      if (written > MAX_UPDATE_BYTES || (total && written > total)) return fail(Object.assign(new Error('update is too large'), { fatal: true }));
+      onProgress?.(written, total);
     });
+    response.on('end', () => { ended = true; });
+    response.on('aborted', () => fail(new Error('update download was interrupted')));
     response.on('error', fail);
-    file.on('error', fail);
+    file.on('error', error => fail(Object.assign(error, { fatal: true })));
     file.on('finish', () => {
-      const actualHash = hash.digest('hex');
-      if (actualHash !== expectedHash) return reject(new Error('update checksum mismatch'));
-      resolve({ file: output });
+      if (settled) return;settled = true;
+      if (!ended || (total && written !== total)) return reject(new Error('update download was interrupted'));
+      resolve({ total: total || written });
     });
     response.pipe(file);
+  }, { headers, statuses: [200, 206, 416] });
+  if (result.redirect) return downloadPart(result.redirect, output, offset, onProgress, depth + 1);
+  return result;
+}
+
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    fs.createReadStream(file).on('data', chunk => hash.update(chunk)).on('error', reject).on('end', () => resolve(hash.digest('hex')));
   });
-  if (result.redirect) {
-    try { await fsp.unlink(output); } catch {}
-    return download(result.redirect, output, expectedHash, onProgress, depth + 1);
+}
+
+// Download with resume. The partial file survives failed attempts (and a
+// failed install round, so the next click continues it); the finished file is
+// SHA-256 checked against the signed manifest before anything uses it.
+async function download(url, output, expectedHash, onProgress, { onRetry, retryDelays = DOWNLOAD_RETRY_DELAYS_MS } = {}) {
+  if (!trustedArtifactUrl(url)) throw new Error('unsafe update URL');
+  for (let attempt = 0; ; attempt++) {
+    let offset = 0;
+    try { offset = (await fsp.stat(output)).size; } catch {}
+    try {
+      await downloadPart(url, output, offset, onProgress);
+      break;
+    } catch (error) {
+      if (error?.restart) await fsp.rm(output, { force: true });
+      if (error?.fatal || attempt >= retryDelays.length) throw error;
+      onRetry?.(attempt + 1, retryDelays.length, error);
+      await delay(retryDelays[attempt]);
+    }
   }
-  return result.file;
+  if (await sha256File(output) !== expectedHash) {
+    await fsp.rm(output, { force: true });
+    throw new Error('update checksum mismatch');
+  }
+  return output;
 }
 
 function updateFields(manifest) {
@@ -350,10 +416,22 @@ async function install(manifest) {
     const version=validVersion(manifest.version);if(!version)throw new Error('invalid update version');
     const filename = process.platform === 'win32' ? `${PRODUCT_NAME}-Setup-${version}.exe` : `${PRODUCT_NAME}-${version}${fields.extension}`;
     report('downloading', `Downloading ${PRODUCT_NAME} ${version}…`, { version, percent: 0 });
-    const archive = await download(url, path.join(stage, filename), sha256, (downloaded, total) => {
-      const percent = total ? Math.min(100, Math.round(downloaded / total * 100)) : null;
-      report('downloading', percent == null ? `Downloading ${PRODUCT_NAME} ${version}…` : `Downloading ${PRODUCT_NAME} ${version}… ${percent}%`, { version, percent });
+    // Keyed by the signed hash, outside the throwaway stage, so a download that
+    // ran out of retries continues from the same bytes next time.
+    const partial = path.join(updateDirectory(), `download-${sha256}.part`);
+    await removeOtherPartials(sha256);
+    let retrying = '';
+    const downloaded = await download(url, partial, sha256, (received, total) => {
+      const percent = total ? Math.min(100, Math.round(received / total * 100)) : null;
+      report('downloading', `${retrying || `Downloading ${PRODUCT_NAME} ${version}…`}${percent == null ? '' : ` ${percent}%`}`, { version, percent });
+    }, {
+      onRetry: (attempt, attempts) => {
+        retrying = `Connection dropped. Resuming ${PRODUCT_NAME} ${version} download (try ${attempt + 1} of ${attempts + 1})…`;
+        report('downloading', retrying, { version, percent: updateStatus.percent ?? null });
+      }
     });
+    const archive = path.join(stage, filename);
+    await fsp.rename(downloaded, archive);
     report('installing', `Verifying and installing ${PRODUCT_NAME} ${version}…`, { version });
     if (process.platform === 'win32') await runWindowsInstaller(archive);
     else if (process.platform === 'linux') await runLinuxUpdate(archive, stage);
@@ -364,12 +442,48 @@ async function install(manifest) {
   } finally { if (stage) activeUpdateStages.delete(path.resolve(stage)); }
 }
 
+async function removeOtherPartials(keepHash) {
+  let entries = [];
+  try { entries = await fsp.readdir(updateDirectory()); } catch { return; }
+  for (const name of entries) {
+    if (/^download-[a-f0-9]{64}\.part$/.test(name) && name !== `download-${keepHash}.part`) await fsp.rm(path.join(updateDirectory(), name), { force: true }).catch(() => {});
+  }
+}
+
+function feedCandidates(feedUrl) {
+  return feedUrl === DEFAULT_FEED ? [DEFAULT_FEED, FALLBACK_FEED] : [feedUrl];
+}
+
+// A few quick attempts, alternating feeds, before giving up on this round.
+async function fetchVerifiedManifest(feedUrl, { retryDelays = CHECK_RETRY_DELAYS_MS } = {}) {
+  const feeds = feedCandidates(feedUrl);
+  let lastError = null;
+  for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+    if (attempt) {
+      report('checking', 'Checking for updates… (retrying)');
+      await delay(retryDelays[attempt - 1]);
+    }
+    try { return verifyManifest(await fetchManifest(feeds[attempt % feeds.length]), app?.getVersion?.(), { requireNewer: false }); }
+    catch (error) { lastError = error; }
+  }
+  throw lastError || new Error('update check failed');
+}
+
+function scheduleCheckRetry(feedUrl) {
+  clearTimeout(retryTimer);
+  const wait = CHECK_BACKOFF_MS[Math.min(checkFailures, CHECK_BACKOFF_MS.length) - 1] || CHECK_BACKOFF_MS[0];
+  retryTimer = setTimeout(() => void checkOnce(feedUrl), wait);
+  retryTimer.unref?.();
+  return wait;
+}
+
 async function checkOnce(feedUrl) {
   if (checking || installing || !feedUrl || !app.isPackaged) return;
   checking = true;
   report('checking', 'Checking for updates…');
   try {
-    const manifest = verifyManifest(await fetchManifest(feedUrl), app.getVersion(), { requireNewer: false });
+    const manifest = await fetchVerifiedManifest(feedUrl);
+    checkFailures = 0;clearTimeout(retryTimer);
     const version=manifest.version;
     if (!isNewer(app.getVersion(), version)) {
       availableManifest = null;
@@ -382,7 +496,11 @@ async function checkOnce(feedUrl) {
     report('available', `Update found: ${PRODUCT_NAME} ${version}. Download when you are ready.`, { version, canInstall: true, notes });
   } catch (error) {
     console.log('[updater] check failed:', error.message);
-    report('failed', `Update check failed: ${error.message}`);
+    checkFailures++;
+    const minutes = Math.round(scheduleCheckRetry(feedUrl) / 60000);
+    // A known update stays offered; only a first contact reports the failure.
+    if (availableManifest) report('available', `Update found: ${PRODUCT_NAME} ${availableManifest.version}. Download when you are ready.`, { version: availableManifest.version, canInstall: true, notes: releaseNotes(availableManifest.notes) });
+    else report('failed', `Couldn't reach the update server (${error.message}). Trying again in ${minutes} minute${minutes === 1 ? '' : 's'}.`);
   } finally { checking = false; }
 }
 
@@ -395,7 +513,8 @@ async function installAvailableUpdate() {
     return true;
   } catch (error) {
     console.log('[updater] install failed:', error.message);
-    report('failed', `Update failed: ${error.message}`, { version: manifest.version });
+    // Offer the same update again. A dropped download resumes from its bytes.
+    report('available', `Update download stopped: ${error.message}. Click Download to try again; it picks up where it left off.`, { version: manifest.version, canInstall: true, notes: releaseNotes(manifest.notes) });
     return false;
   }
 }
@@ -412,4 +531,4 @@ function startAutoUpdater(options={}) {
 }
 
 module.exports = { startAutoUpdater, isNewer, validVersion, releaseNotes, canonicalManifestPayload, verifyManifest, getUpdateStatus: () => updateStatus, installAvailableUpdate,
-  _test: { install, sweepStaleUpdateStages, reset: () => { installing = false;availableManifest = null;checking = false;activeUpdateStages.clear(); }, isInstalling: () => installing } };
+  _test: { install, download, fetchVerifiedManifest, feedCandidates, sweepStaleUpdateStages, reset: () => { installing = false;availableManifest = null;checking = false;checkFailures = 0;clearTimeout(retryTimer);activeUpdateStages.clear(); }, isInstalling: () => installing } };
