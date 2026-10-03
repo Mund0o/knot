@@ -1,11 +1,11 @@
 {
-  "version": "1.1.120",
-  "notes": "Fixes a friend's voice going silent after screen shares, stops Windows sound capture from lingering after a share, and lets Windows 10 share computer sound.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.120/pair-p2p-1.1.120.tar.gz",
-  "linuxSha256": "452938cf606ed146b7bb7c6683ad7301ba40d328ae807e8cbde88cf9b95494c4",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.120/Knot-1.1.120.AppImage",
-  "linuxAppImageSha256": "cbdc1fd67251d32319e12f39b2bbfde2253d73ca7ccc3a1387c0f9aeaad0ffc8",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.120/Knot.Setup.1.1.120.exe",
-  "winSha256": "a4e9a33573e6827bdcdc600210b766c6154c16c288d61e248c85abdeb1832a91",
-  "signature": "VpNKUh4YRKM6feTCUePNOO8umFxIfqRHbJixWyu6eoJYBZQKQFYiWSW0nBQNiiTE4LqoJSOnSTriZlmN5hQjCg=="
+  "version": "1.1.121",
+  "notes": "Screen shares no longer lag on PCs that decode video on the CPU, Windows shares to Linux keep their hardware encoder, and NVIDIA Linux decodes on the GPU again with nvidia-vaapi-driver 0.0.18 or newer.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.121/pair-p2p-1.1.121.tar.gz",
+  "linuxSha256": "16d867c215af9bf7cc1f10905f9036a771fb906f6f8f7fa1d73d40c6cf906c8c",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.121/Knot-1.1.121.AppImage",
+  "linuxAppImageSha256": "00d5b0312604d843f4bb8fd3b34944656005f94f48e3ad9e65d5d17919ed0061",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.121/Knot.Setup.1.1.121.exe",
+  "winSha256": "b52d355b148e2bea0f9f045b68554f7e502e046639fdc6debcf7eff87a04947a",
+  "signature": "sdm2PInBzpI7Iz060zp5nUrHH2QqpgJUF0aHeZVECnkDfosTTyFXqDYOliIVmNgpH965CHAhb+bd2ijnn0vsAQ=="
 }
