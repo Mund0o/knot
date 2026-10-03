@@ -15,7 +15,7 @@ let directoryTrustedConnection=false,recordConversationMessage=()=>{},directoryP
 // Directory/call state must exist before any asynchronous settings/profile
 // restoration can render the UI. Declaring it later created a startup TDZ race
 // that only showed up reliably when two complete app windows booted together.
-let directoryHeartbeatTimer=null,directoryLastHeard=0,directoryHeartbeatTick=0,directoryHeartbeatCount=0;
+let directoryHeartbeatTimer=null,directoryLastHeard=0,directoryHeartbeatTick=0,directoryHeartbeatCount=0,directoryAuthenticatedSocket=null,dmOutboxLoaded=null,dmOutboxTimer=null;const dmOutbox=new Map();
 let directorySocket=null,directoryReconnect=null,directoryBackoff=1000,directoryConnectGeneration=0,directoryStateRestored=false,directoryRevision=0,directoryEmptySnapshotRetry=false,directoryFeatures={groupSfu:false,encryptedFileRelay:false},accountAuthGeneration=0,directoryUserId='',directoryToken='',directoryAccountName='',transientDirectorySession=false,pendingAccountRemember=true,directorySnapshot={friends:[],servers:[],groupDms:[],members:{},voiceStates:{}},activePeerId='',dmPeerId='',dmCallPeerId='',activeServerId='',activeGroupDmId='',activeChannelId='',activeConversationKey='',historyRendering=false,dmConnectingPeerId='',pendingVoiceStartPeerId='',conversationScrollEpoch=0,conversationScrollObserver=null,conversationScrollTimer=null,conversationScrollLoadListener=null;
 let conversationHistories={},conversationRenderState=null,conversationLoadGeneration=0,serverVoiceStream=null,serverVoiceRawStream=null,serverVoiceNoisePipeline=null,serverVoiceAttempt=null,serverVoiceStarting=false,serverVoiceGen=0,serverScreenStream=null,serverNativeScreenSession=null,serverNativeLocalPlayer=null,serverNativeScreenAudioStream=null,serverNativeScreenInit=null,serverNativeFallbackInFlight=false,serverVoiceMuted=false,serverScreenStarting=false,serverScreenGen=0,joinedVoiceServerId='',joinedVoiceChannelId='',joinedVoiceScope='',joinedVoiceAt=0,voiceElapsedTimer=null,draggedChannelId='';const serverPeers=new Map(),conversationDrafts=new Map(),HISTORY_PAGE_SIZE=80,HISTORY_DOM_LIMIT=120,HISTORY_CACHE_LIMIT=2000;
 let endingCall=null,pushToTalkCapturing=false;
@@ -319,7 +319,7 @@ function readChatPayload(value){try{const p=JSON.parse(value);if(p?.t!=='message
 function addMessage(text,mine=false,gif=null,author=null,options={}){
   const target=options.target||messages,liveTarget=target===messages,stayAtLatest=liveTarget&&(mine||(!historyRendering&&messages.scrollHeight-messages.scrollTop-messages.clientHeight<96));
   if(liveTarget)$('.empty')?.remove();
-  const el=document.createElement('div');el.className='message '+(mine?'mine':'');
+  const el=document.createElement('div');el.className='message '+(mine?'mine':'');const messageId=/^[a-f0-9]{32}$/.test(String(options.id||''))?options.id:'';if(messageId)el.dataset.messageId=messageId;
   const isEmoji=/^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D\u20E3]+$/u.test(text.trim());
   const source=mine?profileBtn:author?null:friendAvatar,avatar=document.createElement('span'),name=mine?profileName:normalizeProfileName(author?.name,friendName);
   avatar.className='avatar message-avatar';const authorImage=!mine&&validProfileData(author?.image)?author.image:'',authorFrame=normalizeFrame(author?.frame);if(mine){setAvatar(avatar,profileAvatar);setAvatarFrame(avatar,profileFrame);setAvatarIdentity(avatar,profileIdentity)}else if(authorImage){setAvatar(avatar,authorImage);setAvatarFrame(avatar,authorFrame);setAvatarIdentity(avatar,author?.id||'')}else if(source){setAvatar(avatar,source.querySelector('.avatar-photo')?.src||'');setAvatarFrame(avatar,normalizeFrame({zoom:parseFloat(source.style.backgroundSize)||100,x:parseFloat(source.style.backgroundPositionX)||50,y:parseFloat(source.style.backgroundPositionY)||50}));avatar.style.setProperty('--avatar-hue',source.style.getPropertyValue('--avatar-hue'))}else avatar.style.setProperty('--avatar-hue',String(avatarHue(author?.id||name)));const letter=document.createElement('span');letter.className='avatar-letter';letter.textContent=name.slice(0,1).toUpperCase()||'?';avatar.append(letter);
@@ -328,7 +328,7 @@ function addMessage(text,mine=false,gif=null,author=null,options={}){
   const bubble=document.createElement('div');bubble.className='bubble'+(isEmoji?' emoji-only':'');bubble.innerHTML=renderContent(text);if(!text)bubble.hidden=true;
   content.append(header,bubble);
   if(gif?.url){const attachment=document.createElement('div');attachment.className='gif-attachment-message'+(gif.emoji?' gif-emoji':'');const link=document.createElement('a');link.href=gif.fallbackUrl||gif.url;link.target='_blank';link.rel='noopener noreferrer';const image=document.createElement('img');image.src=gif.url;image.alt='GIF attachment';image.loading='lazy';image.referrerPolicy='no-referrer';if(gif.fallbackUrl)image.onerror=()=>{image.onerror=null;image.src=gif.fallbackUrl;link.href=gif.fallbackUrl};link.append(image);attachment.append(link);if(!mine&&!gif.emoji){const id=gif.url;const star=document.createElement('button');star.type='button';star.className='gif-message-favorite'+(getFavs().some(f=>f.id===id)?' on':'');star.textContent=star.classList.contains('on')?'★':'☆';star.title=star.classList.contains('on')?'Remove from favorites':'Save GIF';star.onclick=()=>{const on=toggleFav(id,gif.url,gif.thumb||gif.url,{id,url:gif.url,thumb:gif.thumb||gif.url,type:'gifs'});star.classList.toggle('on',on);star.textContent=on?'★':'☆';star.title=on?'Remove from favorites':'Save GIF'};attachment.append(star)}content.append(attachment)}
-  el.append(avatar,content);target.append(el);if(stayAtLatest){messages.scrollTop=messages.scrollHeight;el.querySelectorAll('img,video').forEach(media=>media.addEventListener('load',()=>{messages.scrollTop=messages.scrollHeight},{once:true}))}if(options.persist!==false)recordConversationMessage({text,mine,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,fallbackUrl:gif.fallbackUrl||null,emoji:gif.emoji===true}:null,author:mine?null:{id:author?.id||'',name,image:'',frame:authorFrame},time:messageTime});return el;
+  el.append(avatar,content);if(messageId&&dmOutbox.has(messageId))setDmPendingState(el,dmOutboxLabel(dmOutbox.get(messageId)));target.append(el);if(stayAtLatest){messages.scrollTop=messages.scrollHeight;el.querySelectorAll('img,video').forEach(media=>media.addEventListener('load',()=>{messages.scrollTop=messages.scrollHeight},{once:true}))}if(options.persist!==false)recordConversationMessage({...(messageId?{id:messageId}:{}),text,mine,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,fallbackUrl:gif.fallbackUrl||null,emoji:gif.emoji===true}:null,author:mine?null:{id:author?.id||'',name,image:'',frame:authorFrame},time:messageTime});return el;
 }
 // --- Emoji Picker ------------------------------------------------------------
 const EMOJI_CATS=[
@@ -790,9 +790,12 @@ function stopWatchingRemoteShare(){
 }
 function receiveDirectMessage(message,peerIdOverride=''){
   const peerId=peerIdOverride||dmPeerId||dmCallPeerId||activePeerId,key=peerId?'dm:'+peerId:'';
+  const id=/^[a-f0-9]{32}$/.test(String(message.id||''))?message.id:'';
+  // A sender that lost its acknowledgement resends the same message id.
+  if(id&&key&&(conversationHistories[key]||[]).some(item=>item.id===id))return;
   if(peerId)markDmUnread(peerId,message);
-  const friend=directoryUser(peerId),entry={text:message.text,mine:false,gif:message.gif?.url?{url:message.gif.url,thumb:message.gif.thumb||message.gif.url,fallbackUrl:message.gif.fallbackUrl||null,emoji:message.gif.emoji===true}:null,author:{id:peerId,name:friend?.name||'Friend',image:'',frame:normalizeFrame(friend?.frame)},time:Date.now()};
-  if(!key||activeConversationKey===key){addMessage(message.text,false,message.gif,{id:peerId,name:friend?.name||'Friend',image:friend?.image||'',frame:normalizeFrame(friend?.frame)});return}
+  const friend=directoryUser(peerId),entry={...(id?{id}:{}),text:message.text,mine:false,gif:message.gif?.url?{url:message.gif.url,thumb:message.gif.thumb||message.gif.url,fallbackUrl:message.gif.fallbackUrl||null,emoji:message.gif.emoji===true}:null,author:{id:peerId,name:friend?.name||'Friend',image:'',frame:normalizeFrame(friend?.frame)},time:Date.now()};
+  if(!key||activeConversationKey===key){addMessage(message.text,false,message.gif,{id:peerId,name:friend?.name||'Friend',image:friend?.image||'',frame:normalizeFrame(friend?.frame)},{id});return}
   storeConversationEntry(key,entry);
 }
 function setupChannels(){chat=pc.createDataChannel('chat');if(!relayVoiceMode)files=pc.createDataChannel('files');wire()}
@@ -1977,7 +1980,10 @@ function normalizeDirectorySnapshotWire(snapshot){
   if(Array.isArray(snapshot.groupDms))next.groupDms=snapshot.groupDms.map(normalizeDirectoryEntity);
   return next;
 }
-function directorySend(value){if(directorySocket?.readyState!==WebSocket.OPEN)return false;try{directorySocket.send(JSON.stringify(value));return true}catch{return false}}
+// The directory closes a socket that sends anything before its hello is
+// accepted ("authenticate first"), which reads as an expired session and stops
+// reconnecting. Reconnects are frequent on a flaky link, so wait for it.
+function directorySend(value){if(directorySocket?.readyState!==WebSocket.OPEN||directoryAuthenticatedSocket!==directorySocket)return false;try{directorySocket.send(JSON.stringify(value));return true}catch{return false}}
 function renderAccountSummary(){
   const summary=$('#accountSummary'),username=$('#accountUsername');
   const signed=/^[a-f0-9]{64}$/.test(directoryToken);
@@ -2159,35 +2165,91 @@ function secureRelayReady(id){return !!(directorySocket?.readyState===WebSocket.
 function syncActiveDmTransport(){
   if(activeServerId||!activePeerId)return;
   const friend=directoryUser(activePeerId),ready=secureRelayReady(activePeerId),inBackgroundCall=dmCallOngoing()&&dmCallPeerId!==activePeerId;
-  syncComposerAvailability(!ready);messageForm.querySelector('.send').disabled=!ready;
+  // Typing stays open while Knot is offline: messages wait in the outbox.
+  const canCompose=ready||validDevicePublicKey(friend?.deviceKey)||chat?.readyState==='open'&&!!sharedKey&&dmPeerId===activePeerId;
+  syncComposerAvailability(!canCompose);messageForm.querySelector('.send').disabled=!canCompose;
   // Choosing a file is allowed before the media peer exists. The selected file
   // waits for the on-demand direct connection; it is never sent via Cloudflare.
   const fileBlockedByOtherCall=inBackgroundCall,relayAvailable=fileRelayReady(activePeerId),signalingOffline=directorySocket?.readyState!==WebSocket.OPEN;fileInput.disabled=signalingOffline||!relayAvailable&&(relayVoiceMode||fileBlockedByOtherCall||!friend?.online);fileInput.dataset.unavailableReason=signalingOffline?'File transfer is unavailable while signaling is offline.':fileBlockedByOtherCall&&!relayAvailable?'End the call with '+(directoryUser(dmCallPeerId)?.name||'your friend')+' before sending a file to this DM.':relayVoiceMode&&!relayAvailable?'Files need a direct connection and are unavailable on the voice relay.':!friend?.online&&!relayAvailable?'Your friend must be online to receive a direct file.':'Encrypted object relay is available as your explicit fallback.';syncFileAttachmentUi();
   if(callActive||friendInCall)callBtn.disabled=false;else callBtn.disabled=!friendReachable(activePeerId);
   $('.connection').classList.toggle('connected',ready);
-  statusText.textContent=ready?(friend?.online?(relayVoiceMode?'Encrypted text · low-bandwidth voice relay':inBackgroundCall?'Encrypted text · call continues in background':pc?._lan?'Encrypted text · on this Wi-Fi':'Encrypted live text'):friendOnLan(activePeerId)?'On this Wi-Fi · call them without Knot cloud':'Encrypted text · offline delivery ready'):dmConnectingPeerId===activePeerId?'Connecting media…':friendReachable(activePeerId)?'Preparing encrypted text…':friendOnLan(activePeerId)?'On this Wi-Fi':'Offline · waiting for secure device key';
+  statusText.textContent=ready?(friend?.online?(relayVoiceMode?'Encrypted text · low-bandwidth voice relay':inBackgroundCall?'Encrypted text · call continues in background':pc?._lan?'Encrypted text · on this Wi-Fi':'Encrypted live text'):friendOnLan(activePeerId)?'On this Wi-Fi · call them without Knot cloud':'Encrypted text · offline delivery ready'):dmConnectingPeerId===activePeerId?'Connecting media…':friendReachable(activePeerId)?'Preparing encrypted text…':friendOnLan(activePeerId)?'On this Wi-Fi':validDevicePublicKey(friend?.deviceKey)&&directorySocket?.readyState!==WebSocket.OPEN?'Knot is offline · messages send when it reconnects':'Offline · waiting for secure device key';
 }
 function receivePersistentDmMessage(peerId,message){receiveDirectMessage(message,peerId)}
+// Discord-style DM outbox. A message is shown at once, encrypted, and kept
+// until the directory confirms it (relay-status). Anything unconfirmed is sent
+// again after every reconnect; the directory mailbox and the receiver's
+// history both drop a repeated message id. The outbox survives a restart.
+const DM_OUTBOX_LIMIT=200,DM_OUTBOX_MAX_AGE_MS=7*86400000,DM_OUTBOX_ACK_MS=10000;
+function directoryAuthenticated(){return !!directorySocket&&directoryAuthenticatedSocket===directorySocket&&directorySocket.readyState===WebSocket.OPEN}
+function validOutboxEntry(value){return !!value&&/^[a-f0-9]{32}$/.test(String(value.id||''))&&/^[a-f0-9]{32}$/.test(String(value.peerId||''))&&/^[a-f0-9]{32}$/.test(String(value.from||''))&&typeof value.cipher?.iv==='string'&&typeof value.cipher?.data==='string'&&value.cipher.data.length<=MAX_MESSAGE_SIZE*2}
+function loadDmOutbox(){
+  return dmOutboxLoaded||(dmOutboxLoaded=(async()=>{
+    let saved=[];try{saved=JSON.parse(await ss('dmOutbox')||'[]')}catch{}
+    const now=Date.now();
+    for(const value of Array.isArray(saved)?saved.slice(-DM_OUTBOX_LIMIT):[])if(validOutboxEntry(value)&&now-(Number(value.time)||0)<DM_OUTBOX_MAX_AGE_MS&&!dmOutbox.has(value.id))dmOutbox.set(value.id,{id:value.id,peerId:value.peerId,from:value.from,cipher:{iv:value.cipher.iv,data:value.cipher.data},time:Number(value.time)});
+  })());
+}
+function persistDmOutbox(){void ssSet('dmOutbox',JSON.stringify([...dmOutbox.values()].map(({id,peerId,from,cipher,time})=>({id,peerId,from,cipher,time}))))}
+function dmOutboxLabel(entry){if(!entry)return '';return entry.sentAt&&directorySocket&&Date.now()-entry.sentAt<DM_OUTBOX_ACK_MS?'sending':'waiting'}
+function setDmPendingState(el,state){
+  if(!el)return;el.classList.toggle('pending',!!state);el.classList.toggle('failed',state==='failed');let label=el.querySelector('.message-pending');
+  if(!state){label?.remove();return}
+  if(!label){label=document.createElement('span');label.className='message-pending';el.querySelector('.message-header')?.append(label)}
+  label.textContent=state==='failed'?'Not delivered':state==='waiting'?'Waiting for connection · sends automatically':'Sending…';
+}
+function dmMessageElement(id){return messages.querySelector('.message[data-message-id="'+id+'"]')}
+function renderDmOutboxState(){for(const entry of dmOutbox.values())setDmPendingState(dmMessageElement(entry.id),dmOutboxLabel(entry))}
+function sendDmOutboxEntry(entry){
+  if(entry.from!==directoryUserId)return false;
+  // A friend who was removed can never receive it; stop retrying.
+  if((directorySnapshot.friends||[]).length&&!(directorySnapshot.friends||[]).some(friend=>friend.id===entry.peerId)){failDmOutbox(entry.id);return false}
+  if(!directorySend({type:'relay-text',scope:'dm',id:entry.id,requestId:entry.id,peerId:entry.peerId,cipher:entry.cipher}))return false;
+  entry.sentAt=Date.now();armDmOutboxCheck();return true;
+}
+function flushDmOutbox(){for(const entry of [...dmOutbox.values()])sendDmOutboxEntry(entry);renderDmOutboxState()}
+// The directory refused it outright (no longer friends, malformed); a resend
+// would be refused again.
+function failDmOutbox(id){if(!dmOutbox.delete(id))return;persistDmOutbox();setDmPendingState(dmMessageElement(id),'failed')}
+function acknowledgeDmOutbox(id){if(!dmOutbox.delete(id))return;persistDmOutbox();setDmPendingState(dmMessageElement(id),'');if(!dmOutbox.size){clearTimeout(dmOutboxTimer);dmOutboxTimer=null}}
+// The directory answers a message within a moment. A socket that has said
+// nothing at all since a message went out is dead even if it still looks open
+// (a flaky link can hold a half-open socket for a minute), so reconnect now
+// instead of waiting for the heartbeat; the reconnect resends the message.
+function armDmOutboxCheck(){
+  if(dmOutboxTimer)return;
+  dmOutboxTimer=setTimeout(()=>{
+    dmOutboxTimer=null;if(!dmOutbox.size)return;
+    const now=Date.now(),overdue=[...dmOutbox.values()].filter(entry=>entry.sentAt&&now-entry.sentAt>=DM_OUTBOX_ACK_MS);
+    renderDmOutboxState();
+    if(overdue.length&&directoryAuthenticated()){
+      if(overdue.some(entry=>directoryLastHeard<=entry.sentAt))forceDirectoryReconnect(directorySocket,'message not acknowledged');
+      else overdue.forEach(sendDmOutboxEntry);
+    }
+    if(dmOutbox.size&&[...dmOutbox.values()].some(entry=>entry.sentAt))armDmOutboxCheck();
+  },DM_OUTBOX_ACK_MS);
+}
 async function sendPersistentDm(peerId,text,gif){
   const payload=chatPayload(text,gif);if(enc.encode(payload).byteLength>MAX_MESSAGE_SIZE)throw new Error('Messages are limited to 64 KB');
-  if(directorySocket?.readyState!==WebSocket.OPEN){
-    if(chat?.readyState==='open'&&sharedKey&&(dmPeerId===peerId||activePeerId===peerId)){
-      if(!send({t:'msg',v:await seal(payload)}))throw new Error('Could not send on this Wi-Fi link');
-      addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics);return;
-    }
-    throw new Error('Knot is offline. If they are on this Wi-Fi, start a call with them first.');
+  if(!directoryAuthenticated()&&chat?.readyState==='open'&&sharedKey&&(dmPeerId===peerId||activePeerId===peerId)){
+    if(!send({t:'msg',v:await seal(payload)}))throw new Error('Could not send on this Wi-Fi link');
+    addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics);return;
   }
-  if(!secureRelayReady(peerId))throw new Error('Secure text is not ready');
-  const id=clientHex(16),key=await relayPairKey(peerId),cipher=await sealRelay(key,payload,relayAad('dm',id,directoryUserId,peerId));
-  if(!directorySend({type:'relay-text',scope:'dm',id,peerId,cipher}))throw new Error('Encrypted text relay is offline');
-  addMessage(text,true,gif);messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics);
+  if(!validDevicePublicKey(directoryUser(peerId)?.deviceKey))throw new Error(directoryAuthenticated()?'Secure text is not ready':'Knot is offline. If they are on this Wi-Fi, start a call with them first.');
+  await loadDmOutbox();
+  const id=clientHex(16),key=await relayPairKey(peerId),cipher=await sealRelay(key,payload,relayAad('dm',id,directoryUserId,peerId)),entry={id,peerId,from:directoryUserId,cipher,time:Date.now()};
+  dmOutbox.set(id,entry);while(dmOutbox.size>DM_OUTBOX_LIMIT)dmOutbox.delete(dmOutbox.keys().next().value);persistDmOutbox();
+  // Show it now, even offline; it sends when Knot reconnects.
+  if(activeConversationKey==='dm:'+peerId)addMessage(text,true,gif,{time:entry.time},{id});else storeConversationEntry('dm:'+peerId,{id,text,mine:true,gif:gif?.url?{url:gif.url,thumb:gif.thumb||gif.url,fallbackUrl:gif.fallbackUrl||null,emoji:gif.emoji===true}:null,author:null,time:entry.time});
+  messageInput.value='';setPendingGif(null);if(gif?.analytics)analyticsShared(gif.analytics);
+  sendDmOutboxEntry(entry);
 }
 function rememberRelayMessage(id){if(!/^[a-f0-9]{32}$/.test(id||'')||seenRelayMessages.has(id))return false;seenRelayMessages.add(id);if(seenRelayMessages.size>2000)seenRelayMessages.delete(seenRelayMessages.values().next().value);return true}
 async function receiveRelayText(value){
   const from=String(value?.from||'').toLowerCase(),id=String(value?.id||'').toLowerCase(),acknowledged=value.scope==='dm'||value.scope==='group-dm';if(!/^[a-f0-9]{32}$/.test(id))return;
   if(seenRelayMessages.has(id)){if(acknowledged)directorySend({type:'relay-ack',id});return}
   if(value.scope==='dm'){
-    if(!(directorySnapshot.friends||[]).some(friend=>friend.id===from)){if(acknowledged)directorySend({type:'relay-ack',id});return}const key=await relayPairKey(from),payload=await openRelay(key,value.cipher,relayAad('dm',id,from,directoryUserId));if(!payload)return;if(!rememberRelayMessage(id)){directorySend({type:'relay-ack',id});return}receivePersistentDmMessage(from,readChatPayload(payload));directorySend({type:'relay-ack',id});return
+    if(!(directorySnapshot.friends||[]).some(friend=>friend.id===from)){if(acknowledged)directorySend({type:'relay-ack',id});return}const key=await relayPairKey(from),payload=await openRelay(key,value.cipher,relayAad('dm',id,from,directoryUserId));if(!payload)return;if(!rememberRelayMessage(id)){directorySend({type:'relay-ack',id});return}receivePersistentDmMessage(from,{...readChatPayload(payload),id});directorySend({type:'relay-ack',id});return
   }
   if(value.scope==='group-dm'){
     const group=groupDm(value.groupId),channel=group?.channels?.find(item=>item.id===value.channelId&&item.type==='text'),epoch=Number(value.keyEpoch),currentEpoch=Number(group?.keyEpoch)||1;if(!group||!channel||!group.members.includes(from)||!Number.isInteger(epoch)||epoch<1||epoch>currentEpoch)return;
@@ -2232,7 +2294,7 @@ async function accountRecoveryProfile(){await profileSettingsReady;return{name:p
 async function directoryProfile(){const accountProfile=await accountRecoveryProfile(),image=profileSharing?accountProfile.image:'';return {name:profileName,image,frame:normalizeFrame(profileFrame),deviceKey:await devicePublicKey(),accountProfile:{name:accountProfile.name,frame:accountProfile.frame,imageFromPublic:profileSharing,...(!profileSharing?{image:accountProfile.image}:{})}}}
 directoryProfilePush=()=>{const generation=++directoryProfileGeneration;clearTimeout(directoryProfileTimer);directoryProfileTimer=setTimeout(async()=>{try{await profileSettingsReady;const profile=await directoryProfile();if(generation===directoryProfileGeneration)directorySend({type:'update-profile',...profile})}catch(error){console.warn('directory profile',error)}},100)};
 function refreshDirectoryState(){const up=directorySocket?.readyState===WebSocket.OPEN;setDirectoryState(up,up?'Online':'Offline — retrying')}
-function setDirectoryState(online,text){const lan=lanNeighbors.size,presence=$('#directoryPresence');presence?.classList.toggle('online',online||lan>0);presence?.classList.toggle('lan',!online&&lan>0);if($('#directoryStatus'))$('#directoryStatus').textContent=!online&&lan?((text&&text!=='Online'?text:'House is local')+' · '+lan+' on this Wi-Fi'):text;}
+function setDirectoryState(online,text){try{renderDmOutboxState()}catch{}const lan=lanNeighbors.size,presence=$('#directoryPresence');presence?.classList.toggle('online',online||lan>0);presence?.classList.toggle('lan',!online&&lan>0);if($('#directoryStatus'))$('#directoryStatus').textContent=!online&&lan?((text&&text!=='Online'?text:'House is local')+' · '+lan+' on this Wi-Fi'):text;}
 function storeConversationEntry(key,entry,{persist=true}={}){
   if(!key||!entry||typeof entry.text!=='string')return false;const list=conversationHistories[key]||(conversationHistories[key]=[]);if(entry.id&&list.some(item=>item.id===entry.id))return false;list.push(entry);list.sort((a,b)=>(Number(a.time)||0)-(Number(b.time)||0)||String(a.id||'').localeCompare(String(b.id||'')));if(list.length>HISTORY_CACHE_LIMIT){const removed=list.length-HISTORY_CACHE_LIMIT;list.splice(0,removed);if(conversationRenderState?.key===key){conversationRenderState.first=Math.max(0,conversationRenderState.first-removed);conversationRenderState.last=Math.max(0,conversationRenderState.last-removed)}}
   if(persist&&window.pairHistory&&/^[a-f0-9]{32}$/.test(directoryUserId))window.pairHistory.append(directoryUserId,key,entry).catch(error=>console.warn('[history] append failed:',error?.message||error));return true
@@ -2287,7 +2349,7 @@ function scrollConversationToLatest(){
   conversationScrollLoadListener=()=>scroll();messages.addEventListener('load',conversationScrollLoadListener,true);
   conversationScrollTimer=setTimeout(()=>{if(epoch===conversationScrollEpoch){conversationScrollObserver?.disconnect();conversationScrollObserver=null}if(conversationScrollLoadListener){messages.removeEventListener('load',conversationScrollLoadListener,true);conversationScrollLoadListener=null}},900);
 }
-function renderHistoryItem(item,target=messages){const current=item.author?.id?directoryUser(item.author.id):null;return addMessage(item.text,!!item.mine,item.gif,item.author?{...item.author,...current,time:item.time}:{time:item.time},{target,persist:false})}
+function renderHistoryItem(item,target=messages){const current=item.author?.id?directoryUser(item.author.id):null;return addMessage(item.text,!!item.mine,item.gif,item.author?{...item.author,...current,time:item.time}:{time:item.time},{target,persist:false,id:item.id})}
 function historyEmptyState(text='Messages are encrypted on this device. Local history stays on your devices.') { const empty=document.createElement('div');empty.className='empty';empty.innerHTML='<span>✦</span><p></p>';empty.querySelector('p').textContent=text;messages.append(empty) }
 function trimVirtualStart(state=conversationRenderState){while(state&&state.key===activeConversationKey&&messages.querySelectorAll(':scope > .message').length>HISTORY_DOM_LIMIT){const first=messages.querySelector(':scope > .message');if(!first)break;first.remove();state.first++}}
 function syncLiveHistoryWindow(key,entry,{alreadyRendered=false}={}){
@@ -2822,7 +2884,7 @@ async function connectDirectory(){
   socket.onmessage=event=>{try{
     if(directorySocket!==socket)return;directoryLastHeard=Date.now();
     const value=JSON.parse(event.data),wireBytes=enc.encode(event.data).byteLength;if(value.type==='snapshot')recordMetric('directory.snapshot_bytes',wireBytes);else if(['profile-update','presence-update','entity-update','voice-states','directory-delta'].includes(value.type))recordMetric('directory.delta_bytes',wireBytes);
-    if(value.type==='authenticated'){directoryFeatures={groupSfu:value.features?.groupSfu===true,encryptedFileRelay:value.features?.encryptedFileRelay===true};syncGroupSfuSettingUi();syncFileRelaySettingUi();directoryAccountName=value.username||directoryAccountName;if(directoryAccountName){ssSet('directoryAccountName',directoryAccountName);const connectedMessage='Signed in as @'+directoryAccountName+'. Connected.';if($('#accountStatus'))$('#accountStatus').textContent=connectedMessage;if($('#authStatus'))$('#authStatus').textContent=connectedMessage}renderAccountSummary();setDirectoryState(true,'Online');startDirectoryHeartbeat(socket);directoryProfilePush();if(callActive)publishCallState(true);void maybeShowAccountOnboarding();void startLanHouse()}
+    if(value.type==='authenticated'){directoryFeatures={groupSfu:value.features?.groupSfu===true,encryptedFileRelay:value.features?.encryptedFileRelay===true};syncGroupSfuSettingUi();syncFileRelaySettingUi();directoryAccountName=value.username||directoryAccountName;if(directoryAccountName){ssSet('directoryAccountName',directoryAccountName);const connectedMessage='Signed in as @'+directoryAccountName+'. Connected.';if($('#accountStatus'))$('#accountStatus').textContent=connectedMessage;if($('#authStatus'))$('#authStatus').textContent=connectedMessage}renderAccountSummary();directoryAuthenticatedSocket=socket;setDirectoryState(true,'Online');startDirectoryHeartbeat(socket);void loadDmOutbox().then(flushDmOutbox);directoryProfilePush();if(callActive)publishCallState(true);void maybeShowAccountOnboarding();void startLanHouse()}
     else if(value.type==='account-session'){(async()=>{directoryAccountName=value.username||'';try{await persistAccountSession({username:directoryAccountName,remember:pendingAccountRemember})}catch(error){const message=error?.message||'Account created, but this device could not save the session. Sign in again — your photo stays here.';if($('#accountStatus'))$('#accountStatus').textContent=message;if($('#authStatus'))$('#authStatus').textContent=message;return}$('#accountPassword').value='';$('#accountStatus').textContent='Account created. You can now sign in on another operating system.';const authStatus=$('#authStatus'),submit=$('#authSubmit'),continueButton=$('#authContinueLocal');if(authStatus)authStatus.textContent='✓ You’re signed up as @'+directoryAccountName+'. Your account is ready.';if(submit)submit.disabled=true;if(continueButton)continueButton.textContent='Continue to Knot';renderAccountSummary()})()}
     else if(value.type==='snapshot')updateDirectorySnapshot(value);
     else if(value.type==='profile-update')applyDirectoryProfileUpdate(value);
@@ -2864,11 +2926,11 @@ async function connectDirectory(){
     }
     else if(value.type==='relay-text')receiveRelayText(value).catch(error=>console.warn('encrypted relay text',error))
     else if(value.type==='relay-key')receiveRelayKey(value).catch(error=>console.warn('encrypted relay key',error))
-    else if(value.type==='relay-status'){if(activeGroupDmId&&value.queued)pairHint.textContent='Encrypted message sent. Offline group members will receive it when they return.'}
+    else if(value.type==='relay-status'){acknowledgeDmOutbox(String(value.id||''));if(activeGroupDmId&&value.queued)pairHint.textContent='Encrypted message sent. Offline group members will receive it when they return.'}
     else if(value.type==='turn-credentials')acceptTurnCredentials(value)
     else if(value.type==='peer-signal'&&['server','group-dm'].includes(value.context?.type))handleServerSignal(value).catch(error=>console.warn('peer signal',error))
     else if(value.type==='peer-signal'&&value.context?.type==='dm')handleDirectPeerSignal(value).catch(error=>console.warn('direct peer signal',error))
-    else if(value.type==='error'){const message=value.message||'Knot directory request failed',requestId=String(value.requestId||''),sfuPending=groupSfuPending.get(requestId),relayPending=fileRelayPending.get(requestId);if(sfuPending){groupSfuPending.delete(requestId);sfuPending.reject(new Error(message))}if(relayPending){fileRelayPending.delete(requestId);relayPending.reject(new Error(message))}if(value.action==='turn-credentials')turnCredentialPending?.reject(new Error(message));if(value.action==='create-account'){if($('#accountStatus'))$('#accountStatus').textContent=message;if($('#authStatus'))$('#authStatus').textContent=message}else pairHint.textContent=message;const dialog=$('#serverDialog');if(dialog?.open&&['create-server','redeem-invite'].includes(value.action)){pendingServerSelection=false;$('#serverDialogStatus').textContent=message;dialog.querySelectorAll('form button').forEach(button=>button.disabled=false)}const groupDialog=$('#groupDmDialog');if(groupDialog?.open&&['create-group-dm','add-group-member','update-group-dm','remove-group-member','leave-group-dm'].includes(value.action)){pendingGroupSelection=null;pendingGroupUpdateId='';$('#groupDmStatus').textContent=message;groupDialog.querySelectorAll('button,input').forEach(control=>control.disabled=false)}}
+    else if(value.type==='error'){const message=value.message||'Knot directory request failed',requestId=String(value.requestId||'');if(value.action==='relay-text')failDmOutbox(requestId);const sfuPending=groupSfuPending.get(requestId),relayPending=fileRelayPending.get(requestId);if(sfuPending){groupSfuPending.delete(requestId);sfuPending.reject(new Error(message))}if(relayPending){fileRelayPending.delete(requestId);relayPending.reject(new Error(message))}if(value.action==='turn-credentials')turnCredentialPending?.reject(new Error(message));if(value.action==='create-account'){if($('#accountStatus'))$('#accountStatus').textContent=message;if($('#authStatus'))$('#authStatus').textContent=message}else pairHint.textContent=message;const dialog=$('#serverDialog');if(dialog?.open&&['create-server','redeem-invite'].includes(value.action)){pendingServerSelection=false;$('#serverDialogStatus').textContent=message;dialog.querySelectorAll('form button').forEach(button=>button.disabled=false)}const groupDialog=$('#groupDmDialog');if(groupDialog?.open&&['create-group-dm','add-group-member','update-group-dm','remove-group-member','leave-group-dm'].includes(value.action)){pendingGroupSelection=null;pendingGroupUpdateId='';$('#groupDmStatus').textContent=message;groupDialog.querySelectorAll('button,input').forEach(control=>control.disabled=false)}}
   }catch(error){console.warn('directory message',error)}};
   socket.onclose=event=>{if(directorySocket!==socket)return;directorySocket=null;stopDirectoryHeartbeat();markDirectoryPresenceUnknown();const disconnected=new Error('Knot signaling disconnected');for(const pending of groupSfuPending.values())pending.reject(disconnected);groupSfuPending.clear();for(const pending of fileRelayPending.values())pending.reject(disconnected);fileRelayPending.clear();if(event.code===1008&&/authenticat|account|credential|session/i.test(event.reason||'')&&!/too many account sessions/i.test(event.reason||'')){setDirectoryState(false,'Sign in required');const dialog=$('#accountDialog');if(dialog&&!dialog.open)dialog.showModal();$('#authSigninTab')?.click();if($('#authStatus'))$('#authStatus').textContent='Your saved session expired or was revoked. Sign in again — your photo and other settings stay on this device.';return}setDirectoryState(false,'Offline — retrying');directoryReconnect=setTimeout(()=>{if(!directorySocket)void connectDirectory()},directoryBackoff);directoryBackoff=Math.min(30000,directoryBackoff*2)};socket.onerror=()=>{if(directorySocket===socket)setDirectoryState(false,'Connection error')};
 }
