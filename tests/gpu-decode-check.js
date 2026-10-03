@@ -62,7 +62,20 @@ app.whenReady().then(async () => {
 
       const failing=await verifyGpuDecodeAgainstSoftware({decode:async(clip,acceleration)=>{if(acceleration==='prefer-hardware')throw new Error('decoder error');return decodeProbeClip(clip,'prefer-software')}});
       assert(failing.verdict==='broken','a GPU decoder that errors was not reported broken');
-      return {correct:correct.correlation,range:range.correlation,stretched:stretched.correlation,white:white.correlation};
+      // A real share the GPU cannot keep up with: 30 fps arrive, 8 are decoded.
+      // Knot records it (no restart mid-call), stops advertising GPU decode for
+      // that codec, and tells the viewer.
+      const reported=[];window.pairEnv={platform:'linux',primaryGpuVendor:'0x10de',nvidiaVaapiDriver:'bundled:1:2',reportNvidiaDecode:verdict=>reported.push(verdict)};
+      localHardwareDecode=['AV1','H264'];gpuDecodeTooSlow=false;remoteScreenExpected=true;remoteNativeScreenExpected=false;remoteScreenSuppressed=false;screenActive=false;screenStarting=false;screenAudioDebug=' · sound playing';
+      let calls=0;const receiver={getStats:async()=>{calls++;return new Map([['in',{type:'inbound-rtp',kind:'video',codecId:'c',bytesReceived:calls*2e6,framesReceived:calls*75,framesDecoded:calls*20,totalDecodeTime:calls*20*.2,powerEfficientDecoder:true,decoderImplementation:'ExternalDecoder (VaapiVideoDecoder)',frameHeight:1440,packetsLost:0,freezeCount:0,jitter:0}],['c',{type:'codec',mimeType:'video/H264'}]])}};
+      const stopSlow=monitorRemoteScreenDecode(receiver,{enabled:true,readyState:'live',addEventListener(){},removeEventListener(){}},()=>false,()=>true);
+      for(const until=Date.now()+12000;!gpuDecodeTooSlow&&Date.now()<until;)await new Promise(resolve=>setTimeout(resolve,200));
+      stopSlow();
+      assert(gpuDecodeTooSlow&&reported.join()==='slow','a GPU decoder far behind a real share was not recorded: '+JSON.stringify({reported,calls}));
+      assert(!localHardwareDecode.includes('H264')&&localHardwareDecode.includes('AV1'),'the slow codec is still advertised as GPU-decoded');
+      assert(/falling behind/.test(screenStatus.textContent)&&/restart Knot to decode on the CPU/.test(screenStatus.textContent)&&/1440p · 30 fps/.test(screenStatus.textContent),'the viewer was not told why the share stutters: '+screenStatus.textContent);
+      remoteScreenExpected=false;
+      return {correct:correct.correlation,range:range.correlation,stretched:stretched.correlation,white:white.correlation,status:screenStatus.textContent};
     })()`);
     console.log('PASS GPU decode check', JSON.stringify(result));
     app.exit(0);

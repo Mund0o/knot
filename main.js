@@ -581,7 +581,7 @@ if(state?.pcmWatchdog){clearInterval(state.pcmWatchdog);state.pcmWatchdog=null;}
 function isPairRenderer(event) {
   return event.sender === mainWin?.webContents && event.senderFrame === event.sender?.mainFrame && event.senderFrame?.url === PAIR_RENDERER_URL;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'shareSystemMixFallback', 'networkCapacity', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'directoryRosterCache', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents', 'dmOutbox']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'shareSystemMixFallback', 'networkCapacity', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'directoryRosterCache', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents', 'dmOutbox', 'nvidiaGpuDecode']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
@@ -713,12 +713,13 @@ ipcMain.on('pair:stopNativeScreen', (event, documentId, id) => { if (bridgeReque
 const fs = require('fs');
 // Electron only accepts this before its ready event. Read the tightly scoped
 // local setting early; toggling it in the UI takes effect on restart.
-let hardwareAccelerationEnabled = true,nvidiaDecodeVerdict = null;
+let hardwareAccelerationEnabled = true,nvidiaDecodeVerdict = null,nvidiaGpuDecodeEnabled = true;
 try {
   const stableSettings=path.join(app.getPath('appData'),'Knot','settings.json'),legacySettings=path.join(app.getPath('userData'),'settings.json'),earlyFile=[stableSettings,stableSettings+'.bak',legacySettings].find(file=>fs.existsSync(file));
   const earlySettings = earlyFile?JSON.parse(fs.readFileSync(earlyFile, 'utf8')):{};
   hardwareAccelerationEnabled = earlySettings.hardwareAcceleration !== 'off';
   nvidiaDecodeVerdict = nvidiaDecodeVerdicts(earlySettings.nvidiaVideoDecode);
+  nvidiaGpuDecodeEnabled = earlySettings.nvidiaGpuDecode !== 'off';
   if (!hardwareAccelerationEnabled) app.disableHardwareAcceleration();
 } catch {}
 // Apply the acceleration policy only when the setting is on. Linux prefers and
@@ -737,7 +738,8 @@ if (hardwareAccelerationEnabled) {
     // copy, skipping any build that already failed the startup decode check.
     const nvidiaGpu = primaryGpu?.vendor === '0x10de';
     const bundledDirs = [process.resourcesPath && path.join(process.resourcesPath, 'nvidia-vaapi'), path.join(__dirname, 'vendor', 'nvidia-vaapi')];
-    const { driver: nvidiaDriver, state: nvidiaState } = selectNvidiaVaapiDriver(nvidiaGpu ? nvidiaVaapiDrivers(process.env, fs, { bundledDirs }) : [], nvidiaDecodeVerdict);
+    // Settings → Screen sharing can turn NVIDIA GPU decoding off.
+    const { driver: nvidiaDriver, state: nvidiaState } = nvidiaGpu && !nvidiaGpuDecodeEnabled ? { driver: null, state: 'off' } : selectNvidiaVaapiDriver(nvidiaGpu ? nvidiaVaapiDrivers(process.env, fs, { bundledDirs }) : [], nvidiaDecodeVerdict);
     const nvidiaVaapi = !!nvidiaDriver;
     if (nvidiaVaapi) process.env.KNOT_NVIDIA_VAAPI_DRIVER = nvidiaDriver.fingerprint;
     else delete process.env.KNOT_NVIDIA_VAAPI_DRIVER;
@@ -1190,12 +1192,14 @@ ipcMain.on('pair:relaunch', event => { if(!isPairRenderer(event)||relaunching)re
 ipcMain.on('pair:nvidiaDecodeVerdict', (event, verdictValue) => {
   const driver = process.env.KNOT_NVIDIA_VAAPI_DRIVER || '';
   if (!isPairRenderer(event) || !driver || relaunching) return;
-  const verdict = ['ok', 'broken', 'unsupported'].includes(verdictValue) ? verdictValue : 'broken';
+  // 'slow': a real share decoded far behind on the GPU. It is recorded like a
+  // failure, but Knot does not restart in the middle of a call for it.
+  const verdict = ['ok', 'broken', 'unsupported', 'slow'].includes(verdictValue) ? verdictValue : 'broken';
   console.log('[gpu] nvidia-vaapi decode check:', verdict);
   void (async () => {
     const previous = await settingsStore.get('nvidiaVideoDecode').catch(() => null);
     const saved = await settingsStore.set('nvidiaVideoDecode', JSON.stringify(recordNvidiaDecodeVerdict(previous, driver, verdict))) && await settingsStore.flush();
-    if (verdict === 'ok' || !saved || relaunching) return;
+    if (verdict === 'ok' || verdict === 'slow' || !saved || relaunching) return;
     relaunching = true;
     await cleanupRuntime().catch(() => {});
     relaunchKnot();

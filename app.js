@@ -1076,9 +1076,26 @@ function setupPeer(){
     }
     if(e.track.kind==='audio'){logCallEvent('Audio track received from friend');if(remoteAudio.srcObject){try{remoteAudio.srcObject.getAudioTracks().forEach(t=>t.onended=null)}catch{}}if(remoteAudio.srcObject&&remoteAudio.srcObject!==stream){try{remoteAudio.srcObject.addTrack(e.track)}catch{}}else remoteAudio.srcObject=stream;remoteVoiceTrack=e.track;remoteVoiceTransceiver=e.transceiver||remoteVoiceTransceiver;try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=monitorVoicePlayout(e.transceiver?.receiver||pc.getReceivers().find(value=>value.track===e.track),e.track);monitorSpeaking('dm-friend',e.track);e.track.onended=()=>{if(remoteVoiceTrack===e.track){const next=e.transceiver?.receiver?.track;if(next&&next!==e.track&&next.kind==='audio'&&next.readyState!=='ended'){remoteVoiceTrack=next;monitorSpeaking('dm-friend',next);if(callActive)setRemoteCallAudio(true);return}remoteVoiceTrack=null;remoteVoiceTransceiver=null}try{remoteVoicePlayoutStop?.()}catch{};remoteVoicePlayoutStop=null;stopSpeakingMonitor('dm-friend');if(callActive&&pc&&!['failed','closed'].includes(pc.connectionState)){restoreRemoteDirectVoicePlayback();return}applyRemoteCallState(false);logCallEvent('Friend left the call')};if(!callActive){setRemoteCallAudio(false);return}setRemoteCallAudio(true);if(!gestureGuard){gestureGuard=true;document.addEventListener('pointerdown',()=>setRemoteCallAudio(callActive),{once:true});document.addEventListener('keydown',()=>setRemoteCallAudio(callActive),{once:true})}}else if(e.track.kind==='video'){remoteScreenVideoTrack=e.track;remoteScreenVideoStream=stream;e.track.onunmute=()=>{if(remoteScreenExpected&&!remoteNativeScreenExpected)presentRemoteScreenVideo(e.track)};e.track.onended=()=>{if(remoteScreen.srcObject===stream)clearRemoteScreenShare()};if(remoteScreenExpected&&!remoteNativeScreenExpected)presentRemoteScreenVideo(e.track)}}catch(error){console.warn('remote media track',error)}};
 }
+// What a viewer sees under a friend's WebRTC share: how many frames arrive
+// and how many are shown, the bitrate, codec and decoder, and the sound. A
+// share that arrives at 1 fps is the sharer's PC or connection; one that
+// arrives fast but shows slowly is this computer.
+function reportRemoteShareStats({inbound,codec,receivedFps,shownFps,mbps,decodeMs}){
+  if(!remoteScreenExpected||remoteNativeScreenExpected||remoteScreenSuppressed||screenActive||screenStarting)return;
+  const height=Number(inbound?.frameHeight)||0,name=String(codec?.mimeType||'').replace(/^video\//i,'')||'video';
+  const gpu=inbound?.powerEfficientDecoder===true,parts=['Friend sharing'];
+  if(height)parts.push(height+'p');
+  parts.push(Math.round(receivedFps)+' fps');
+  if(mbps>0)parts.push(mbps.toFixed(mbps<10?1:0)+' Mbps');
+  parts.push(name+' on '+(gpu?'GPU':'CPU'));
+  if(receivedFps>=5&&shownFps<receivedFps*.6)parts.push('only '+Math.round(shownFps)+' fps shown · this computer is falling behind');
+  else if(receivedFps<5&&shownFps<5)parts.push('your friend’s PC or connection is sending few frames');
+  if(gpuDecodeTooSlow)parts.push('restart Knot to decode on the CPU');
+  screenStatus.textContent=parts.join(' · ')+screenAudioDebug;
+}
 function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
   let latencyTargetMs=45;const applyLatencyTarget=value=>{latencyTargetMs=Math.min(NATIVE_SCREEN_LATENCY_CEILING_MS,value);try{receiver.playoutDelayHint=latencyTargetMs/1000}catch{}try{if('jitterBufferTarget'in receiver)receiver.jitterBufferTarget=latencyTargetMs}catch{}};applyLatencyTarget(latencyTargetMs);
-  let previousBytes=0,previousFrames=0,previousLost=0,previousFreezes=0,previousJitterDelay=0,previousJitterCount=0,stableWindows=0,stalls=0,finished=false,sampleInFlight=false;
+  let previousBytes=0,previousFrames=0,previousLost=0,previousFreezes=0,previousJitterDelay=0,previousJitterCount=0,previousReceived=0,previousDecodeTime=0,slowGpuWindows=0,stableWindows=0,stalls=0,finished=false,sampleInFlight=false;
   const stop=()=>{if(finished)return;finished=true;clearInterval(timer);try{track.removeEventListener?.('ended',stop)}catch{}};
   const sample=async()=>{if(sampleInFlight||finished)return;sampleInFlight=true;try{
     if(finished||track.readyState==='ended')return stop();
@@ -1087,6 +1104,15 @@ function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
     reports.forEach(report=>{if(report.type==='inbound-rtp'&&(report.kind==='video'||report.mediaType==='video')&&!report.isRemote)inbound=report});
     if(!inbound)return;
     codec=reports.get(inbound.codecId);const bytes=Number(inbound.bytesReceived)||0,frames=Number(inbound.framesDecoded)||0,lost=Number(inbound.packetsLost)||0,freezes=Number(inbound.freezeCount)||0,jitterDelay=Number(inbound.jitterBufferDelay)||0,jitterCount=Number(inbound.jitterBufferEmittedCount)||0,received=bytes-previousBytes,decoded=frames-previousFrames,jitterDelta=jitterDelay-previousJitterDelay,jitterCountDelta=jitterCount-previousJitterCount,playoutMs=jitterCountDelta>0?Math.max(0,jitterDelta/jitterCountDelta*1000):0,pressure=lost>previousLost||freezes>previousFreezes||Number(inbound.jitter)>.03,freezeDelta=freezes-previousFreezes,lostDelta=lost-previousLost;
+    const framesReceived=Number(inbound.framesReceived)||0,decodeTime=Number(inbound.totalDecodeTime)||0,receivedFrames=framesReceived-previousReceived,decodeMs=decoded>0?(decodeTime-previousDecodeTime)/decoded*1000:0;previousReceived=framesReceived;previousDecodeTime=decodeTime;
+    // The bundled NVIDIA decoder passes its startup check on a small clip; a
+    // real share it cannot keep up with shows as frames arriving faster than
+    // they decode. Record it so the next start decodes on the CPU.
+    const gpuDecoder=inbound.powerEfficientDecoder===true||/vaapi|external/i.test(String(inbound.decoderImplementation||''));
+    if(gpuDecoder&&window.pairEnv?.nvidiaVaapiDriver&&!gpuDecodeTooSlow&&receivedFrames>=20&&(decoded<receivedFrames*.5||decodeMs>120)){
+      if(++slowGpuWindows>=3){gpuDecodeTooSlow=true;try{window.pairEnv.reportNvidiaDecode?.('slow')}catch{}noteSoftwareDecode(/AV1/i.test(codec?.mimeType||'')?'AV1':/H264/i.test(codec?.mimeType||'')?'H264':/VP9/i.test(codec?.mimeType||'')?'VP9':'VP8');logCallEvent('Diag: NVIDIA GPU decode too slow · received '+receivedFrames+' decoded '+decoded+' in 2.5 s · '+decodeMs.toFixed(0)+' ms/frame');renderVideoDecodeStatus()}
+    }else slowGpuWindows=0;
+    reportRemoteShareStats({inbound,codec,receivedFps:receivedFrames/2.5,shownFps:decoded/2.5,mbps:received>0?received*8/2500/1000:0,decodeMs});
     previousBytes=bytes;previousFrames=frames;previousLost=lost;previousFreezes=freezes;previousJitterDelay=jitterDelay;previousJitterCount=jitterCount;if(playoutMs)recordMetric('screen.playout_ms',playoutMs,{codec:String(codec?.mimeType||'unknown').replace('video/','').toLowerCase()});
     const receiveMbps=received>0?(received*8)/2500/1000:NaN;
     const cause=networkMath()?.classifyShareBuffering?.({freezeDelta,packetsLostDelta:lostDelta,receiveMbps,jitter:Number(inbound.jitter)||0})||(pressure?'path':'');
@@ -1248,7 +1274,7 @@ function currentViewerReceiveCapMbps({allowLive=true}={}){
 // Codecs this machine decodes on its GPU, announced to sharers. Since 1.1.118
 // NVIDIA Linux decodes received video on the CPU; a sharer that keeps raising
 // its bitrate toward the GPU ceiling leaves that viewer seconds behind.
-let localHardwareDecode=null;
+let localHardwareDecode=null,gpuDecodeTooSlow=false;
 async function probeHardwareDecode(){
   if(typeof VideoDecoder!=='function'||typeof VideoDecoder.isConfigSupported!=='function')return;
   const codecs={AV1:'av01.0.13M.08',H264:'avc1.640033',VP9:'vp09.00.51.08',VP8:'vp8'},supported=[];
@@ -1336,7 +1362,7 @@ function renderVideoDecodeStatus(){
   if(hardware.includes('AV1')){status.textContent='Shared screens you watch decode on your GPU ('+hardware.join(', ')+').';return}
   if(hardware.length){status.textContent='Shared screens you watch decode on your GPU in '+hardware.join(', ')+'. AV1 shares decode on your CPU, so sharers keep their bitrate lower for you.';return}
   const nvidia=window.pairEnv?.primaryGpuVendor==='0x10de',state=window.pairEnv?.nvidiaVaapiState||'';
-  status.textContent='Shared screens you watch decode on your CPU, so sharers keep their bitrate lower for you.'+(!nvidia?'':state==='failed'?' Knot’s NVIDIA video decoder did not pass its check on this computer, so it stays off. Updating your NVIDIA driver and restarting Knot checks it again.':state==='missing'?' This build of Knot has no NVIDIA video decoder; install nvidia-vaapi-driver and restart Knot.':'');
+  status.textContent='Shared screens you watch decode on your CPU, so sharers keep their bitrate lower for you.'+(!nvidia?'':state==='off'?' You turned NVIDIA GPU decoding off above.':gpuDecodeTooSlow?' Your NVIDIA GPU could not keep up with a share, so Knot will decode on the CPU after a restart.':state==='failed'?' Knot’s NVIDIA video decoder did not pass its check on this computer, so it stays off. Updating your NVIDIA driver and restarting Knot checks it again.':state==='missing'?' This build of Knot has no NVIDIA video decoder; install nvidia-vaapi-driver and restart Knot.':'');
 }
 // A decoder that advertised hardware support can still fail on a real stream.
 function noteSoftwareDecode(codec){
@@ -1714,11 +1740,14 @@ function addScreenShareSettings(){
   const tab=document.createElement('button');tab.type='button';tab.className='settings-tab';tab.dataset.settingsTab='screen';tab.setAttribute('role','tab');tab.setAttribute('aria-selected','false');tab.textContent='Screen sharing';
   const page=document.createElement('section');page.className='settings-section settings-page';page.dataset.settingsPage='screen';page.setAttribute('role','tabpanel');page.hidden=true;
   const maxSlider=sliderBitrateMaxMbps();
-  page.innerHTML='<div><h3>Screen sharing</h3><p>Your source resolution and frame-rate choice stay fixed. Motion mode may temporarily reduce encoded resolution under real network pressure to preserve smooth cadence; Detail mode preserves pixels instead.</p></div><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic — hardware-friendly</option><option value="H264">H.264 — widest support</option><option value="AV1">AV1 — best compression</option><option value="VP9">VP9</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">20 Mbps</output></span><input id="screenBitrateSetting" type="range" min="2" max="'+maxSlider+'" value="20" step="1" /><small id="screenBitrateCapHint" class="settings-hint">After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).</small></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — preserve smooth games/video</option><option value="detail">Detail — preserve text resolution</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Native AV1 uses the discrete NVIDIA or AMD encoder, syncs capture to content, keeps lookahead off, targets about 110 ms, and never lets live latency go past 260 ms. A launch speed probe raises the budget toward the GPU encoder’s useful ceiling (about 200 Mbps at 4K60 on NVIDIA) when your upload can carry it; the bitrate slider never offers more than the safe rate for the measured path. Software encode stays on the conservative curve. Live native share keeps that encode rate and skips stale pictures instead of cutting bitrate; a sustained decoder failure switches only that viewer to a capped compatibility codec.</p><label class="settings-toggle"><input id="screenSystemMixSetting" type="checkbox" checked /><span>Whole-PC sound when isolated capture is unavailable</span><small>Windows 10 without the app-isolation update cannot leave Knot out of the share. This fallback shares all PC sound, so the people watching may hear an echo of their own voice.</small></label><p id="videoDecodeStatus" class="settings-hint" aria-live="polite">Checking how this computer decodes shared screens…</p><div class="settings-inline-actions"><button id="testScreenAudio" type="button">Test isolated computer audio</button></div><p id="screenAudioTestStatus" class="settings-hint" aria-live="polite">Checks the same isolated audio route used by a real share.</p>';
+  page.innerHTML='<div><h3>Screen sharing</h3><p>Your source resolution and frame-rate choice stay fixed. Motion mode may temporarily reduce encoded resolution under real network pressure to preserve smooth cadence; Detail mode preserves pixels instead.</p></div><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic — hardware-friendly</option><option value="H264">H.264 — widest support</option><option value="AV1">AV1 — best compression</option><option value="VP9">VP9</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">20 Mbps</output></span><input id="screenBitrateSetting" type="range" min="2" max="'+maxSlider+'" value="20" step="1" /><small id="screenBitrateCapHint" class="settings-hint">After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).</small></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — preserve smooth games/video</option><option value="detail">Detail — preserve text resolution</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Native AV1 uses the discrete NVIDIA or AMD encoder, syncs capture to content, keeps lookahead off, targets about 110 ms, and never lets live latency go past 260 ms. A launch speed probe raises the budget toward the GPU encoder’s useful ceiling (about 200 Mbps at 4K60 on NVIDIA) when your upload can carry it; the bitrate slider never offers more than the safe rate for the measured path. Software encode stays on the conservative curve. Live native share keeps that encode rate and skips stale pictures instead of cutting bitrate; a sustained decoder failure switches only that viewer to a capped compatibility codec.</p><label class="settings-toggle"><input id="screenSystemMixSetting" type="checkbox" checked /><span>Whole-PC sound when isolated capture is unavailable</span><small>Windows 10 without the app-isolation update cannot leave Knot out of the share. This fallback shares all PC sound, so the people watching may hear an echo of their own voice.</small></label><label class="settings-toggle" id="nvidiaGpuDecodeRow" hidden><input id="nvidiaGpuDecodeSetting" type="checkbox" checked /><span>Decode shared screens on the NVIDIA GPU</span><small>Turn this off if friends’ shares stutter or freeze on this computer. Requires a restart.</small></label><p id="videoDecodeStatus" class="settings-hint" aria-live="polite">Checking how this computer decodes shared screens…</p><div class="settings-inline-actions"><button id="testScreenAudio" type="button">Test isolated computer audio</button></div><p id="screenAudioTestStatus" class="settings-hint" aria-live="polite">Checks the same isolated audio route used by a real share.</p>';
   document.querySelector('.settings-tabs').append(tab);document.querySelector('.settings-pages').append(page);tab.onclick=()=>openSettingsTab('screen');
   const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),codec=$('#screenCodecSetting'),contentHint=$('#screenContentHintSetting'),cursor=$('#screenCursorSetting');
   const updateBitrate=()=>{const max=sliderBitrateMaxMbps();bitrate.max=String(max);screenBitrateMbps=Math.max(2,Math.min(max,Number(bitrate.value)||20));bitrate.value=String(screenBitrateMbps);bitrateValue.textContent=screenBitrateMbps+' Mbps';bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/Math.max(1,max-2)*100)+'%');ssSet('screenBitrate',String(screenBitrateMbps));const hint=$('#screenBitrateCapHint');if(hint)hint.textContent=screenShareHasProbe()?'This slider tops out at '+max+' Mbps, the safe rate for your measured connection. Fast links can still use up to 200 Mbps.':'After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).'};
   bitrate.oninput=()=>{screenBitrateExplicit=true;ssSet('screenBitrateExplicit','yes');updateBitrate()};enableRangeDrag(bitrate);codec.onchange=()=>{screenCodec=['auto','H264','AV1','VP9','VP8'].includes(codec.value)?codec.value:'auto';ssSet('screenCodec',screenCodec)};contentHint.onchange=()=>{screenContentHint=contentHint.value==='detail'?'detail':'motion';ssSet('screenContentHint',screenContentHint)};cursor.onchange=()=>{screenCursor=['always','motion','never'].includes(cursor.value)?cursor.value:'always';ssSet('screenCursor',screenCursor)};$('#testScreenAudio').onclick=()=>testScreenAudioIsolation($('#testScreenAudio'),$('#screenAudioTestStatus'));const systemMix=$('#screenSystemMixSetting');systemMix.onchange=()=>{shareSystemMixFallback=systemMix.checked;ssSet('shareSystemMixFallback',shareSystemMixFallback?'on':'off')};
+  const gpuDecodeRow=$('#nvidiaGpuDecodeRow'),gpuDecode=$('#nvidiaGpuDecodeSetting');
+  if(window.pairEnv?.platform==='linux'&&window.pairEnv?.primaryGpuVendor==='0x10de'){gpuDecodeRow.hidden=false;ss('nvidiaGpuDecode').then(value=>{gpuDecode.checked=value!=='off'}).catch(()=>{})}
+  gpuDecode.onchange=()=>{ssSet('nvidiaGpuDecode',gpuDecode.checked?'on':'off');const status=document.getElementById('videoDecodeStatus');if(status)status.textContent='Restart Knot to '+(gpuDecode.checked?'decode shared screens on your NVIDIA GPU.':'decode shared screens on your CPU.')};
   return async()=>{
     const [savedBitrateValue,bitrateExplicit]=await Promise.all([ss('screenBitrate'),ss('screenBitrateExplicit')]),savedBitrate=Number(savedBitrateValue),legacyDefault=bitrateExplicit!=='yes'&&savedBitrate===12;screenBitrateExplicit=bitrateExplicit==='yes';screenBitrateMbps=savedBitrateValue!==null&&savedBitrateValue!==''&&Number.isFinite(savedBitrate)&&!legacyDefault?Math.max(2,Math.min(sliderBitrateMaxMbps(),savedBitrate)):20;bitrate.value=String(screenBitrateMbps);updateBitrate();
     const savedCodec=await ss('screenCodec');screenCodec=['auto','H264','AV1','VP9','VP8'].includes(savedCodec)?savedCodec:'auto';codec.value=screenCodec;
@@ -4654,10 +4683,10 @@ function startRemoteShareElement(audio,{forceFade=false}={}){
     if(audio._knotShareFade!==started||audio.muted||remoteScreenSuppressed||!audio.srcObject)return;
     const t=Math.min(1,(now-started)/span);
     audio.volume=target*t;
-    if(t<1)requestAnimationFrame(rise);
+    if(t<1)setTimeout(()=>rise(performance.now()),16);
     else audio._knotShareFade=0;
   };
-  audio.play().then(()=>{logShareAudio('playing vol=fade muted='+audio.muted+' paused='+audio.paused);requestAnimationFrame(rise)}).catch(error=>{logShareAudio('element play failed '+(error?.message||error));audio.muted=true;setupRemoteShareAudioSink(audio)});
+  audio.play().then(()=>{logShareAudio('playing vol=fade muted='+audio.muted+' paused='+audio.paused);rise(performance.now())}).catch(error=>{logShareAudio('element play failed '+(error?.message||error));audio.muted=true;setupRemoteShareAudioSink(audio)});
   return audio;
 }
 function fadeRemoteShareAudio(audio,{force=false}={}){
@@ -4673,10 +4702,10 @@ function fadeRemoteShareAudio(audio,{force=false}={}){
     if(audio._knotShareFade!==started||audio.muted||remoteScreenSuppressed||!audio.srcObject)return;
     const t=Math.min(1,(now-started)/span);
     audio.volume=from+(target-from)*t;
-    if(t<1)requestAnimationFrame(tick);
+    if(t<1)setTimeout(()=>tick(performance.now()),16);
     else {audio.volume=target;audio._knotShareFade=0}
   };
-  requestAnimationFrame(tick);
+  tick(performance.now());
   return audio;
 }
 // Screen shares burst several Mbps onto the same path as their sound. Chromium's
@@ -4718,9 +4747,45 @@ function bindReservedRemoteScreenAudio({force=false}={}){
   return audio;
 }
 function clearRemoteShareAudioBind(){remoteShareAudioBindTimers.forEach(clearTimeout);remoteShareAudioBindTimers=[]}
+// "Audio received" only meant the sharer attached a sound track. Check what
+// actually happens every few seconds: sound packets arriving, and the player
+// running. Sound that arrives but is not playing is rebound, then routed
+// through Web Audio instead; the status says which of these is true.
+let remoteShareAudioMonitor=null;
+function stopRemoteShareAudioMonitor(){clearInterval(remoteShareAudioMonitor);remoteShareAudioMonitor=null}
+function startRemoteShareAudioMonitor(){
+  if(remoteShareAudioMonitor)return;
+  let previousPackets=-1,previousEnergy=0,repairs=0,busy=false;
+  remoteShareAudioMonitor=setInterval(async()=>{
+    if(!remoteScreenExpected){stopRemoteShareAudioMonitor();return}
+    if(busy)return;busy=true;
+    try{
+      const track=screenAudioTransceiver?.receiver?.track,receiver=track&&pc?.getReceivers?.().find(item=>item.track===track);if(!receiver)return;
+      let inbound=null;(await receiver.getStats()).forEach(report=>{if(report.type==='inbound-rtp'&&(report.kind==='audio'||report.mediaType==='audio'))inbound=report});if(!inbound)return;
+      const packets=Number(inbound.packetsReceived)||0,energy=Number(inbound.totalAudioEnergy)||0;
+      if(previousPackets<0){previousPackets=packets;previousEnergy=energy;return}
+      const arriving=packets-previousPackets>20,loud=energy-previousEnergy>1e-7;previousPackets=packets;previousEnergy=energy;
+      const audio=nativeRemoteAudio,wanted=!remoteScreenSuppressed&&(Number(remoteScreen.volume)||0)>0;
+      const viaGraph=!!(shareAudioStream&&shareAudioGain&&audio?.srcObject===shareAudioStream);
+      const playing=!!audio&&(viaGraph||(!audio.paused&&!audio.muted&&(audio.volume>.01||!!audio._knotShareFade)));
+      let state;
+      if(!arriving){state=' · no sound arriving from your friend';repairs=0}
+      else if(wanted&&!playing){
+        state=' · sound arriving · restarting playback';
+        if(++repairs<=2)bindReservedRemoteScreenAudio({force:true});
+        else if(audio){audio.muted=true;setupRemoteShareAudioSink(audio)}
+        logShareAudio('watchdog repair '+repairs+' paused='+audio?.paused+' muted='+audio?.muted+' vol='+Number(audio?.volume||0).toFixed(2));
+      }
+      else if(!wanted)state=' · sound muted';
+      else state=loud?' · sound playing':' · sound arriving but silent';
+      if(state!==screenAudioDebug){screenAudioDebug=state;if(remoteNativeScreenExpected&&!screenActive&&!screenStarting)screenStatus.textContent='Friend sharing'+screenAudioDebug}
+    }catch{}finally{busy=false}
+  },2500);
+}
 function scheduleRemoteShareAudioBind(){
   clearRemoteShareAudioBind();
   bindReservedRemoteScreenAudio();
+  startRemoteShareAudioMonitor();
   // Linux native AV1 video can be live a second before PipeWire replaceTrack.
   // Force-rebind the reserved receiver so a silent placeholder track is bounced.
   remoteShareAudioBindTimers=[400,1200,2500,5000,8000].map(delay=>setTimeout(()=>{if(!remoteScreenExpected)return;bindReservedRemoteScreenAudio({force:true})},delay));
