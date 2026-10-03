@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment } = require('../linux-gpu');
+const { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment, nvidiaVaapiDriver, nvidiaVaapiEligible } = require('../linux-gpu');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'knot-gpu-test-'));
 const drm = path.join(root, 'sys', 'class', 'drm');
@@ -60,6 +60,25 @@ try {
     __GLX_VENDOR_LIBRARY_NAME: 'nvidia',
     __VK_LAYER_NV_optimus: 'NVIDIA_only'
   });
+  const verifiedEnv = {};
+  applyLinuxMainGpuEnvironment(candidates.find(item => item.vendor === '0x10de'), verifiedEnv, { nvidiaVaapi: true });
+  assert.strictEqual(verifiedEnv.LIBVA_DRIVER_NAME, 'nvidia', 'a verified NVIDIA VA-API driver must be pinned');
+  assert.strictEqual(verifiedEnv.NVD_BACKEND, 'direct', 'only the direct backend exports Chromium-importable pictures');
+  const unverifiedEnv = { LIBVA_DRIVER_NAME: 'nvidia', NVD_BACKEND: 'egl' };
+  applyLinuxMainGpuEnvironment(candidates.find(item => item.vendor === '0x10de'), unverifiedEnv);
+  assert(!('LIBVA_DRIVER_NAME' in unverifiedEnv) && !('NVD_BACKEND' in unverifiedEnv), 'an unverified driver must not inherit a libva override');
+
+  const libva = path.join(root, 'libva');fs.mkdirSync(libva);
+  assert.strictEqual(nvidiaVaapiDriver({ LIBVA_DRIVERS_PATH: libva }, { statSync: () => { throw new Error('missing'); } }), null);
+  fs.writeFileSync(path.join(libva, 'nvidia_drv_video.so'), 'driver');
+  const driver = nvidiaVaapiDriver({ LIBVA_DRIVERS_PATH: libva });
+  assert(driver && driver.path === path.join(libva, 'nvidia_drv_video.so') && driver.fingerprint.includes(':6:'));
+  assert.strictEqual(nvidiaVaapiEligible(null, null), false, 'no driver means CPU decode');
+  assert.strictEqual(nvidiaVaapiEligible(driver, null), true, 'an untested driver is checked at startup');
+  assert.strictEqual(nvidiaVaapiEligible(driver, { driver: driver.fingerprint, verdict: 'ok' }), true);
+  assert.strictEqual(nvidiaVaapiEligible(driver, { driver: driver.fingerprint, verdict: 'broken' }), false, 'a failed driver build must stay on CPU decode');
+  assert.strictEqual(nvidiaVaapiEligible(driver, { driver: 'older-build', verdict: 'broken' }), true, 'an updated driver is checked again');
+
   const amdEnv = { LIBVA_DRIVER_NAME: 'nvidia', NVD_BACKEND: 'direct', __NV_PRIME_RENDER_OFFLOAD: '1' };
   assert.strictEqual(applyLinuxMainGpuEnvironment(candidates.find(item => item.pciAddress === '0000:07:00.0'), amdEnv), true);
   assert.deepStrictEqual(amdEnv, {

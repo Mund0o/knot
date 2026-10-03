@@ -13,6 +13,11 @@ for (const name of ['CanvasOopRasterization', 'AcceleratedVideoDecoder', 'Accele
   assert(linux.enableFeatures.includes(name), `missing ${name}`);
 }
 assert(!linux.enableFeatures.includes('VaapiOnNvidiaGPUs'));
+// A verified nvidia-vaapi-driver build (0.0.18+) decodes on the GPU.
+const verifiedNvidia = gpuAccelerationPolicy({ platform: 'linux', gpu: nvidia, wayland: false, nvidiaVaapi: true });
+assert.strictEqual(verifiedNvidia.switches.get('hardware-video-device-path'), nvidia.renderNode);
+assert(verifiedNvidia.enableFeatures.includes('VaapiOnNvidiaGPUs') && verifiedNvidia.enableFeatures.includes('AcceleratedVideoDecodeLinuxGL'));
+assert(verifiedNvidia.switches.has('ignore-gpu-blocklist'));
 assert(linux.disableFeatures.includes('Vulkan'));
 assert(linux.disableFeatures.includes('WebRtcHideLocalIpsWithMdns'));
 assert(WEBRTC_ICE_DISABLE_FEATURES.includes('WebRtcHideLocalIpsWithMdns'));
@@ -22,6 +27,7 @@ assert(amdLinux);
 assert.strictEqual(amdLinux.switches.get('hardware-video-device-path'), amd.renderNode);
 assert.strictEqual(amdLinux.switches.get('use-webgpu-adapter'), 'opengles');
 assert(!amdLinux.enableFeatures.includes('VaapiOnNvidiaGPUs'));
+assert(!gpuAccelerationPolicy({ platform: 'linux', gpu: amd, wayland: false, nvidiaVaapi: true }).enableFeatures.includes('VaapiOnNvidiaGPUs'), 'the NVIDIA VA-API switch never applies to AMD');
 for (const name of ['AcceleratedVideoDecoder', 'AcceleratedVideoEncoder', 'AcceleratedVideoDecodeLinuxGL', 'AcceleratedVideoDecodeLinuxZeroCopyGL']) {
   assert(amdLinux.enableFeatures.includes(name), `AMD policy missing ${name}`);
 }

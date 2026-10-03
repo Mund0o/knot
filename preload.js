@@ -143,6 +143,9 @@ contextBridge.exposeInMainWorld('pairEnv', {
   // sandboxed preload is not supported by Electron.
   version: String(process.env.KNOT_APP_VERSION || ''),
   primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
+  // Set when NVIDIA VA-API decode is enabled for this launch and must be verified.
+  nvidiaVaapiDriver: process.env.KNOT_NVIDIA_VAAPI_DRIVER || '',
+  reportNvidiaDecode: verdict => ipcRenderer.send('pair:nvidiaDecodeVerdict', String(verdict || '')),
   // Linux selection is handled by desktopCapturer inside the display-media
   // request so the PipeWire portal source is consumed before it can expire.
   useSystemPicker: process.platform === 'linux' && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY),

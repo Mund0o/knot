@@ -1213,12 +1213,53 @@ async function probeHardwareDecode(){
   if(typeof VideoDecoder!=='function'||typeof VideoDecoder.isConfigSupported!=='function')return;
   const codecs={AV1:'av01.0.13M.08',H264:'avc1.640033',VP9:'vp09.00.51.08',VP8:'vp8'},supported=[];
   for(const [name,codec] of Object.entries(codecs)){try{const result=await VideoDecoder.isConfigSupported({codec,codedWidth:3840,codedHeight:2160,hardwareAcceleration:'prefer-hardware'});if(result?.supported)supported.push(name)}catch{}}
-  localHardwareDecode=supported;announceNetBudget();
+  localHardwareDecode=supported;announceNetBudget();renderVideoDecodeStatus();
+}
+// A 256×256 AV1 key picture: red, green, blue and yellow quadrants. The
+// NVIDIA import failure painted decoded video solid white, so a decode that
+// does not reproduce all four colours on a canvas is treated as broken.
+const GPU_DECODE_PROBE_AV1='EgAKCwAAAAO///m18gCAMlEQAIUAAACAAAAA68fVXIEzpCPenX/mHoCPWvdZlL9zvF4JoisrpHVpVZypCqMU9LBvqXy4A9OFXRkrkmsctzqNmMhDYDEp8X1ZH+dlFRwx8UA=';
+async function verifyVideoDecodePicture({hardwareAcceleration='prefer-hardware',timeoutMs=8000}={}){
+  if(typeof VideoDecoder!=='function'||typeof EncodedVideoChunk!=='function')return 'unsupported';
+  const config={codec:'av01.0.00M.08',codedWidth:256,codedHeight:256,hardwareAcceleration};
+  try{if(!(await VideoDecoder.isConfigSupported(config))?.supported)return 'unsupported'}catch{return 'unsupported'}
+  let decoder=null,frame=null;
+  try{
+    const data=Uint8Array.from(atob(GPU_DECODE_PROBE_AV1),character=>character.charCodeAt(0));
+    frame=await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error('decode timed out')),timeoutMs);
+      decoder=new VideoDecoder({output:value=>{clearTimeout(timer);resolve(value)},error:error=>{clearTimeout(timer);reject(error)}});
+      decoder.configure(config);decoder.decode(new EncodedVideoChunk({type:'key',timestamp:0,data}));decoder.flush().catch(()=>{});
+    });
+    const canvas=document.createElement('canvas');canvas.width=256;canvas.height=256;const context=canvas.getContext('2d');context.drawImage(frame,0,0,256,256);
+    for(const [x,y,r,g,b] of [[64,64,255,0,0],[192,64,0,255,0],[64,192,0,0,255],[192,192,255,255,0]]){
+      const pixel=context.getImageData(x,y,1,1).data;
+      if(Math.abs(pixel[0]-r)>60||Math.abs(pixel[1]-g)>60||Math.abs(pixel[2]-b)>60)return 'broken';
+    }
+    return 'ok';
+  }catch{return 'broken'}
+  finally{try{frame?.close()}catch{}try{decoder?.close()}catch{}}
+}
+// Runs only when this launch enabled NVIDIA VA-API. Any result but 'ok' makes
+// the main process record it and restart Knot on CPU decode.
+async function verifyNvidiaVideoDecode(){
+  if(!window.pairEnv?.nvidiaVaapiDriver)return;
+  const verdict=await verifyVideoDecodePicture();
+  console.log('[gpu] NVIDIA video decode check:',verdict);
+  try{window.pairEnv.reportNvidiaDecode?.(verdict)}catch{}
+}
+function renderVideoDecodeStatus(){
+  const status=document.getElementById('videoDecodeStatus');if(!status)return;
+  const hardware=Array.isArray(localHardwareDecode)?localHardwareDecode:null;
+  if(!hardware){status.textContent='Checking how this computer decodes shared screens…';return}
+  if(hardware.includes('AV1')){status.textContent='Shared screens you watch decode on your GPU ('+hardware.join(', ')+').';return}
+  const nvidia=window.pairEnv?.primaryGpuVendor==='0x10de';
+  status.textContent='Shared screens you watch decode on your CPU, so sharers keep their bitrate lower for you.'+(nvidia?' To decode on your NVIDIA GPU, install nvidia-vaapi-driver 0.0.18 or newer and restart Knot.':'');
 }
 // A decoder that advertised hardware support can still fail on a real stream.
 function noteSoftwareDecode(codec){
   if(!Array.isArray(localHardwareDecode)||!localHardwareDecode.includes(codec))return;
-  localHardwareDecode=localHardwareDecode.filter(value=>value!==codec);announceNetBudget();
+  localHardwareDecode=localHardwareDecode.filter(value=>value!==codec);announceNetBudget();renderVideoDecodeStatus();
 }
 function shareViewersDecodeInSoftware(codec){
   const math=networkMath();if(!math?.viewerDecodesInSoftware)return false;
@@ -1591,7 +1632,7 @@ function addScreenShareSettings(){
   const tab=document.createElement('button');tab.type='button';tab.className='settings-tab';tab.dataset.settingsTab='screen';tab.setAttribute('role','tab');tab.setAttribute('aria-selected','false');tab.textContent='Screen sharing';
   const page=document.createElement('section');page.className='settings-section settings-page';page.dataset.settingsPage='screen';page.setAttribute('role','tabpanel');page.hidden=true;
   const maxSlider=sliderBitrateMaxMbps();
-  page.innerHTML='<div><h3>Screen sharing</h3><p>Your source resolution and frame-rate choice stay fixed. Motion mode may temporarily reduce encoded resolution under real network pressure to preserve smooth cadence; Detail mode preserves pixels instead.</p></div><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic — hardware-friendly</option><option value="H264">H.264 — widest support</option><option value="AV1">AV1 — best compression</option><option value="VP9">VP9</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">20 Mbps</output></span><input id="screenBitrateSetting" type="range" min="2" max="'+maxSlider+'" value="20" step="1" /><small id="screenBitrateCapHint" class="settings-hint">After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).</small></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — preserve smooth games/video</option><option value="detail">Detail — preserve text resolution</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Native AV1 uses the discrete NVIDIA or AMD encoder, syncs capture to content, keeps lookahead off, targets about 110 ms, and never lets live latency go past 260 ms. A launch speed probe raises the budget toward the GPU encoder’s useful ceiling (about 200 Mbps at 4K60 on NVIDIA) when your upload can carry it; the bitrate slider never offers more than the safe rate for the measured path. Software encode stays on the conservative curve. Live native share keeps that encode rate and skips stale pictures instead of cutting bitrate; a sustained decoder failure switches only that viewer to a capped compatibility codec.</p><label class="settings-toggle"><input id="screenSystemMixSetting" type="checkbox" checked /><span>Whole-PC sound when isolated capture is unavailable</span><small>Windows 10 without the app-isolation update cannot leave Knot out of the share. This fallback shares all PC sound, so the people watching may hear an echo of their own voice.</small></label><div class="settings-inline-actions"><button id="testScreenAudio" type="button">Test isolated computer audio</button></div><p id="screenAudioTestStatus" class="settings-hint" aria-live="polite">Checks the same isolated audio route used by a real share.</p>';
+  page.innerHTML='<div><h3>Screen sharing</h3><p>Your source resolution and frame-rate choice stay fixed. Motion mode may temporarily reduce encoded resolution under real network pressure to preserve smooth cadence; Detail mode preserves pixels instead.</p></div><label class="settings-field"><span>Video codec</span><select id="screenCodecSetting"><option value="auto">Automatic — hardware-friendly</option><option value="H264">H.264 — widest support</option><option value="AV1">AV1 — best compression</option><option value="VP9">VP9</option><option value="VP8">VP8</option></select></label><label class="settings-field"><span>Maximum video bitrate <output id="screenBitrateValue">20 Mbps</output></span><input id="screenBitrateSetting" type="range" min="2" max="'+maxSlider+'" value="20" step="1" /><small id="screenBitrateCapHint" class="settings-hint">After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).</small></label><label class="settings-field"><span>Content optimization</span><select id="screenContentHintSetting"><option value="motion">Motion — preserve smooth games/video</option><option value="detail">Detail — preserve text resolution</option></select></label><label class="settings-field"><span>Cursor</span><select id="screenCursorSetting"><option value="always">Always show</option><option value="motion">Show while moving</option><option value="never">Hide cursor</option></select></label><p class="settings-hint">Native AV1 uses the discrete NVIDIA or AMD encoder, syncs capture to content, keeps lookahead off, targets about 110 ms, and never lets live latency go past 260 ms. A launch speed probe raises the budget toward the GPU encoder’s useful ceiling (about 200 Mbps at 4K60 on NVIDIA) when your upload can carry it; the bitrate slider never offers more than the safe rate for the measured path. Software encode stays on the conservative curve. Live native share keeps that encode rate and skips stale pictures instead of cutting bitrate; a sustained decoder failure switches only that viewer to a capped compatibility codec.</p><label class="settings-toggle"><input id="screenSystemMixSetting" type="checkbox" checked /><span>Whole-PC sound when isolated capture is unavailable</span><small>Windows 10 without the app-isolation update cannot leave Knot out of the share. This fallback shares all PC sound, so the people watching may hear an echo of their own voice.</small></label><p id="videoDecodeStatus" class="settings-hint" aria-live="polite">Checking how this computer decodes shared screens…</p><div class="settings-inline-actions"><button id="testScreenAudio" type="button">Test isolated computer audio</button></div><p id="screenAudioTestStatus" class="settings-hint" aria-live="polite">Checks the same isolated audio route used by a real share.</p>';
   document.querySelector('.settings-tabs').append(tab);document.querySelector('.settings-pages').append(page);tab.onclick=()=>openSettingsTab('screen');
   const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),codec=$('#screenCodecSetting'),contentHint=$('#screenContentHintSetting'),cursor=$('#screenCursorSetting');
   const updateBitrate=()=>{const max=sliderBitrateMaxMbps();bitrate.max=String(max);screenBitrateMbps=Math.max(2,Math.min(max,Number(bitrate.value)||20));bitrate.value=String(screenBitrateMbps);bitrateValue.textContent=screenBitrateMbps+' Mbps';bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/Math.max(1,max-2)*100)+'%');ssSet('screenBitrate',String(screenBitrateMbps));const hint=$('#screenBitrateCapHint');if(hint)hint.textContent=screenShareHasProbe()?'This slider tops out at '+max+' Mbps, the safe rate for your measured connection. Fast links can still use up to 200 Mbps.':'After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).'};
@@ -1636,7 +1677,7 @@ openSettingsTab=function(name){
   if(name==='advanced')void renderLocalMetricsSummary();
 };
 const screenShareSettingsReady=restoreScreenShareSettings();
-void screenShareSettingsReady.then(()=>{startNetworkCapacityProbe();probeHardwareScreenCodec();void probeHardwareDecode()});
+void screenShareSettingsReady.then(()=>{startNetworkCapacityProbe();probeHardwareScreenCodec();void verifyNvidiaVideoDecode().finally(()=>probeHardwareDecode())});
 function makeDeviceOption(value,label){const option=document.createElement('option');option.value=value;option.textContent=label;return option}
 async function refreshAudioDevices(){try{const devices=await navigator.mediaDevices.enumerateDevices();const inputs=devices.filter(device=>device.kind==='audioinput'),outputs=devices.filter(device=>device.kind==='audiooutput');inputDevice.replaceChildren(makeDeviceOption('default','System default'));outputDevice.replaceChildren(makeDeviceOption('default','System default'));inputs.forEach((device,index)=>inputDevice.append(makeDeviceOption(device.deviceId,device.label||'Microphone '+(index+1))));outputs.forEach((device,index)=>outputDevice.append(makeDeviceOption(device.deviceId,device.label||'Speaker '+(index+1))));inputDevice.value=[...inputDevice.options].some(option=>option.value===inputDeviceId)?inputDeviceId:'default';outputDevice.value=[...outputDevice.options].some(option=>option.value===outputDeviceId)?outputDeviceId:'default';deviceHint.textContent=(inputs.length||outputs.length)?'Device list updated.':'Connect or allow a microphone to reveal device names.'}catch{deviceHint.textContent='Knot could not read audio devices yet.'}}
 function deepFilterBackendAvailable(){return !!(window.pairDeepFilter&&typeof window.pairDeepFilter.getAsset==='function'&&typeof AudioWorkletNode!=='undefined'&&(window.AudioContext||window.webkitAudioContext))}

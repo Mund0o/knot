@@ -2,7 +2,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, safeStorage, protocol } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
-const { linuxMainGpu, applyLinuxMainGpuEnvironment } = require('./linux-gpu');
+const { linuxMainGpu, applyLinuxMainGpuEnvironment, nvidiaVaapiDriver, nvidiaVaapiEligible } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy, applyWebRtcIcePolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
 const { measureCapacity, abortCapacityProbe } = require('./network-capacity');
@@ -713,11 +713,12 @@ ipcMain.on('pair:stopNativeScreen', (event, documentId, id) => { if (bridgeReque
 const fs = require('fs');
 // Electron only accepts this before its ready event. Read the tightly scoped
 // local setting early; toggling it in the UI takes effect on restart.
-let hardwareAccelerationEnabled = true;
+let hardwareAccelerationEnabled = true,nvidiaDecodeVerdict = null;
 try {
   const stableSettings=path.join(app.getPath('appData'),'Knot','settings.json'),legacySettings=path.join(app.getPath('userData'),'settings.json'),earlyFile=[stableSettings,stableSettings+'.bak',legacySettings].find(file=>fs.existsSync(file));
   const earlySettings = earlyFile?JSON.parse(fs.readFileSync(earlyFile, 'utf8')):{};
   hardwareAccelerationEnabled = earlySettings.hardwareAcceleration !== 'off';
+  try { nvidiaDecodeVerdict = JSON.parse(earlySettings.nvidiaVideoDecode || 'null'); } catch {}
   if (!hardwareAccelerationEnabled) app.disableHardwareAcceleration();
 } catch {}
 // Apply the acceleration policy only when the setting is on. Linux prefers and
@@ -731,8 +732,14 @@ if (hardwareAccelerationEnabled) {
   const wayland = process.platform === 'linux' && !x11Ozone && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY);
   if (process.platform === 'linux') {
     const primaryGpu = linuxMainGpu();selectedPrimaryGpu=primaryGpu;
-    if (applyLinuxMainGpuEnvironment(primaryGpu) && applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: primaryGpu, wayland })) {
-      console.log('[gpu] full acceleration selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress, primaryGpu.integrated?'integrated':'discrete');
+    // NVIDIA decodes video on the GPU only with an nvidia-vaapi-driver build
+    // that has not already failed the renderer's startup decode check.
+    const nvidiaDriver = primaryGpu?.vendor === '0x10de' ? nvidiaVaapiDriver() : null;
+    const nvidiaVaapi = nvidiaVaapiEligible(nvidiaDriver, nvidiaDecodeVerdict);
+    if (nvidiaVaapi) process.env.KNOT_NVIDIA_VAAPI_DRIVER = nvidiaDriver.fingerprint;
+    else delete process.env.KNOT_NVIDIA_VAAPI_DRIVER;
+    if (applyLinuxMainGpuEnvironment(primaryGpu, process.env, { nvidiaVaapi }) && applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: primaryGpu, wayland, nvidiaVaapi })) {
+      console.log('[gpu] full acceleration selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress, primaryGpu.integrated?'integrated':'discrete', nvidiaDriver ? `nvidia-vaapi ${nvidiaVaapi ? 'on' : 'off (failed decode check)'}` : '');
     } else {
       // No usable DRM render node exists. Retain the explicit user-facing
       // software fallback rather than letting Chromium choose unpredictably.
@@ -1162,6 +1169,22 @@ async function cleanupRuntime(){
   return runtimeCleanupPromise;
 }
 ipcMain.on('pair:relaunch', event => { if(!isPairRenderer(event)||relaunching)return;relaunching=true;void cleanupRuntime().finally(()=>{app.relaunch();app.exit(0)}) });
+// The renderer decodes a known AV1 picture on the GPU at startup. The verdict
+// is persisted here, before any restart, so a failed check can never loop: the
+// next launch sees it and keeps that driver build on CPU decode.
+ipcMain.on('pair:nvidiaDecodeVerdict', (event, verdictValue) => {
+  const driver = process.env.KNOT_NVIDIA_VAAPI_DRIVER || '';
+  if (!isPairRenderer(event) || !driver || relaunching) return;
+  const verdict = ['ok', 'broken', 'unsupported'].includes(verdictValue) ? verdictValue : 'broken';
+  console.log('[gpu] nvidia-vaapi decode check:', verdict);
+  void (async () => {
+    const saved = await settingsStore.set('nvidiaVideoDecode', JSON.stringify({ driver, verdict })) && await settingsStore.flush();
+    if (verdict === 'ok' || !saved || relaunching) return;
+    relaunching = true;
+    await cleanupRuntime().catch(() => {});
+    app.relaunch();app.exit(0);
+  })();
+});
 // The update feed is never accepted from renderer or signaling input.
 
 function createWindow() {

@@ -57,7 +57,29 @@ function primePciSelector(pciAddress) {
   return `pci-${pciAddress.replaceAll(':', '_').replace('.', '_')}!`;
 }
 
-function applyLinuxMainGpuEnvironment(gpu, env = process.env) {
+// nvidia-vaapi-driver 0.0.18 exports decoded pictures in the single DMA-BUF
+// layout Chromium imports; earlier builds painted every received video white.
+// Its presence only makes GPU decode eligible: the renderer verifies a real
+// decode at startup, and a failed check disables it for that driver build.
+const LIBVA_DRIVER_DIRS = ['/usr/lib/x86_64-linux-gnu/dri', '/usr/lib64/dri', '/usr/lib/dri', '/usr/local/lib/x86_64-linux-gnu/dri', '/usr/local/lib/dri', '/usr/lib/aarch64-linux-gnu/dri'];
+function nvidiaVaapiDriver(env = process.env, fileSystem = fs) {
+  const dirs = [...String(env.LIBVA_DRIVERS_PATH || '').split(':').filter(Boolean), ...LIBVA_DRIVER_DIRS];
+  for (const dir of dirs) {
+    const file = path.join(dir, 'nvidia_drv_video.so');
+    try {
+      const stat = fileSystem.statSync(file);
+      if (stat.isFile()) return { path: file, fingerprint: `${file}:${stat.size}:${Math.round(stat.mtimeMs)}` };
+    } catch {}
+  }
+  return null;
+}
+
+// A recorded failure for this exact driver build keeps it on CPU decode.
+function nvidiaVaapiEligible(driver, verdict) {
+  return !!driver && !(verdict?.driver === driver.fingerprint && verdict.verdict !== 'ok');
+}
+
+function applyLinuxMainGpuEnvironment(gpu, env = process.env, { nvidiaVaapi = false } = {}) {
   if (!gpu) return false;
   const selector = primePciSelector(gpu.pciAddress);
   if (selector) env.DRI_PRIME = selector;
@@ -71,10 +93,17 @@ function applyLinuxMainGpuEnvironment(gpu, env = process.env) {
     env.__NV_PRIME_RENDER_OFFLOAD = '1';
     env.__GLX_VENDOR_LIBRARY_NAME = 'nvidia';
     env.__VK_LAYER_NV_optimus = 'NVIDIA_only';
-    // Chromium's VA-API-on-NVIDIA path renders received video white, so no
-    // libva driver is pinned and any inherited override is cleared.
-    delete env.LIBVA_DRIVER_NAME;
-    delete env.NVD_BACKEND;
+    if (nvidiaVaapi) {
+      // Pin libva to NVIDIA's NVDEC bridge on its direct backend, the one
+      // that produces Chromium-importable pictures.
+      env.LIBVA_DRIVER_NAME = 'nvidia';
+      env.NVD_BACKEND = 'direct';
+    } else {
+      // Without a verified driver Chromium's VA-API-on-NVIDIA path renders
+      // received video white, so any inherited override is cleared.
+      delete env.LIBVA_DRIVER_NAME;
+      delete env.NVD_BACKEND;
+    }
   } else {
     delete env.__NV_PRIME_RENDER_OFFLOAD;
     delete env.__GLX_VENDOR_LIBRARY_NAME;
@@ -85,4 +114,4 @@ function applyLinuxMainGpuEnvironment(gpu, env = process.env) {
   return true;
 }
 
-module.exports = { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment };
+module.exports = { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment, nvidiaVaapiDriver, nvidiaVaapiEligible };
