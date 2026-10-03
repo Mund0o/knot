@@ -1,11 +1,11 @@
 {
-  "version": "1.1.121",
-  "notes": "Screen shares no longer lag on PCs that decode video on the CPU, Windows shares to Linux keep their hardware encoder, and NVIDIA Linux decodes on the GPU again with nvidia-vaapi-driver 0.0.18 or newer.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.121/pair-p2p-1.1.121.tar.gz",
-  "linuxSha256": "16d867c215af9bf7cc1f10905f9036a771fb906f6f8f7fa1d73d40c6cf906c8c",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.121/Knot-1.1.121.AppImage",
-  "linuxAppImageSha256": "00d5b0312604d843f4bb8fd3b34944656005f94f48e3ad9e65d5d17919ed0061",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.121/Knot.Setup.1.1.121.exe",
-  "winSha256": "b52d355b148e2bea0f9f045b68554f7e502e046639fdc6debcf7eff87a04947a",
-  "signature": "sdm2PInBzpI7Iz060zp5nUrHH2QqpgJUF0aHeZVECnkDfosTTyFXqDYOliIVmNgpH965CHAhb+bd2ijnn0vsAQ=="
+  "version": "1.1.122",
+  "notes": "Calls and screen shares recover from network drops, messages wait and resend when you're offline, your mic comes back after a headset disconnects, and NVIDIA Linux decodes shared screens on the GPU with a bundled driver.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.122/pair-p2p-1.1.122.tar.gz",
+  "linuxSha256": "d1f4940f64d0b18d0879f9b4d5a58e3d5ac6d7b74860eb3a71fc354778488ad5",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.122/Knot-1.1.122.AppImage",
+  "linuxAppImageSha256": "e79d9e9d820db17542864707108ab52a8166e999c81ca744b2004d11c9a17498",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.122/Knot.Setup.1.1.122.exe",
+  "winSha256": "18a878ff9a579a285008a860c9dc9217217c9dffc5480d86b1cd071d5d9af4c4",
+  "signature": "CoPmEbwIcQKyEFoVC7oMYPcvcOPWuudsXRpvqBOLAMf0JJ1pcLT1JQbtKsT62HBLg/SbY3U3GL9OXNjWOl4XBg=="
 }
