@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment, nvidiaVaapiDriver, nvidiaVaapiEligible } = require('../linux-gpu');
+const { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment, nvidiaVaapiDrivers, nvidiaVaapiDriver, nvidiaVaapiEligible, nvidiaDecodeVerdicts, recordNvidiaDecodeVerdict, selectNvidiaVaapiDriver } = require('../linux-gpu');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'knot-gpu-test-'));
 const drm = path.join(root, 'sys', 'class', 'drm');
@@ -78,6 +78,44 @@ try {
   assert.strictEqual(nvidiaVaapiEligible(driver, { driver: driver.fingerprint, verdict: 'ok' }), true);
   assert.strictEqual(nvidiaVaapiEligible(driver, { driver: driver.fingerprint, verdict: 'broken' }), false, 'a failed driver build must stay on CPU decode');
   assert.strictEqual(nvidiaVaapiEligible(driver, { driver: 'older-build', verdict: 'broken' }), true, 'an updated driver is checked again');
+
+  // Knot's own build (resources/nvidia-vaapi) comes first; a system copy is
+  // the fallback once the bundled one has failed its check.
+  const mountA = path.join(root, 'mount-a', 'nvidia-vaapi'), mountB = path.join(root, 'mount-b', 'nvidia-vaapi');
+  for (const dir of [mountA, mountB]) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'nvidia_drv_video.so'), 'bundled-driver'); }
+  const stamp = new Date('2026-10-03T12:00:00Z');for (const dir of [mountA, mountB]) fs.utimesSync(path.join(dir, 'nvidia_drv_video.so'), stamp, stamp);
+  const found = nvidiaVaapiDrivers({ LIBVA_DRIVERS_PATH: libva }, fs, { bundledDirs: [mountA] });
+  assert.deepStrictEqual(found.map(item => [item.dir, item.bundled]), [[mountA, true], [libva, false]], 'the bundled driver must be tried before a system copy');
+  // An AppImage mounts somewhere new every launch; its driver keeps one identity.
+  assert.strictEqual(nvidiaVaapiDrivers({}, fs, { bundledDirs: [mountB] })[0].fingerprint, found[0].fingerprint, 'a bundled driver must be recognised across AppImage mounts, or a failed check would repeat forever');
+  assert.strictEqual(nvidiaVaapiDrivers({ LIBVA_DRIVERS_PATH: mountA }, fs, { bundledDirs: [mountA] }).length, 1, 'the bundled folder found twice is one driver');
+  let verdicts = nvidiaDecodeVerdicts(null);
+  assert.deepStrictEqual(selectNvidiaVaapiDriver(found, verdicts), { driver: found[0], state: 'on' });
+  verdicts = nvidiaDecodeVerdicts(JSON.stringify(recordNvidiaDecodeVerdict(null, found[0].fingerprint, 'broken')));
+  assert.deepStrictEqual(selectNvidiaVaapiDriver(found, verdicts), { driver: found[1], state: 'on' }, 'a failed bundled driver must fall back to the system one');
+  verdicts = nvidiaDecodeVerdicts(recordNvidiaDecodeVerdict(verdicts && { drivers: verdicts }, found[1].fingerprint, 'unsupported'));
+  assert.deepStrictEqual(selectNvidiaVaapiDriver(found, verdicts), { driver: null, state: 'failed' }, 'with every driver failed, video decodes on the CPU');
+  assert.deepStrictEqual(selectNvidiaVaapiDriver([], {}), { driver: null, state: 'missing' });
+  assert.deepStrictEqual(nvidiaDecodeVerdicts(JSON.stringify({ driver: 'old', verdict: 'broken' })), { old: 'broken' }, 'the 1.1.121 verdict must still be honoured');
+  let many = null;for (let i = 0; i < 12; i++) many = recordNvidiaDecodeVerdict(many, 'build-' + i, 'broken');
+  assert.deepStrictEqual(Object.keys(many.drivers), ['build-4', 'build-5', 'build-6', 'build-7', 'build-8', 'build-9', 'build-10', 'build-11'], 'only the newest verdicts are kept');
+
+  // libva loads the selected driver from its folder; a relaunch starts again
+  // from the user's own LIBVA_DRIVERS_PATH.
+  const nvidiaGpu = candidates.find(item => item.vendor === '0x10de');
+  const bundledEnv = { LIBVA_DRIVERS_PATH: '/opt/custom/dri' };
+  applyLinuxMainGpuEnvironment(nvidiaGpu, bundledEnv, { nvidiaVaapi: true, nvidiaVaapiDir: mountA });
+  assert.strictEqual(bundledEnv.LIBVA_DRIVERS_PATH, mountA, 'libva must load the selected driver build');
+  assert.deepStrictEqual(nvidiaVaapiDrivers(bundledEnv, fs, {}).map(item => item.dir).includes(mountA), false, 'a relaunch must not treat the previous mount as a system driver');
+  applyLinuxMainGpuEnvironment(nvidiaGpu, bundledEnv, { nvidiaVaapi: false });
+  assert.strictEqual(bundledEnv.LIBVA_DRIVERS_PATH, '/opt/custom/dri', 'turning NVIDIA decode off must restore the user\'s driver path');
+  assert(!('KNOT_USER_LIBVA_DRIVERS_PATH' in bundledEnv));
+  const plainEnv = {};
+  applyLinuxMainGpuEnvironment(nvidiaGpu, plainEnv, { nvidiaVaapi: true, nvidiaVaapiDir: mountA });
+  applyLinuxMainGpuEnvironment(nvidiaGpu, plainEnv, { nvidiaVaapi: true, nvidiaVaapiDir: mountB });
+  assert.strictEqual(plainEnv.LIBVA_DRIVERS_PATH, mountB);
+  applyLinuxMainGpuEnvironment(nvidiaGpu, plainEnv, { nvidiaVaapi: false });
+  assert(!('LIBVA_DRIVERS_PATH' in plainEnv), 'a driver path Knot set must not outlive NVIDIA decode');
 
   const amdEnv = { LIBVA_DRIVER_NAME: 'nvidia', NVD_BACKEND: 'direct', __NV_PRIME_RENDER_OFFLOAD: '1' };
   assert.strictEqual(applyLinuxMainGpuEnvironment(candidates.find(item => item.pciAddress === '0000:07:00.0'), amdEnv), true);

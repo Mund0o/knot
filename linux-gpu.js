@@ -57,30 +57,89 @@ function primePciSelector(pciAddress) {
   return `pci-${pciAddress.replaceAll(':', '_').replace('.', '_')}!`;
 }
 
-// nvidia-vaapi-driver 0.0.18 exports decoded pictures in the single DMA-BUF
-// layout Chromium imports; earlier builds painted every received video white.
-// Its presence only makes GPU decode eligible: the renderer verifies a real
-// decode at startup, and a failed check disables it for that driver build.
+// NVIDIA decodes video for Chromium through nvidia-vaapi-driver. Knot's Linux
+// packages carry their own build in resources/nvidia-vaapi
+// (scripts/build-nvidia-vaapi.sh) because 0.0.18, the newest release, smears
+// NVENC's AV1 after every key frame. It is tried first; a system copy is the
+// fallback (an -git package can carry the same fix). Being found only makes GPU
+// decode eligible: the renderer compares a GPU decode with a CPU decode at
+// startup, and a failed check rules that driver build out.
 const LIBVA_DRIVER_DIRS = ['/usr/lib/x86_64-linux-gnu/dri', '/usr/lib64/dri', '/usr/lib/dri', '/usr/local/lib/x86_64-linux-gnu/dri', '/usr/local/lib/dri', '/usr/lib/aarch64-linux-gnu/dri'];
-function nvidiaVaapiDriver(env = process.env, fileSystem = fs) {
-  const dirs = [...String(env.LIBVA_DRIVERS_PATH || '').split(':').filter(Boolean), ...LIBVA_DRIVER_DIRS];
-  for (const dir of dirs) {
+const NVIDIA_VAAPI_VERDICT_LIMIT = 8;
+// LIBVA_DRIVERS_PATH as the user launched Knot. A relaunch inherits the value
+// Knot set for its bundled driver, which may point at a stale AppImage mount.
+function userLibvaDriversPath(env = process.env) {
+  return 'KNOT_USER_LIBVA_DRIVERS_PATH' in env ? env.KNOT_USER_LIBVA_DRIVERS_PATH || '' : env.LIBVA_DRIVERS_PATH || '';
+}
+function nvidiaVaapiDrivers(env = process.env, fileSystem = fs, { bundledDirs = [] } = {}) {
+  const candidates = [
+    ...bundledDirs.filter(Boolean).map(dir => ({ dir, bundled: true })),
+    ...[...userLibvaDriversPath(env).split(':').filter(Boolean), ...LIBVA_DRIVER_DIRS].map(dir => ({ dir, bundled: false })),
+  ];
+  // The NVIDIA driver version is part of each build's identity, so updating
+  // NVIDIA's driver checks a previously failed build again.
+  let nvidia = '';
+  try { nvidia = String(fileSystem.readFileSync('/sys/module/nvidia/version', 'utf8')).trim().replace(/[^\w.-]/g, '').slice(0, 32); } catch {}
+  const seen = new Set(), drivers = [];
+  for (const { dir, bundled } of candidates) {
     const file = path.join(dir, 'nvidia_drv_video.so');
     try {
       const stat = fileSystem.statSync(file);
-      if (stat.isFile()) return { path: file, fingerprint: `${file}:${stat.size}:${Math.round(stat.mtimeMs)}` };
+      if (!stat.isFile()) continue;
+      let real = file;
+      try { real = fileSystem.realpathSync ? fileSystem.realpathSync(file) : file; } catch {}
+      if (seen.has(real)) continue;
+      seen.add(real);
+      // An AppImage mounts at a new path every launch, so a bundled build is
+      // known by its size and timestamp alone; with the path in it, a failed
+      // check would never match again and Knot would retry it forever.
+      const identity = `${stat.size}:${Math.round(stat.mtimeMs)}${nvidia ? `:nvidia-${nvidia}` : ''}`;
+      drivers.push({ path: file, dir, bundled, fingerprint: bundled ? `bundled:${identity}` : `${file}:${identity}` });
     } catch {}
   }
-  return null;
+  return drivers;
+}
+function nvidiaVaapiDriver(env = process.env, fileSystem = fs, options = {}) {
+  return nvidiaVaapiDrivers(env, fileSystem, options)[0] || null;
 }
 
+// Startup check results, newest last, keyed by driver build. 1.1.121 stored a
+// single { driver, verdict }.
+function nvidiaDecodeVerdicts(saved) {
+  let value = saved;
+  if (typeof value === 'string') { try { value = JSON.parse(value); } catch { value = null; } }
+  if (value?.drivers && typeof value.drivers === 'object') {
+    return Object.fromEntries(Object.entries(value.drivers).filter(([driver, verdict]) => typeof driver === 'string' && typeof verdict === 'string'));
+  }
+  if (typeof value?.driver === 'string' && typeof value.verdict === 'string') return { [value.driver]: value.verdict };
+  return {};
+}
+function recordNvidiaDecodeVerdict(saved, driver, verdict) {
+  const drivers = nvidiaDecodeVerdicts(saved);
+  delete drivers[driver];
+  drivers[driver] = verdict;
+  const entries = Object.entries(drivers).slice(-NVIDIA_VAAPI_VERDICT_LIMIT);
+  return { drivers: Object.fromEntries(entries) };
+}
 // A recorded failure for this exact driver build keeps it on CPU decode.
-function nvidiaVaapiEligible(driver, verdict) {
-  return !!driver && !(verdict?.driver === driver.fingerprint && verdict.verdict !== 'ok');
+function nvidiaVaapiEligible(driver, verdicts) {
+  if (!driver) return false;
+  const known = verdicts && 'driver' in verdicts ? nvidiaDecodeVerdicts(verdicts) : verdicts || {};
+  return (known[driver.fingerprint] ?? 'ok') === 'ok';
+}
+function selectNvidiaVaapiDriver(drivers, verdicts) {
+  const driver = drivers.find(candidate => nvidiaVaapiEligible(candidate, verdicts)) || null;
+  return { driver, state: driver ? 'on' : drivers.length ? 'failed' : 'missing' };
 }
 
-function applyLinuxMainGpuEnvironment(gpu, env = process.env, { nvidiaVaapi = false } = {}) {
+function applyLinuxMainGpuEnvironment(gpu, env = process.env, { nvidiaVaapi = false, nvidiaVaapiDir = '' } = {}) {
   if (!gpu) return false;
+  // Start from the user's own driver path; only a selected driver changes it.
+  if ('KNOT_USER_LIBVA_DRIVERS_PATH' in env) {
+    if (env.KNOT_USER_LIBVA_DRIVERS_PATH) env.LIBVA_DRIVERS_PATH = env.KNOT_USER_LIBVA_DRIVERS_PATH;
+    else delete env.LIBVA_DRIVERS_PATH;
+    delete env.KNOT_USER_LIBVA_DRIVERS_PATH;
+  }
   const selector = primePciSelector(gpu.pciAddress);
   if (selector) env.DRI_PRIME = selector;
   env.KNOT_PRIMARY_GPU_VENDOR = gpu.vendor || '';
@@ -98,6 +157,12 @@ function applyLinuxMainGpuEnvironment(gpu, env = process.env, { nvidiaVaapi = fa
       // that produces Chromium-importable pictures.
       env.LIBVA_DRIVER_NAME = 'nvidia';
       env.NVD_BACKEND = 'direct';
+      // libva loads nvidia_drv_video.so from the selected driver's folder,
+      // which for the bundled build is inside Knot's resources.
+      if (nvidiaVaapiDir) {
+        env.KNOT_USER_LIBVA_DRIVERS_PATH = env.LIBVA_DRIVERS_PATH || '';
+        env.LIBVA_DRIVERS_PATH = nvidiaVaapiDir;
+      }
     } else {
       // Without a verified driver Chromium's VA-API-on-NVIDIA path renders
       // received video white, so any inherited override is cleared.
@@ -114,4 +179,4 @@ function applyLinuxMainGpuEnvironment(gpu, env = process.env, { nvidiaVaapi = fa
   return true;
 }
 
-module.exports = { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment, nvidiaVaapiDriver, nvidiaVaapiEligible };
+module.exports = { linuxGpuCandidates, linuxMainGpu, primePciSelector, applyLinuxMainGpuEnvironment, nvidiaVaapiDrivers, nvidiaVaapiDriver, nvidiaVaapiEligible, nvidiaDecodeVerdicts, recordNvidiaDecodeVerdict, selectNvidiaVaapiDriver, userLibvaDriversPath };

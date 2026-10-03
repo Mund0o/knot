@@ -2,7 +2,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, shell, safeStorage, protocol } = require('electron');
 const { installLinuxLauncher } = require('./linux-launcher');
-const { linuxMainGpu, applyLinuxMainGpuEnvironment, nvidiaVaapiDriver, nvidiaVaapiEligible } = require('./linux-gpu');
+const { linuxMainGpu, applyLinuxMainGpuEnvironment, nvidiaVaapiDrivers, nvidiaDecodeVerdicts, recordNvidiaDecodeVerdict, selectNvidiaVaapiDriver } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy, applyWebRtcIcePolicy } = require('./gpu-acceleration');
 const { NativeScreenService } = require('./native-screen');
 const { measureCapacity, abortCapacityProbe } = require('./network-capacity');
@@ -718,7 +718,7 @@ try {
   const stableSettings=path.join(app.getPath('appData'),'Knot','settings.json'),legacySettings=path.join(app.getPath('userData'),'settings.json'),earlyFile=[stableSettings,stableSettings+'.bak',legacySettings].find(file=>fs.existsSync(file));
   const earlySettings = earlyFile?JSON.parse(fs.readFileSync(earlyFile, 'utf8')):{};
   hardwareAccelerationEnabled = earlySettings.hardwareAcceleration !== 'off';
-  try { nvidiaDecodeVerdict = JSON.parse(earlySettings.nvidiaVideoDecode || 'null'); } catch {}
+  nvidiaDecodeVerdict = nvidiaDecodeVerdicts(earlySettings.nvidiaVideoDecode);
   if (!hardwareAccelerationEnabled) app.disableHardwareAcceleration();
 } catch {}
 // Apply the acceleration policy only when the setting is on. Linux prefers and
@@ -732,14 +732,18 @@ if (hardwareAccelerationEnabled) {
   const wayland = process.platform === 'linux' && !x11Ozone && !!(process.env.XDG_SESSION_TYPE === 'wayland' || process.env.WAYLAND_DISPLAY);
   if (process.platform === 'linux') {
     const primaryGpu = linuxMainGpu();selectedPrimaryGpu=primaryGpu;
-    // NVIDIA decodes video on the GPU only with an nvidia-vaapi-driver build
-    // that has not already failed the renderer's startup decode check.
-    const nvidiaDriver = primaryGpu?.vendor === '0x10de' ? nvidiaVaapiDriver() : null;
-    const nvidiaVaapi = nvidiaVaapiEligible(nvidiaDriver, nvidiaDecodeVerdict);
+    // NVIDIA decodes video on the GPU through nvidia-vaapi-driver: Knot's
+    // bundled build first (vendor/ in a development checkout), then a system
+    // copy, skipping any build that already failed the startup decode check.
+    const nvidiaGpu = primaryGpu?.vendor === '0x10de';
+    const bundledDirs = [process.resourcesPath && path.join(process.resourcesPath, 'nvidia-vaapi'), path.join(__dirname, 'vendor', 'nvidia-vaapi')];
+    const { driver: nvidiaDriver, state: nvidiaState } = selectNvidiaVaapiDriver(nvidiaGpu ? nvidiaVaapiDrivers(process.env, fs, { bundledDirs }) : [], nvidiaDecodeVerdict);
+    const nvidiaVaapi = !!nvidiaDriver;
     if (nvidiaVaapi) process.env.KNOT_NVIDIA_VAAPI_DRIVER = nvidiaDriver.fingerprint;
     else delete process.env.KNOT_NVIDIA_VAAPI_DRIVER;
-    if (applyLinuxMainGpuEnvironment(primaryGpu, process.env, { nvidiaVaapi }) && applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: primaryGpu, wayland, nvidiaVaapi })) {
-      console.log('[gpu] full acceleration selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress, primaryGpu.integrated?'integrated':'discrete', nvidiaDriver ? `nvidia-vaapi ${nvidiaVaapi ? 'on' : 'off (failed decode check)'}` : '');
+    process.env.KNOT_NVIDIA_VAAPI_STATE = nvidiaGpu ? nvidiaState : '';
+    if (applyLinuxMainGpuEnvironment(primaryGpu, process.env, { nvidiaVaapi, nvidiaVaapiDir: nvidiaDriver?.dir || '' }) && applyGpuAccelerationPolicy(app, { platform: process.platform, gpu: primaryGpu, wayland, nvidiaVaapi })) {
+      console.log('[gpu] full acceleration selected:', primaryGpu.renderNode, primaryGpu.vendor, primaryGpu.pciAddress, primaryGpu.integrated?'integrated':'discrete', nvidiaGpu ? `nvidia-vaapi ${nvidiaVaapi ? `on (${nvidiaDriver.bundled ? 'bundled' : nvidiaDriver.path})` : nvidiaState === 'failed' ? 'off (failed decode check)' : 'off (no driver)'}` : '');
     } else {
       // No usable DRM render node exists. Retain the explicit user-facing
       // software fallback rather than letting Chromium choose unpredictably.
@@ -1168,21 +1172,33 @@ async function cleanupRuntime(){
   runtimeCleanupPromise=(async()=>{await nativeScreenService?.stopAsync?.();await stopLinuxShareAudio();await closeDirectFileRuntime();await closeLanHouse();await closeAllSaveStreams();await settingsStore.flush();historyStore.close();metricsStore.close();await stopEmojiWorker();emojiCatalog.close();stopNativeCapture()})().finally(()=>{runtimeCleanupPromise=null});
   return runtimeCleanupPromise;
 }
-ipcMain.on('pair:relaunch', event => { if(!isPairRenderer(event)||relaunching)return;relaunching=true;void cleanupRuntime().finally(()=>{app.relaunch();app.exit(0)}) });
-// The renderer decodes a known AV1 picture on the GPU at startup. The verdict
-// is persisted here, before any restart, so a failed check can never loop: the
-// next launch sees it and keeps that driver build on CPU decode.
+// An AppImage runs from a mount that goes away when this process exits, so
+// relaunching the binary inside it starts a copy that cannot read its own
+// files. Start the AppImage file itself instead.
+function relaunchKnot() {
+  // APPIMAGE can also be inherited from another AppImage; only trust it when
+  // this executable really runs from that AppImage's mount.
+  const appDir = process.env.APPDIR ? path.resolve(process.env.APPDIR) + path.sep : '';
+  if (process.platform === 'linux' && process.env.APPIMAGE && appDir && process.execPath.startsWith(appDir)) app.relaunch({ execPath: process.env.APPIMAGE, args: process.argv.slice(1) });
+  else app.relaunch();
+  app.exit(0);
+}
+ipcMain.on('pair:relaunch', event => { if(!isPairRenderer(event)||relaunching)return;relaunching=true;void cleanupRuntime().finally(relaunchKnot) });
+// The renderer compares a GPU decode of a known clip with a CPU decode at
+// startup. The verdict is persisted per driver build, before any restart, so a
+// failed check can never loop: the next launch skips that build.
 ipcMain.on('pair:nvidiaDecodeVerdict', (event, verdictValue) => {
   const driver = process.env.KNOT_NVIDIA_VAAPI_DRIVER || '';
   if (!isPairRenderer(event) || !driver || relaunching) return;
   const verdict = ['ok', 'broken', 'unsupported'].includes(verdictValue) ? verdictValue : 'broken';
   console.log('[gpu] nvidia-vaapi decode check:', verdict);
   void (async () => {
-    const saved = await settingsStore.set('nvidiaVideoDecode', JSON.stringify({ driver, verdict })) && await settingsStore.flush();
+    const previous = await settingsStore.get('nvidiaVideoDecode').catch(() => null);
+    const saved = await settingsStore.set('nvidiaVideoDecode', JSON.stringify(recordNvidiaDecodeVerdict(previous, driver, verdict))) && await settingsStore.flush();
     if (verdict === 'ok' || !saved || relaunching) return;
     relaunching = true;
     await cleanupRuntime().catch(() => {});
-    app.relaunch();app.exit(0);
+    relaunchKnot();
   })();
 });
 // The update feed is never accepted from renderer or signaling input.

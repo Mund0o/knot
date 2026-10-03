@@ -145,6 +145,8 @@ contextBridge.exposeInMainWorld('pairEnv', {
   primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
   // Set when NVIDIA VA-API decode is enabled for this launch and must be verified.
   nvidiaVaapiDriver: process.env.KNOT_NVIDIA_VAAPI_DRIVER || '',
+  // NVIDIA only: 'on', 'failed' (every driver build failed its check) or 'missing'.
+  nvidiaVaapiState: process.env.KNOT_NVIDIA_VAAPI_STATE || '',
   reportNvidiaDecode: verdict => ipcRenderer.send('pair:nvidiaDecodeVerdict', String(verdict || '')),
   // Linux selection is handled by desktopCapturer inside the display-media
   // request so the PipeWire portal source is consumed before it can expire.
