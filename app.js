@@ -904,7 +904,37 @@ function sendDirectIceCandidate(candidate){
   const json=candidate&&typeof candidate.toJSON==='function'?candidate.toJSON():candidate;
   const clean=cleanIceCandidate(json);if(!clean)return;
   if(iceMath()&&!iceMath().iceCandidateWorthSending(clean.candidate))return;
-  if(signaling&&signaling.readyState===1)try{signaling.send(JSON.stringify({type:'signal',payload:{kind:'candidate',candidate:clean}}))}catch{}
+  if(signaling&&signaling.readyState===1){try{signaling.send(JSON.stringify({type:'signal',payload:{kind:'candidate',candidate:clean}}))}catch{}return}
+  // The pairing socket can drop on a flaky link while the call lives on. An
+  // ICE restart still needs its candidates, so relay them through the
+  // directory, which reconnects on its own.
+  const peerId=directSignalPeerId();if(pc&&peerId)directorySend({type:'signal',peerId,context:{type:'dm'},payload:{kind:'candidate',candidate:clean}});
+}
+function directSignalPeerId(){return directoryTrustedConnection?(dmPeerId||dmCallPeerId||''):''}
+// Renegotiation (share start/stop, codec switch, ICE restart) must reach the
+// friend even when one route has died. The live call data channel is used
+// while media flows; the pairing socket only while it is really open (a send on
+// a closed WebSocket is silently dropped, which lost every later renegotiation
+// and left the viewer black); otherwise the authenticated directory relays it.
+// A link that just dropped can still report its data channel "open", so an ICE
+// restart skips the data channel.
+function sendDirectSignal(kind,sdp,{avoidPeerChannel=false}={}){
+  const peerLinkUp=!avoidPeerChannel&&chat?.readyState==='open'&&pc&&!['disconnected','failed','closed'].includes(String(pc.iceConnectionState||''));
+  if(peerLinkUp&&send({t:kind,sdp}))return 'peer';
+  if(signaling?.readyState===WebSocket.OPEN){try{signaling.send(JSON.stringify({type:'signal',payload:{kind,sdp}}));return 'pairing'}catch{}}
+  const peerId=directSignalPeerId();
+  if(peerId&&directorySend({type:'signal',peerId,context:{type:'dm'},payload:{kind:kind==='reneg-offer'?'offer':'answer',sdp}}))return 'directory';
+  if(!avoidPeerChannel&&chat?.readyState==='open'&&send({t:kind,sdp}))return 'peer';
+  return '';
+}
+function directSignalAvailable(){return chat?.readyState==='open'||signaling?.readyState===WebSocket.OPEN||(!!directSignalPeerId()&&directorySocket?.readyState===WebSocket.OPEN)}
+async function handleDirectPeerSignal(value){
+  const from=String(value?.from||'').toLowerCase(),payload=value?.payload||{};
+  // Only the friend this call is connected to may steer it.
+  if(!pc||!from||from!==directSignalPeerId())return;
+  if(payload.kind==='offer')await answerDirectRenegotiation(payload.sdp,sdp=>!!sendDirectSignal('reneg-answer',sdp,{avoidPeerChannel:true}));
+  else if(payload.kind==='answer')await applyDirectRenegotiationAnswer(payload.sdp);
+  else if(payload.kind==='candidate')await addDirectIceCandidate(payload.candidate);
 }
 async function addDirectIceCandidate(candidate){
   const value=cleanIceCandidate(candidate);if(!value)return;
@@ -968,8 +998,10 @@ function setupPeer(){
     if(oldFiles){oldFiles.onmessage=null;try{oldFiles.close()}catch{}}
     try{oldPc.close()}catch{}
   }
-  pc=new RTCPeerConnection({iceServers:dmIceServers,iceTransportPolicy:directIceTransportPolicy(),bundlePolicy:'max-bundle',rtcpMuxPolicy:'require',iceCandidatePoolSize:relayVoiceMode?0:2});const peer=pc;peer._pendingRemoteCandidates=pendingDirectCandidates.splice(0,128);pendingDirectCandidates.length=0;peer.onicecandidate=event=>{if(event.candidate)sendDirectIceCandidate(event.candidate)};let wasEverConnected=false;
-  peer.onconnectionstatechange=()=>{if(pc!==peer)return;const state=peer.connectionState;if(state==='connected'){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=relayVoiceMode;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}if(callActive)publishCallState(true);if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;releaseCallMicrophone();callActive=false;startCall()}}else{setStatus(relayVoiceMode?'Voice relay active · files and screen share stay P2P':'Connected directly',true);friendLeftNotified=false}}if(state==='disconnected'){if(!peer._disconnectGrace)peer._disconnectGrace=setTimeout(()=>{if(pc!==peer)return;if(callActive&&peer.connectionState==='failed')void restartDirectIce();else if(['disconnected','failed'].includes(peer.connectionState)&&!callActive)setStatus('disconnected')},8000);return}if(state==='failed'&&callActive){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}void restartDirectIce();return}if(['failed','closed'].includes(state)){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(callActive)publishCallState(false);if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=true;abortScreenSharePicker();if(screenActive||screenStarting||screenStream||nativeScreenSession)void stopScreenShare(true);else screenGen++;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}applyRemoteCallState(false);if(directFileId)closeTcpLane();setStatus(state)}if(state==='connecting'){pairHint.textContent=(relayVoiceMode?'Connecting low-bandwidth voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…';armConnectTimeout()}};peer.oniceconnectionstatechange=()=>{if(pc!==peer)return;if(peer.iceConnectionState==='failed'){pairHint.textContent=relayVoiceMode?'Voice relay failed. Text will keep working, but this network cannot reach the relay.':'Direct peer connection failed; retrying before the low-bandwidth voice relay.'}else if(peer.iceConnectionState==='checking'||peer.iceConnectionState==='connected'){pairHint.textContent=(relayVoiceMode?'Connecting voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…'}};peer.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else if(!relayVoiceMode)files=e.channel;wire()};
+  // No ICE candidate pool: with one, Chromium keeps the old ICE credentials on
+  // an ICE restart, so a call whose network dropped could never recover.
+  pc=new RTCPeerConnection({iceServers:dmIceServers,iceTransportPolicy:directIceTransportPolicy(),bundlePolicy:'max-bundle',rtcpMuxPolicy:'require'});const peer=pc;peer._pendingRemoteCandidates=pendingDirectCandidates.splice(0,128);pendingDirectCandidates.length=0;peer.onicecandidate=event=>{if(event.candidate)sendDirectIceCandidate(event.candidate)};let wasEverConnected=false;
+  peer.onconnectionstatechange=()=>{if(pc!==peer)return;const state=peer.connectionState;if(state==='connected'){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}peer._iceRecoveryDelay=0;if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=relayVoiceMode;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}if(callActive)publishCallState(true);if(!wasEverConnected){wasEverConnected=true;if(reconnectCall){reconnectCall=false;releaseCallMicrophone();callActive=false;startCall()}}else{setStatus(relayVoiceMode?'Voice relay active · files and screen share stay P2P':'Connected directly',true);friendLeftNotified=false}}if(state==='disconnected'){if(callActive){if(!peer._disconnectGrace)recoverDirectCall(peer,directPolite()?7000:4000);return}if(!peer._disconnectGrace)peer._disconnectGrace=setTimeout(()=>{peer._disconnectGrace=null;if(pc!==peer)return;if(callActive)recoverDirectCall(peer,0);else if(['disconnected','failed'].includes(peer.connectionState))setStatus('disconnected')},8000);return}if(state==='failed'&&callActive){recoverDirectCall(peer,directPolite()?2500:0);return}if(['failed','closed'].includes(state)){if(peer._disconnectGrace){clearTimeout(peer._disconnectGrace);peer._disconnectGrace=null}if(callActive)publishCallState(false);if(dmConnectingPeerId===dmPeerId)dmConnectingPeerId='';screenBtn.disabled=true;abortScreenSharePicker();if(screenActive||screenStarting||screenStream||nativeScreenSession)void stopScreenShare(true);else screenGen++;if(peer._connectTimer){clearTimeout(peer._connectTimer);peer._connectTimer=connectTimer=null}applyRemoteCallState(false);if(directFileId)closeTcpLane();setStatus(state)}if(state==='connecting'){pairHint.textContent=(relayVoiceMode?'Connecting low-bandwidth voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…';armConnectTimeout()}};peer.oniceconnectionstatechange=()=>{if(pc!==peer)return;if(peer.iceConnectionState==='failed'){pairHint.textContent=relayVoiceMode?'Voice relay failed. Text will keep working, but this network cannot reach the relay.':'Direct peer connection failed; retrying before the low-bandwidth voice relay.'}else if(peer.iceConnectionState==='checking'||peer.iceConnectionState==='connected'){pairHint.textContent=(relayVoiceMode?'Connecting voice relay':'Negotiating peer connection')+' (ICE '+(peer.iceConnectionState||'')+')…'}};peer.ondatachannel=e=>{if(e.channel.label==='chat')chat=e.channel;else if(!relayVoiceMode)files=e.channel;wire()};
   peer.addEventListener('connectionstatechange',()=>{if(pc!==peer||peer.connectionState!=='connected'||callActive||callStarting||pendingVoiceStartPeerId!==dmPeerId)return;pendingVoiceStartPeerId='';startCall()});
   const baseDirectDataChannel=pc.ondatachannel;pc.ondatachannel=event=>{if(event.channel.label==='knot-screen-native'){wireNativeScreenChannel(event.channel,{remote:true});return}baseDirectDataChannel(event)};
   // If WebRTC can't establish within ~25s (e.g. TURN unreachable / blocked
@@ -2835,6 +2867,7 @@ async function connectDirectory(){
     else if(value.type==='relay-status'){if(activeGroupDmId&&value.queued)pairHint.textContent='Encrypted message sent. Offline group members will receive it when they return.'}
     else if(value.type==='turn-credentials')acceptTurnCredentials(value)
     else if(value.type==='peer-signal'&&['server','group-dm'].includes(value.context?.type))handleServerSignal(value).catch(error=>console.warn('peer signal',error))
+    else if(value.type==='peer-signal'&&value.context?.type==='dm')handleDirectPeerSignal(value).catch(error=>console.warn('direct peer signal',error))
     else if(value.type==='error'){const message=value.message||'Knot directory request failed',requestId=String(value.requestId||''),sfuPending=groupSfuPending.get(requestId),relayPending=fileRelayPending.get(requestId);if(sfuPending){groupSfuPending.delete(requestId);sfuPending.reject(new Error(message))}if(relayPending){fileRelayPending.delete(requestId);relayPending.reject(new Error(message))}if(value.action==='turn-credentials')turnCredentialPending?.reject(new Error(message));if(value.action==='create-account'){if($('#accountStatus'))$('#accountStatus').textContent=message;if($('#authStatus'))$('#authStatus').textContent=message}else pairHint.textContent=message;const dialog=$('#serverDialog');if(dialog?.open&&['create-server','redeem-invite'].includes(value.action)){pendingServerSelection=false;$('#serverDialogStatus').textContent=message;dialog.querySelectorAll('form button').forEach(button=>button.disabled=false)}const groupDialog=$('#groupDmDialog');if(groupDialog?.open&&['create-group-dm','add-group-member','update-group-dm','remove-group-member','leave-group-dm'].includes(value.action)){pendingGroupSelection=null;pendingGroupUpdateId='';$('#groupDmStatus').textContent=message;groupDialog.querySelectorAll('button,input').forEach(control=>control.disabled=false)}}
   }catch(error){console.warn('directory message',error)}};
   socket.onclose=event=>{if(directorySocket!==socket)return;directorySocket=null;stopDirectoryHeartbeat();markDirectoryPresenceUnknown();const disconnected=new Error('Knot signaling disconnected');for(const pending of groupSfuPending.values())pending.reject(disconnected);groupSfuPending.clear();for(const pending of fileRelayPending.values())pending.reject(disconnected);fileRelayPending.clear();if(event.code===1008&&/authenticat|account|credential|session/i.test(event.reason||'')&&!/too many account sessions/i.test(event.reason||'')){setDirectoryState(false,'Sign in required');const dialog=$('#accountDialog');if(dialog&&!dialog.open)dialog.showModal();$('#authSigninTab')?.click();if($('#authStatus'))$('#authStatus').textContent='Your saved session expired or was revoked. Sign in again — your photo and other settings stay on this device.';return}setDirectoryState(false,'Offline — retrying');directoryReconnect=setTimeout(()=>{if(!directorySocket)void connectDirectory()},directoryBackoff);directoryBackoff=Math.min(30000,directoryBackoff*2)};socket.onerror=()=>{if(directorySocket===socket)setDirectoryState(false,'Connection error')};
@@ -3165,7 +3198,7 @@ async function automaticPair(kind,explicitRoom='',expectedPeerId=''){
         // If the friend's answer didn't include an audio sender, startCall will
         // add a transceiver and renegotiate instead of relying on the unmatched one.
         pairHint.textContent='Secure connection established.'
-      }else if(remote.kind==='reneg-offer')await answerDirectRenegotiation(remote.sdp,sdp=>{if(!signaling||signaling!==socket||generation!==pairGeneration)return false;socket.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp}}));return true})
+      }else if(remote.kind==='reneg-offer')await answerDirectRenegotiation(remote.sdp,sdp=>{if(generation!==pairGeneration)return false;if(signaling===socket&&socket.readyState===WebSocket.OPEN){socket.send(JSON.stringify({type:'signal',payload:{kind:'reneg-answer',sdp}}));return true}return !!sendDirectSignal('reneg-answer',sdp)})
       else if(remote.kind==='reneg-answer')await applyDirectRenegotiationAnswer(remote.sdp)
     }
   }catch(e){console.warn('signaling message error',e);if(generation===pairGeneration)pairHint.textContent='Connection setup failed: '+(e&&e.message||e)}};
@@ -3363,7 +3396,7 @@ async function answerDirectRenegotiation(sdp,reply){
   // saw and heard nothing. Only keep our own offer while we are sending.
   if(collision&&!polite&&sendingLiveDisplayVideo())return false;
   if(collision){renegotiating++;settleDirectRenegotiation();if(target.signalingState==='have-local-offer')try{await target.setLocalDescription({type:'rollback'})}catch{return false}else if(target.signalingState!=='stable')return false}
-  if(target!==pc)return false;await target.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remoteSdp)});if(target!==pc)return false;await flushDirectIceCandidates(target);if(target!==pc)return false;applyInboundScreenCodecPreference(target);const answer=await target.createAnswer();if(target!==pc)return false;await target.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});await waitIce(target);if(target!==pc)return false;const sent=reply(localCallSdp(target))!==false;if(sent&&interrupted)queueMicrotask(()=>{if(target===pc&&target.signalingState==='stable')renegotiate().catch(()=>{})});return sent
+  if(target!==pc)return false;const remoteRestart=!!target.remoteDescription&&iceUfrag(remoteSdp)!==iceUfrag(target.remoteDescription.sdp);await target.setRemoteDescription({type:'offer',sdp:remoteCallSdp(remoteSdp)});if(remoteRestart)target._iceRestartAt=Date.now();if(target!==pc)return false;await flushDirectIceCandidates(target);if(target!==pc)return false;applyInboundScreenCodecPreference(target);const answer=await target.createAnswer();if(target!==pc)return false;await target.setLocalDescription({type:'answer',sdp:patchSdp(answer.sdp)});await waitIce(target);if(target!==pc)return false;const sent=reply(localCallSdp(target))!==false;if(sent&&interrupted)queueMicrotask(()=>{if(target===pc&&target.signalingState==='stable')renegotiate().catch(()=>{})});return sent
 }
 async function applyDirectRenegotiationAnswer(sdp){const target=pc,remoteSdp=validPeerSdp(sdp);if(!target||!remoteSdp||target.signalingState!=='have-local-offer')return false;await target.setRemoteDescription({type:'answer',sdp:remoteCallSdp(remoteSdp)});await flushDirectIceCandidates(target);if(target===pc)settleDirectRenegotiation();return target===pc}
 // A screen share has two negotiations: video immediately, then audio once the
@@ -3384,6 +3417,30 @@ function waitForStablePeer(target=pc,timeout=10000){
     check();
   });
 }
+// Discord-style call recovery: a real ICE restart a few seconds into a
+// disconnect (Chromium only declares "failed" after ~30 s), then retries with
+// backoff while the network stays down. Each retry checks the state first, so
+// a call that came back on its own is left alone. The polite side waits a
+// little longer and skips its own restart while the friend's is settling, so
+// the two ends don't send crossing offers.
+const ICE_RESTART_SETTLE_MS=5000;
+function directPolite(){return role==='join'||role==='answer'}
+function iceUfrag(sdp){return (String(sdp||'').match(/a=ice-ufrag:(\S+)/)||[])[1]||''}
+function recoverDirectCall(peer,delay){
+  clearTimeout(peer._disconnectGrace);
+  peer._disconnectGrace=setTimeout(async()=>{
+    peer._disconnectGrace=null;
+    if(pc!==peer||!callActive||['connected','closed'].includes(peer.connectionState))return;
+    const settling=ICE_RESTART_SETTLE_MS-(Date.now()-(peer._iceRestartAt||0));
+    if(settling>0){recoverDirectCall(peer,settling);return}
+    await restartDirectIce();
+    if(pc!==peer||!callActive||['connected','closed'].includes(peer.connectionState)||peer._disconnectGrace)return;
+    peer._iceRecoveryDelay=Math.min(20000,Math.round((peer._iceRecoveryDelay||4000)*1.6));
+    recoverDirectCall(peer,peer._iceRecoveryDelay);
+  },Math.max(0,delay));
+}
+// A new network (Wi-Fi back, cable swapped) needs new ICE candidates now.
+window.addEventListener('online',()=>{if(pc&&callActive&&pc.connectionState!=='connected')recoverDirectCall(pc,1500)});
 async function restartDirectIce(){
   const target=pc;if(!target||!callActive)return false;
   if(target._iceRestarting)return target._iceRestarting;
@@ -3394,14 +3451,14 @@ async function restartDirectIce(){
         turnIceServers=[];turnIssuedAt=0;
         try{const servers=await requestTurnCredentials();dmIceServers=servers;target.setConfiguration({iceServers:servers,iceTransportPolicy:directIceTransportPolicy()})}catch{}
       }
-      return await renegotiate({iceRestart:true});
+      const sent=await renegotiate({iceRestart:true});if(sent)target._iceRestartAt=Date.now();return sent;
     }catch(error){console.warn('ICE restart failed',error);return false}
     finally{if(target._iceRestarting)target._iceRestarting=null}
   })();
   return target._iceRestarting;
 }
 async function renegotiate({iceRestart=false}={}){
-  if(!pc||(!signaling&&chat?.readyState!=='open'))return;
+  if(!pc||!directSignalAvailable())return;
   const target=pc;
   if(!await waitForStablePeer(target)){
     console.warn('renegotiate skipped: peer did not return to stable');
@@ -3417,8 +3474,7 @@ async function renegotiate({iceRestart=false}={}){
     if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
     await waitIce(target);
     if(!pc||pc!==target||myId!==renegotiating){renegPending=false;return false}
-    if(signaling){signaling.send(JSON.stringify({type:'signal',payload:{kind:'reneg-offer',sdp:localCallSdp(target)}}));sent=true}
-    else if(chat?.readyState==='open')sent=send({t:'reneg-offer',sdp:localCallSdp(target)});
+    sent=!!sendDirectSignal('reneg-offer',localCallSdp(target),{avoidPeerChannel:!!iceRestart});
     if(!sent)return false;armDirectRenegotiationTimeout(target,myId);return true;
   }catch(e){console.warn('renegotiate error',e);return false}
   finally{if(!sent&&myId===renegotiating)settleDirectRenegotiation()}
