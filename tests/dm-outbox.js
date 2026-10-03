@@ -48,6 +48,8 @@ app.whenReady().then(async () => {
       await connectDirectory();
       const goOffline=()=>{clearTimeout(directoryReconnect);const socket=directorySocket;directorySocket=null;directoryAuthenticatedSocket=null;if(socket){socket.onclose=null;socket.close?.()}};
       goOffline();
+      // Earlier tests can leave unconfirmed messages behind in this profile.
+      dmOutbox.clear();dmOutboxLoaded=null;await ssSet('dmOutbox',null);
       directoryUserId=selfId;
       // The friend's device key is our own: the pair key is symmetric, so this
       // test can also play the friend's side.
@@ -119,6 +121,14 @@ app.whenReady().then(async () => {
       await delay(150);
       assert(messages.querySelectorAll('.message').length===before+1,'a resent incoming message was shown twice');
       assert(s2.sent.map(value=>JSON.parse(value)).filter(value=>value.type==='relay-ack'&&value.id===incoming).length===2,'a duplicate incoming message was not acknowledged');
+      // 7. A reconnecting call probes the directory: a socket that stays
+      // silent is replaced at once, one that answers is kept.
+      probeDirectory(300);await delay(450);
+      assert(directorySocket!==s2,'a directory socket that ignored the probe was kept');
+      await waitFor(()=>sockets.at(-1)!==s2,'Knot did not reconnect after a failed directory probe',4000);
+      const s3=sockets.at(-1);await authenticate(s3);
+      probeDirectory(300);await deliver(s3,{type:'pong'});await delay(400);
+      assert(directorySocket===s3,'a directory socket that answered the probe was replaced');
       await ssSet('dmOutbox',null);
       return 'dm outbox smoke passed';
     })()`);

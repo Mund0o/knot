@@ -2952,6 +2952,15 @@ function forceDirectoryReconnect(socket,reason='heartbeat timeout'){
   const onclose=socket.onclose;socket.onclose=null;socket.onmessage=null;try{socket.close()}catch{}
   clearTimeout(directoryReconnect);directoryBackoff=1000;onclose?.call(socket,{code:4000,reason});
 }
+// One round trip to the directory. After a network drop its socket is often
+// half-open: it looks open but nothing arrives, and the heartbeat only notices
+// after 70 s. Anything waiting on the directory right now (a call's ICE restart
+// is relayed through it) replaces a silent socket within a few seconds.
+function probeDirectory(timeout=5000){
+  const socket=directorySocket;if(!socket||directoryAuthenticatedSocket!==socket||socket.readyState!==WebSocket.OPEN||socket._knotProbe)return;
+  const sentAt=Date.now();try{socket.send('{"type":"ping"}')}catch{return forceDirectoryReconnect(socket,'send failed')}
+  socket._knotProbe=setTimeout(()=>{socket._knotProbe=null;if(directorySocket===socket&&directoryLastHeard<sentAt)forceDirectoryReconnect(socket,'probe timeout')},timeout);
+}
 function startDirectoryHeartbeat(socket){
   stopDirectoryHeartbeat();directoryLastHeard=directoryHeartbeatTick=Date.now();directoryHeartbeatCount=0;
   directoryHeartbeatTimer=setInterval(()=>{
@@ -3493,6 +3502,7 @@ function recoverDirectCall(peer,delay){
   peer._disconnectGrace=setTimeout(async()=>{
     peer._disconnectGrace=null;
     if(pc!==peer||!callActive||['connected','closed'].includes(peer.connectionState))return;
+    probeDirectory();
     const settling=ICE_RESTART_SETTLE_MS-(Date.now()-(peer._iceRestartAt||0));
     if(settling>0){recoverDirectCall(peer,settling);return}
     await restartDirectIce();
