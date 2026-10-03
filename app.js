@@ -1777,7 +1777,7 @@ async function createRnnoiseMicrophone(rawStream){
   if(typeof AudioWorkletNode==='undefined'||!(window.AudioContext||window.webkitAudioContext))throw new Error('AudioWorklet is not available in this build');
   const context=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000,latencyHint:0.03});
   try{
-    await context.resume();const {module,root}=await rnnoiseLibrary(),assets=module.rnnoise_loadAssets({scriptSrc:new URL('rnnoise.worklet.js',root).href,moduleSrc:new URL('rnnoise.wasm',root).href});
+    await context.resume();const {module,root}=await rnnoiseLibrary(),assets=module.rnnoise_loadAssets({scriptSrc:new URL('rnnoise-worklet.js',location.href).href,moduleSrc:new URL('rnnoise.wasm',root).href});
     await module.RNNoiseNode.register(context,assets);
     const source=context.createMediaStreamSource(rawStream),node=new module.RNNoiseNode(context),destination=context.createMediaStreamDestination(),keepAlive=context.createGain();keepAlive.gain.value=0;keepAlive.connect(context.destination);source.connect(node).connect(destination);
     const track=destination.stream.getAudioTracks()[0];if(!track)throw new Error('RNNoise did not create a microphone track');
@@ -1785,7 +1785,7 @@ async function createRnnoiseMicrophone(rawStream){
   }catch(error){try{await context.close()}catch{}throw error}
 }
 async function acquireCallMicrophone(){
-  const raw=await navigator.mediaDevices.getUserMedia(microphoneConstraints());localMicrophoneStream=raw;activeNoiseProcessor=noiseReductionMode==='off'?'raw':noiseReductionMode==='deepfilter'?'browser':'raw';
+  const raw=await navigator.mediaDevices.getUserMedia(microphoneConstraints());localMicrophoneStream=raw;watchMicrophoneEnd(raw);activeNoiseProcessor=noiseReductionMode==='off'?'raw':noiseReductionMode==='deepfilter'?'browser':'raw';
   if(noiseReductionMode==='off')return raw;
   try{const pipeline=noiseReductionMode==='deepfilter'?await createDeepFilterMicrophone(raw):await createRnnoiseMicrophone(raw);voiceNoisePipeline=pipeline;activeNoiseProcessor=noiseReductionMode;return pipeline.stream}catch(error){const name=noiseReductionMode==='deepfilter'?'DeepFilterNet3':'RNNoise';deviceHint.textContent=name+' could not start, so Knot is using your raw microphone for this call.';console.warn(name+' microphone filter unavailable:',error);return raw}
 }
@@ -1793,6 +1793,81 @@ function releaseCallMicrophone(){
   const streams=[localStream,localMicrophoneStream];localStream=null;localMicrophoneStream=null;
   for(const stream of new Set(streams.filter(Boolean)))try{stream.getTracks().forEach(track=>track.stop())}catch{}
   stopVoiceNoisePipeline();activeNoiseProcessor='raw';
+}
+// A microphone can vanish mid-call: a USB headset is unplugged, a Bluetooth
+// headset reconnects, the audio server restarts. Its track ends and the call
+// stayed silent until the person rejoined. Open a microphone again (the chosen
+// one, else the system default), rebuild noise suppression and swap the track
+// into the live connections; replaceTrack needs no renegotiation. Changing the
+// input device, echo cancellation or noise suppression mid-call uses the same
+// path, so those settings apply at once instead of on the next call.
+let microphoneSwap=null,microphoneSwapAgain='',microphoneSwapRetry=null,microphoneSwapRetries=0;
+function liveVoiceMicrophone(){return callActive&&localStream?localMicrophoneStream:serverVoiceStream&&joinedVoiceChannelId?serverVoiceRawStream:null}
+function watchMicrophoneEnd(raw){
+  const track=raw?.getAudioTracks?.()[0];if(!track)return;
+  // track.stop() never fires 'ended', so only a lost device gets here.
+  track.addEventListener?.('ended',()=>{if(raw===liveVoiceMicrophone())void swapCallMicrophone('ended')},{once:true});
+}
+async function openReplacementMicrophone(){
+  try{return await navigator.mediaDevices.getUserMedia(microphoneConstraints())}
+  catch(error){
+    if(!inputDeviceId||inputDeviceId==='default')throw error;
+    // The chosen device is gone; the system default keeps the call audible.
+    const constraints=microphoneConstraints();delete constraints.audio.deviceId;
+    return navigator.mediaDevices.getUserMedia(constraints);
+  }
+}
+async function filterReplacementMicrophone(raw){
+  if(noiseReductionMode==='off')return {stream:raw,pipeline:null,processor:'raw'};
+  try{const pipeline=noiseReductionMode==='deepfilter'?await createDeepFilterMicrophone(raw):await createRnnoiseMicrophone(raw);return {stream:pipeline.stream,pipeline,processor:noiseReductionMode}}
+  catch(error){console.warn('microphone filter unavailable after a microphone change:',error);return {stream:raw,pipeline:null,processor:'raw'}}
+}
+function retireMicrophone({stream,raw,pipeline}){
+  stopVoiceNoisePipeline(pipeline);
+  for(const value of new Set([stream,raw].filter(Boolean)))try{value.getTracks().forEach(track=>track.stop())}catch{}
+}
+function swapCallMicrophone(reason='changed'){
+  if(microphoneSwap){microphoneSwapAgain=microphoneSwapAgain==='ended'?'ended':reason;return microphoneSwap}
+  clearTimeout(microphoneSwapRetry);microphoneSwapRetry=null;
+  microphoneSwap=(async()=>{
+    const dm=!!(callActive&&localStream),server=!dm&&!!(serverVoiceStream&&joinedVoiceChannelId);
+    if(!dm&&!server)return false;
+    const gen=dm?callGen:serverVoiceGen,still=()=>dm?callActive&&gen===callGen&&!!localStream:gen===serverVoiceGen&&!!serverVoiceStream;
+    if(reason==='ended')deviceHint.textContent='Your microphone disconnected · reconnecting it…';
+    let raw=null,next=null;
+    try{raw=await openReplacementMicrophone();next=await filterReplacementMicrophone(raw)}
+    catch(error){
+      try{raw?.getTracks().forEach(track=>track.stop())}catch{}
+      if(!still())return false;
+      if(reason==='ended'){
+        // No microphone yet (a Bluetooth headset still reconnecting). Keep
+        // trying for a minute; plugging one in also retries at once.
+        deviceHint.textContent='No microphone found · plug one in and Knot will use it';
+        if(++microphoneSwapRetries<=20)microphoneSwapRetry=setTimeout(()=>{microphoneSwapRetry=null;if(liveVoiceMicrophone()?.getAudioTracks().some(track=>track.readyState==='ended'))void swapCallMicrophone('ended')},3000);
+      }else deviceHint.textContent='Could not switch microphones: '+(error?.message||error);
+      return false;
+    }
+    if(!still()){retireMicrophone({raw,stream:next.stream,pipeline:next.pipeline});return false}
+    microphoneSwapRetries=0;watchMicrophoneEnd(raw);
+    const track=next.stream.getAudioTracks()[0];
+    if(dm){
+      const previous={stream:localStream,raw:localMicrophoneStream,pipeline:voiceNoisePipeline};
+      localMicrophoneStream=raw;localStream=next.stream;voiceNoisePipeline=next.pipeline;activeNoiseProcessor=next.processor;
+      applyMicTransmission();
+      const sender=reservedVoiceSender();if(sender)try{await sender.replaceTrack(track)}catch(error){console.warn('microphone swap',error)}
+      monitorSpeaking('dm-self',localStream);retireMicrophone(previous);
+    }else{
+      const previous={stream:serverVoiceStream,raw:serverVoiceRawStream,pipeline:serverVoiceNoisePipeline};
+      serverVoiceRawStream=raw;serverVoiceStream=next.stream;serverVoiceNoisePipeline=next.pipeline;
+      serverVoiceStream.getAudioTracks().forEach(item=>item.enabled=!serverVoiceMuted);
+      const senders=[...[...serverPeers.values()].map(state=>state.voiceSender),...(groupSfuPilot?.publisher?.getSenders?.().filter(sender=>sender.track?.kind==='audio')||[])].filter(Boolean);
+      await Promise.all(senders.map(sender=>sender.replaceTrack(track).catch(error=>console.warn('microphone swap',error))));
+      monitorSpeaking('server:'+directoryUserId,serverVoiceStream);retireMicrophone(previous);
+    }
+    deviceHint.textContent=reason==='ended'?'Microphone reconnected.':reason==='device'?'Your call now uses '+(raw.getAudioTracks()[0]?.label||'the selected microphone')+'.':'Microphone settings applied to your call.';
+    return true;
+  })().finally(()=>{microphoneSwap=null;const again=microphoneSwapAgain;microphoneSwapAgain='';if(again)void swapCallMicrophone(again)});
+  return microphoneSwap;
 }
 function suspendDirectCallForPeerReplacement(){
   callGen++;stopCallTone();if(callActive)publishCallState(false);stopSpeakingMonitor('dm-self');
@@ -1812,7 +1887,7 @@ function applyMicTransmission(){if(!localStream)return;const open=!micMuted&&(vo
 function releasePushToTalk(){pushToTalkReleaseTimer=null;pushToTalkHeld=false;applyMicTransmission()}
 voiceInputMode.onchange=()=>{voiceInputModeValue=voiceInputMode.value==='ptt'?'ptt':'voice';ssSet('voiceInputMode',voiceInputModeValue);if(voiceInputModeValue!=='ptt'){pushToTalkHeld=false;if(pushToTalkReleaseTimer){clearTimeout(pushToTalkReleaseTimer);pushToTalkReleaseTimer=null}}updatePushToTalkUI();applyMicTransmission()};pushToTalkKeyButton.onclick=()=>{pushToTalkCapturing=true;updatePushToTalkUI();deviceHint.textContent='Press the key you want to hold for push to talk.'};pushToTalkDelayInput.oninput=()=>{pushToTalkDelay=Math.max(0,Math.min(1000,Number(pushToTalkDelayInput.value)||0));ssSet('pushToTalkDelay',String(pushToTalkDelay));updatePushToTalkUI()};
 window.addEventListener('keydown',event=>{if(pushToTalkCapturing){if(event.code==='Escape'){pushToTalkCapturing=false;updatePushToTalkUI();return}event.preventDefault();pushToTalkKey=event.code;pushToTalkCapturing=false;ssSet('pushToTalkKey',pushToTalkKey);updatePushToTalkUI();return}if(voiceInputModeValue!=='ptt'||event.code!==pushToTalkKey||event.repeat)return;if(/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName||''))return;event.preventDefault();if(pushToTalkReleaseTimer){clearTimeout(pushToTalkReleaseTimer);pushToTalkReleaseTimer=null}pushToTalkHeld=true;applyMicTransmission()});window.addEventListener('keyup',event=>{if(voiceInputModeValue!=='ptt'||event.code!==pushToTalkKey)return;event.preventDefault();if(pushToTalkReleaseTimer)clearTimeout(pushToTalkReleaseTimer);pushToTalkReleaseTimer=setTimeout(releasePushToTalk,pushToTalkDelay)});window.addEventListener('blur',()=>{if(pushToTalkReleaseTimer){clearTimeout(pushToTalkReleaseTimer);pushToTalkReleaseTimer=null}pushToTalkHeld=false;applyMicTransmission()});
-inputDevice.onchange=()=>{inputDeviceId=inputDevice.value;ssSet('inputDevice',inputDeviceId);if(micTestStream)stopMicrophoneTest()};outputDevice.onchange=()=>{outputDeviceId=outputDevice.value;ssSet('outputDevice',outputDeviceId);applyOutputDevice()};voiceProcessing.onchange=()=>{voiceProcessingEnabled=voiceProcessing.checked;ssSet('voiceProcessing',voiceProcessingEnabled?'on':'off');if(micTestStream)stopMicrophoneTest();deviceHint.textContent=voiceProcessingEnabled?'Echo cancellation enabled.':'Echo cancellation disabled.'};noiseReduction.onchange=()=>{noiseReductionMode=['rnnoise','deepfilter','off'].includes(noiseReduction.value)?noiseReduction.value:'rnnoise';ssSet('noiseReduction',noiseReductionMode);if(micTestStream)stopMicrophoneTest();renderNoiseProcessingUI();deviceHint.textContent=localStream||serverVoiceStream?'Noise-reduction changes apply to your next call.':micTestStream?'Restart the microphone test to hear the new setting.':'Noise-reduction preference saved.'};noiseHardware.onchange=()=>{noiseHardwareMode=['auto','cpu','gpu'].includes(noiseHardware.value)?noiseHardware.value:'auto';ssSet('noiseHardware',noiseHardwareMode);renderNoiseProcessingUI();deviceHint.textContent='Processing hardware preference saved for DeepFilterNet.'};$('#refreshDevices').onclick=()=>refreshAudioDevices();$('#testSound').onclick=()=>playSound('ring');testMicrophone.onclick=()=>toggleMicrophoneTest();navigator.mediaDevices?.addEventListener?.('devicechange',refreshAudioDevices);
+inputDevice.onchange=()=>{inputDeviceId=inputDevice.value;ssSet('inputDevice',inputDeviceId);if(micTestStream)stopMicrophoneTest();if(liveVoiceMicrophone())void swapCallMicrophone('device')};outputDevice.onchange=()=>{outputDeviceId=outputDevice.value;ssSet('outputDevice',outputDeviceId);applyOutputDevice()};voiceProcessing.onchange=()=>{voiceProcessingEnabled=voiceProcessing.checked;ssSet('voiceProcessing',voiceProcessingEnabled?'on':'off');if(micTestStream)stopMicrophoneTest();deviceHint.textContent=voiceProcessingEnabled?'Echo cancellation enabled.':'Echo cancellation disabled.';if(liveVoiceMicrophone())void swapCallMicrophone('processing')};noiseReduction.onchange=()=>{noiseReductionMode=['rnnoise','deepfilter','off'].includes(noiseReduction.value)?noiseReduction.value:'rnnoise';ssSet('noiseReduction',noiseReductionMode);if(micTestStream)stopMicrophoneTest();renderNoiseProcessingUI();if(liveVoiceMicrophone())void swapCallMicrophone('processing');deviceHint.textContent=liveVoiceMicrophone()?'Applying the new noise reduction to your call…':micTestStream?'Restart the microphone test to hear the new setting.':'Noise-reduction preference saved.'};noiseHardware.onchange=()=>{noiseHardwareMode=['auto','cpu','gpu'].includes(noiseHardware.value)?noiseHardware.value:'auto';ssSet('noiseHardware',noiseHardwareMode);renderNoiseProcessingUI();deviceHint.textContent='Processing hardware preference saved for DeepFilterNet.'};$('#refreshDevices').onclick=()=>refreshAudioDevices();$('#testSound').onclick=()=>playSound('ring');testMicrophone.onclick=()=>toggleMicrophoneTest();navigator.mediaDevices?.addEventListener?.('devicechange',()=>{refreshAudioDevices();if(liveVoiceMicrophone()?.getAudioTracks().some(track=>track.readyState==='ended'))void swapCallMicrophone('ended')});
 const THEME_CONCEPTS=[
   ['bento','Bento','Modular cards','Modular card-based workspace'],
   ['brutalist','Brutalist','Loud & direct','Raw high-contrast interface'],
@@ -2818,7 +2893,7 @@ async function joinServerVoice(channelOverride=null){
   if(serverVoiceStream&&joinedVoiceServerId===entity.id&&joinedVoiceChannelId===channel.id)return;
   stopServerVoice();const gen=serverVoiceGen,attempt={gen,serverId:entity.id,channelId:channel.id,raw:null,stream:null,pipeline:null,committed:false};serverVoiceAttempt=attempt;serverVoiceStarting=true;renderCallButtonState('end','Cancel joining','Cancel joining voice');callStatus.textContent='Requesting microphone…';callStatus.className='call-status ringing';
   try{
-    attempt.raw=await navigator.mediaDevices.getUserMedia(microphoneConstraints());attempt.stream=attempt.raw;
+    attempt.raw=await navigator.mediaDevices.getUserMedia(microphoneConstraints());attempt.stream=attempt.raw;watchMicrophoneEnd(attempt.raw);
     if(gen!==serverVoiceGen||serverVoiceAttempt!==attempt)return;
     if(noiseReductionMode!=='off')try{attempt.pipeline=noiseReductionMode==='deepfilter'?await createDeepFilterMicrophone(attempt.raw):await createRnnoiseMicrophone(attempt.raw);attempt.stream=attempt.pipeline.stream;activeNoiseProcessor=noiseReductionMode}catch(error){if(gen!==serverVoiceGen||serverVoiceAttempt!==attempt)return;const name=noiseReductionMode==='deepfilter'?'DeepFilterNet3':'RNNoise';deviceHint.textContent=name+' could not start, so Knot is using your raw microphone in this voice channel.';console.warn(name+' group microphone filter unavailable:',error)}
     if(gen!==serverVoiceGen||serverVoiceAttempt!==attempt)return;
