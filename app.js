@@ -1048,10 +1048,10 @@ function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
     const reports=await receiver.getStats();if(finished||track.readyState==='ended')return stop();let inbound,codec;
     reports.forEach(report=>{if(report.type==='inbound-rtp'&&(report.kind==='video'||report.mediaType==='video')&&!report.isRemote)inbound=report});
     if(!inbound)return;
-    codec=reports.get(inbound.codecId);const bytes=Number(inbound.bytesReceived)||0,frames=Number(inbound.framesDecoded)||0,lost=Number(inbound.packetsLost)||0,freezes=Number(inbound.freezeCount)||0,jitterDelay=Number(inbound.jitterBufferDelay)||0,jitterCount=Number(inbound.jitterBufferEmittedCount)||0,received=bytes-previousBytes,decoded=frames-previousFrames,jitterDelta=jitterDelay-previousJitterDelay,jitterCountDelta=jitterCount-previousJitterCount,playoutMs=jitterCountDelta>0?Math.max(0,jitterDelta/jitterCountDelta*1000):0,pressure=lost>previousLost||freezes>previousFreezes||Number(inbound.jitter)>.03;
+    codec=reports.get(inbound.codecId);const bytes=Number(inbound.bytesReceived)||0,frames=Number(inbound.framesDecoded)||0,lost=Number(inbound.packetsLost)||0,freezes=Number(inbound.freezeCount)||0,jitterDelay=Number(inbound.jitterBufferDelay)||0,jitterCount=Number(inbound.jitterBufferEmittedCount)||0,received=bytes-previousBytes,decoded=frames-previousFrames,jitterDelta=jitterDelay-previousJitterDelay,jitterCountDelta=jitterCount-previousJitterCount,playoutMs=jitterCountDelta>0?Math.max(0,jitterDelta/jitterCountDelta*1000):0,pressure=lost>previousLost||freezes>previousFreezes||Number(inbound.jitter)>.03,freezeDelta=freezes-previousFreezes,lostDelta=lost-previousLost;
     previousBytes=bytes;previousFrames=frames;previousLost=lost;previousFreezes=freezes;previousJitterDelay=jitterDelay;previousJitterCount=jitterCount;if(playoutMs)recordMetric('screen.playout_ms',playoutMs,{codec:String(codec?.mimeType||'unknown').replace('video/','').toLowerCase()});
     const receiveMbps=received>0?(received*8)/2500/1000:NaN;
-    const cause=networkMath()?.classifyShareBuffering?.({freezeDelta:freezes-previousFreezes,packetsLostDelta:lost-previousLost,receiveMbps,jitter:Number(inbound.jitter)||0})||(pressure?'path':'');
+    const cause=networkMath()?.classifyShareBuffering?.({freezeDelta,packetsLostDelta:lostDelta,receiveMbps,jitter:Number(inbound.jitter)||0})||(pressure?'path':'');
     const wasCongested=networkReceiveCongested;
     if(cause==='path'){networkReceiveCongested=true;if(Number.isFinite(receiveMbps)&&receiveMbps>0)networkLiveReceiveMbps=Math.max(1.5,receiveMbps);if(!wasCongested)announceNetBudget();stableWindows=0;if(latencyTargetMs<80)applyLatencyTarget(80)}
     else {if(wasCongested){networkReceiveCongested=false;networkLiveReceiveMbps=NaN;announceNetBudget()}if(decoded>0&&++stableWindows>=3&&latencyTargetMs>45)applyLatencyTarget(45)}
@@ -1205,8 +1205,29 @@ function currentViewerReceiveCapMbps({allowLive=true}={}){
   else {const budget=budgetFor(directBudgetKey());if(budget)viewers.push(budget)}
   return math.minViewerReceiveCapMbps(viewers);
 }
+// Codecs this machine decodes on its GPU, announced to sharers. Since 1.1.118
+// NVIDIA Linux decodes received video on the CPU; a sharer that keeps raising
+// its bitrate toward the GPU ceiling leaves that viewer seconds behind.
+let localHardwareDecode=null;
+async function probeHardwareDecode(){
+  if(typeof VideoDecoder!=='function'||typeof VideoDecoder.isConfigSupported!=='function')return;
+  const codecs={AV1:'av01.0.13M.08',H264:'avc1.640033',VP9:'vp09.00.51.08',VP8:'vp8'},supported=[];
+  for(const [name,codec] of Object.entries(codecs)){try{const result=await VideoDecoder.isConfigSupported({codec,codedWidth:3840,codedHeight:2160,hardwareAcceleration:'prefer-hardware'});if(result?.supported)supported.push(name)}catch{}}
+  localHardwareDecode=supported;announceNetBudget();
+}
+// A decoder that advertised hardware support can still fail on a real stream.
+function noteSoftwareDecode(codec){
+  if(!Array.isArray(localHardwareDecode)||!localHardwareDecode.includes(codec))return;
+  localHardwareDecode=localHardwareDecode.filter(value=>value!==codec);announceNetBudget();
+}
+function shareViewersDecodeInSoftware(codec){
+  const math=networkMath();if(!math?.viewerDecodesInSoftware)return false;
+  if(serverVoiceStream){for(const [peerId,state] of serverPeers){if(state.closing||!voicePeerAllowed(peerId))continue;if(math.viewerDecodesInSoftware(lookupPeerBudget(peerId),codec))return true}return false}
+  return math.viewerDecodesInSoftware(lookupPeerBudget(directBudgetKey()),codec);
+}
 function localNetBudgetMessage(){
   const parsed=networkMath()?.normalizeNetBudget?.({
+    hwDecode:localHardwareDecode||undefined,
     downloadMbps:networkCapacity?.downloadMbps,
     uploadMbps:networkCapacity?.uploadMbps,
     liveMbps:networkLiveReceiveMbps,
@@ -1615,7 +1636,7 @@ openSettingsTab=function(name){
   if(name==='advanced')void renderLocalMetricsSummary();
 };
 const screenShareSettingsReady=restoreScreenShareSettings();
-void screenShareSettingsReady.then(()=>{startNetworkCapacityProbe();probeHardwareScreenCodec()});
+void screenShareSettingsReady.then(()=>{startNetworkCapacityProbe();probeHardwareScreenCodec();void probeHardwareDecode()});
 function makeDeviceOption(value,label){const option=document.createElement('option');option.value=value;option.textContent=label;return option}
 async function refreshAudioDevices(){try{const devices=await navigator.mediaDevices.enumerateDevices();const inputs=devices.filter(device=>device.kind==='audioinput'),outputs=devices.filter(device=>device.kind==='audiooutput');inputDevice.replaceChildren(makeDeviceOption('default','System default'));outputDevice.replaceChildren(makeDeviceOption('default','System default'));inputs.forEach((device,index)=>inputDevice.append(makeDeviceOption(device.deviceId,device.label||'Microphone '+(index+1))));outputs.forEach((device,index)=>outputDevice.append(makeDeviceOption(device.deviceId,device.label||'Speaker '+(index+1))));inputDevice.value=[...inputDevice.options].some(option=>option.value===inputDeviceId)?inputDeviceId:'default';outputDevice.value=[...outputDevice.options].some(option=>option.value===outputDeviceId)?outputDeviceId:'default';deviceHint.textContent=(inputs.length||outputs.length)?'Device list updated.':'Connect or allow a microphone to reveal device names.'}catch{deviceHint.textContent='Knot could not read audio devices yet.'}}
 function deepFilterBackendAvailable(){return !!(window.pairDeepFilter&&typeof window.pairDeepFilter.getAsset==='function'&&typeof AudioWorkletNode!=='undefined'&&(window.AudioContext||window.webkitAudioContext))}
@@ -3816,7 +3837,11 @@ function applyScreenCodecPreference(connection,sender,selectedCodec=screenCodec)
 function applyInboundScreenCodecPreference(connection){
   try{
     const caps=RTCRtpReceiver.getCapabilities?.('video')||RTCRtpSender.getCapabilities?.('video');
-    const inbound=screenCodec==='H264'||screenCodec==='VP9'||screenCodec==='VP8'?screenCodec:compatibilityScreenCodec();
+    // Automatic keeps the sharer's own (hardware-first) order. Forcing this
+    // machine's compatibility codec made a Windows sharer encode VP9 on the
+    // CPU for a Linux viewer, which starved the share.
+    if(!(screenCodec==='H264'||screenCodec==='VP9'||screenCodec==='VP8'))return false;
+    const inbound=screenCodec;
     const codecs=orderedScreenCodecs(caps,inbound);
     if(!codecs.length)return false;
     for(const transceiver of connection?.getTransceivers?.()||[]){
@@ -3834,7 +3859,7 @@ function targetScreenBitrate(width,height,fps){
   const pixels=Math.max(1,(Number(width)||1920)*(Number(height)||1080)),cadence=Number(fps)===30?.62:1,ratio=pixels/(1920*1080),selected=String(screenCodec||'auto').toUpperCase(),codec=selected==='AUTO'?compatibilityScreenCodec():selected,base1080=codec==='AV1'?5.5:codec==='VP9'?6.5:8,base=base1080*Math.pow(ratio,.65)*cadence;
   const compatibilityCap=screenFallbackBitrateCapMbps>0?screenFallbackBitrateCapMbps:Infinity,formulaBps=Math.round(Math.min(screenBitrateMbps,compatibilityCap,Math.max(2,base))*1000000);
   if(!screenShareHasProbe())return formulaBps;
-  const ceilingMbps=effectiveScreenBitrateCeiling(),probeCap=Number.isFinite(ceilingMbps)?Math.round(ceilingMbps*1e6):Infinity,fallbackBps=screenFallbackBitrateCapMbps>0?screenFallbackBitrateCapMbps*1e6:Infinity,raise=!screenBitrateExplicit&&effectiveUploadCapMbps()>20&&screenShareCanRaiseBitrate(),encoderCapBps=encoderShareCapMbps({hardware:raise,width,height,fps})*1e6;
+  const ceilingMbps=effectiveScreenBitrateCeiling(),probeCap=Number.isFinite(ceilingMbps)?Math.round(ceilingMbps*1e6):Infinity,fallbackBps=screenFallbackBitrateCapMbps>0?screenFallbackBitrateCapMbps*1e6:Infinity,sendCodec=selected==='AUTO'?(screenShareCanRaiseBitrate()?hardwareScreenCodec:compatibilityScreenCodec()):selected,raise=!screenBitrateExplicit&&effectiveUploadCapMbps()>20&&screenShareCanRaiseBitrate()&&!shareViewersDecodeInSoftware(sendCodec),encoderCapBps=encoderShareCapMbps({hardware:raise,width,height,fps})*1e6;
   return Math.max(2e6,Math.round(raise?Math.min(encoderCapBps,fallbackBps,probeCap):Math.min(formulaBps,probeCap)));
 }
 async function configureScreenVideoSender(sender,track,fps,viewers=1,viewerReceiveMbps=Infinity,budgetKey=''){
@@ -4107,7 +4132,7 @@ function createWebCodecsNativeScreenPlayer(video,codec,onError=()=>{},options={}
     if(destroyed||decoderDisabled)return false;
     if(!allowSoftwareFallback){hardwareUnavailable=true;fail(error);return false}
     if(softwareFallback){fail(error);return false}
-    const previous=decoder;let next=null;softwareFallback=true;presentationGeneration++;resetPresentation();latencySamples.length=0;latencyViolationWindows=0;
+    const previous=decoder;let next=null;softwareFallback=true;noteSoftwareDecode('AV1');presentationGeneration++;resetPresentation();latencySamples.length=0;latencyViolationWindows=0;
     try{next=makeDecoder('prefer-software');next.configure({...config,hardwareAcceleration:'prefer-software'});decoder=next;closeDecoderSoon(previous);configuredAt=performance.now();lastOutputAt=configuredAt;queuedSinceOutput=0;needsKeyframe=true;for(const frame of replay){if(needsKeyframe&&frame.type!=='key')continue;if(frame.type==='key')needsKeyframe=false;arrivalTimes.set(frame.timestamp,performance.now());queuedSinceOutput++;decoder.decode(new EncodedVideoChunk(frame))}return true}catch(fallbackError){closeDecoderSoon(next);decoder=previous;fail(fallbackError);return false}
   };
   const makeDecoder=hardwareAcceleration=>{
@@ -4556,7 +4581,7 @@ function selectedNativeDimensions(){const dimensions={720:[1280,720],1080:[1920,
 function targetNativeAv1BitrateKbps(width,height,fps,viewers=1){
   const w=Number(width)>0?Number(width):3840,h=Number(height)>0?Number(height):2160,f=Number(fps)===30?30:60,selectedPixels=w*h,pixels=Math.max(1,selectedPixels),cadence=f===30?.62:1,ratio=pixels/(1920*1080),formulaMbps=Math.max(2.75,6.774*Math.pow(ratio,.62)*cadence),viewCount=Math.max(1,Number(viewers)||1),encoderCap=encoderShareCapMbps({native:true,width:w,height:h,fps:f});
   let budgetMbps=screenBitrateMbps;if(screenShareHasProbe()){const ceiling=effectiveScreenBitrateCeiling(),raise=!screenBitrateExplicit&&effectiveUploadCapMbps()>20;budgetMbps=raise?Math.min(ceiling,encoderCap):Math.min(screenBitrateMbps,ceiling,encoderCap)}
-  const uploadBudget=Math.max(.35,budgetMbps/viewCount),viewerCap=currentViewerReceiveCapMbps(),pathBudget=Number.isFinite(viewerCap)?Math.min(uploadBudget,Math.max(.35,viewerCap)):uploadBudget,knownPath=lanSharePath()||Number.isFinite(viewerCap),raise=screenShareHasProbe()&&!screenBitrateExplicit&&effectiveUploadCapMbps()>20&&knownPath;
+  const uploadBudget=Math.max(.35,budgetMbps/viewCount),viewerCap=currentViewerReceiveCapMbps(),pathBudget=Number.isFinite(viewerCap)?Math.min(uploadBudget,Math.max(.35,viewerCap)):uploadBudget,knownPath=lanSharePath()||Number.isFinite(viewerCap),raise=screenShareHasProbe()&&!screenBitrateExplicit&&effectiveUploadCapMbps()>20&&knownPath&&!shareViewersDecodeInSoftware('AV1');
   return Math.round(Math.min(raise?pathBudget:Math.min(pathBudget,formulaMbps))*1000);
 }
 async function attachNativeShareAudio(gen){

@@ -150,16 +150,32 @@
     return min;
   }
 
+  const DECODE_CODECS = ['AV1', 'H264', 'VP9', 'VP8'];
+
+  // Codecs the viewer decodes on its GPU. A viewer without hardware decode
+  // (NVIDIA Linux since 1.1.118) cannot keep up with a GPU-sized share
+  // bitrate, so senders hold such viewers to the conservative curve.
+  function normalizeHardwareDecode(value) {
+    if (!Array.isArray(value)) return null;
+    return DECODE_CODECS.filter(codec => value.includes(codec));
+  }
+
+  function viewerDecodesInSoftware(budget, codec) {
+    const hardware = normalizeHardwareDecode(budget?.hwDecode);
+    return !!hardware && !hardware.includes(String(codec || '').toUpperCase());
+  }
+
   function normalizeNetBudget(value) {
     if (!value || typeof value !== 'object') return null;
     const download = Number(value.downloadMbps), upload = Number(value.uploadMbps), live = Number(value.liveMbps), at = Number(value.at);
-    const budget = {};
+    const budget = {}, hwDecode = normalizeHardwareDecode(value.hwDecode);
     if (Number.isFinite(download) && download > 0 && download <= 10000) budget.downloadMbps = Math.round(download * 100) / 100;
     if (Number.isFinite(upload) && upload > 0 && upload <= 10000) budget.uploadMbps = Math.round(upload * 100) / 100;
     if (Number.isFinite(live) && live > 0 && live <= 10000) budget.liveMbps = Math.round(live * 100) / 100;
+    if (hwDecode) budget.hwDecode = hwDecode;
     if (!budget.downloadMbps && !budget.uploadMbps && !budget.liveMbps) {
-      if (value.congested !== false) return null;
-      budget.congested = false;
+      if (value.congested === false) budget.congested = false;
+      else if (!hwDecode) return null;
       budget.at = Number.isFinite(at) && at > 0 ? at : 0;
       return budget;
     }
@@ -407,6 +423,7 @@
     viewerReceiveCapMbps,
     minViewerReceiveCapMbps,
     normalizeNetBudget,
+    viewerDecodesInSoftware,
     nextShareBudgetMbps,
     shouldAdoptShareBudget,
     SHARE_BUDGET_LOWER_RATIO,

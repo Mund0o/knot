@@ -4,7 +4,7 @@ const assert = require('assert');
 const {
   mbpsFrom, effectiveUploadCapMbps, voiceBitrateBps, preferAudioRed,
   recommendShareBudgetMbps, autoShareCeilingMbps, sliderBitrateMaxMbps, classifyShareBuffering, nativeKeyWaitMs, nativeShareRemainingMs, encoderShareCapMbps,
-  viewerReceiveCapMbps, minViewerReceiveCapMbps, normalizeNetBudget,
+  viewerReceiveCapMbps, minViewerReceiveCapMbps, normalizeNetBudget, viewerDecodesInSoftware,
   nextShareBudgetMbps, shouldAdoptShareBudget, abortCapacityProbe,
   cachedCapacityFresh, shouldStopProbe, CACHE_MS, PROBE_VERSION,
   MAX_NATIVE_SHARE_MBPS, MAX_HARDWARE_WEBRTC_SHARE_MBPS, MAX_SLIDER_MBPS, MAX_SHARE_LATENCY_MS,
@@ -61,6 +61,12 @@ assert.ok(normalizeNetBudget({ downloadMbps: 50, uploadMbps: 50, at: 1 }));
 assert.strictEqual(normalizeNetBudget({ downloadMbps: 0 }), null);
 assert.strictEqual(normalizeNetBudget({ downloadMbps: -4, uploadMbps: 90000 }), null);
 assert.strictEqual(normalizeNetBudget({ congested: false, at: 2 })?.congested, false, 'a recovered viewer must be able to clear congestion without a new probe');
+assert.deepStrictEqual(normalizeNetBudget({ hwDecode: ['AV1', 'bogus', 'H264'], at: 3 }), { hwDecode: ['AV1', 'H264'], at: 3 }, 'a decode capability must travel even before a speed probe');
+assert.deepStrictEqual(normalizeNetBudget({ downloadMbps: 50, hwDecode: [] })?.hwDecode, [], 'an empty list means the viewer decodes everything on the CPU');
+assert.strictEqual(normalizeNetBudget({ downloadMbps: 50, hwDecode: 'AV1' })?.hwDecode, undefined);
+assert.strictEqual(viewerDecodesInSoftware({ hwDecode: [] }, 'av1'), true, 'a CPU-decoding viewer must hold the share to the conservative bitrate curve');
+assert.strictEqual(viewerDecodesInSoftware({ hwDecode: ['AV1'] }, 'AV1'), false);
+assert.strictEqual(viewerDecodesInSoftware({ downloadMbps: 50 }, 'AV1'), false, 'an older viewer without the field keeps the existing behaviour');
 
 assert.strictEqual(shouldStopProbe(100, 1e6), false);
 assert.strictEqual(shouldStopProbe(PROBE_WINDOW_MS, PROBE_MIN_BYTES), true);
