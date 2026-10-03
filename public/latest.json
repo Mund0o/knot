@@ -1,11 +1,11 @@
 {
-  "version": "1.1.117",
-  "notes": "A Windows screen share now shows and plays on Linux. Fullscreen covers the window. Starting a share no longer blasts your ears, and computer audio no longer sounds robotic.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.117/pair-p2p-1.1.117.tar.gz",
-  "linuxSha256": "b30cb06f9d2c79984152a93bf687bc1f0ebbc3cf81cf85ee270f73763ede59e6",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.117/Knot-1.1.117.AppImage",
-  "linuxAppImageSha256": "af7cbbbb7d9cc49bd28f0c8a1c809f08b69eec64a32dcc1085661dbdfde5f559",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.117/Knot.Setup.1.1.117.exe",
-  "winSha256": "de4e874897bf584824b45f06a7e72744c7d5f832b3c6b9e7cb2cc5276121328a",
-  "signature": "Iaqn5y6NXmvFw/b+ktrcwDtKkuUbrGAApgCW8p+EovQlQged7U2wYW48QUs4z1oJf51HzGxlWPpLYg3pOT4FBg=="
+  "version": "1.1.118",
+  "notes": "No more white screen on NVIDIA Linux, smoother screen audio, accurate online and offline status, readable light themes, and three new themes: Pebble, Drift and Marquee.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.118/pair-p2p-1.1.118.tar.gz",
+  "linuxSha256": "dd92c075f5faad20f9b252d99e80df156152b71e22721f726a9db939e15ff8b2",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.118/Knot-1.1.118.AppImage",
+  "linuxAppImageSha256": "803285dafe67a7dc09ced3afadcd94211ed258eba1dbaba6e3c02e88950879bf",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.118/Knot.Setup.1.1.118.exe",
+  "winSha256": "f6870a76d2b3f341e82962ad8bdc75a3bd2d2879a1f86503d7452c042d0f2b18",
+  "signature": "cktwmwpl+l2vcInoFMwyLR59qN86eaIRVAEjPCgKwir3sN6HY4TVlDt1RmISYE3vOjpqyn6TYKg7qBzv7ZdHAw=="
 }
