@@ -15,6 +15,9 @@ let directoryTrustedConnection=false,recordConversationMessage=()=>{},directoryP
 // Directory/call state must exist before any asynchronous settings/profile
 // restoration can render the UI. Declaring it later created a startup TDZ race
 // that only showed up reliably when two complete app windows booted together.
+// endCall() runs during startup via setStatus('Not connected'), so the
+// renegotiation counter it bumps must exist before that.
+let renegotiating=0,renegotiationTimer=null,renegPending=false;
 let directoryHeartbeatTimer=null,directoryLastHeard=0,directoryHeartbeatTick=0,directoryHeartbeatCount=0,directoryAuthenticatedSocket=null,dmOutboxLoaded=null,dmOutboxTimer=null;const dmOutbox=new Map();
 let directorySocket=null,directoryReconnect=null,directoryBackoff=1000,directoryConnectGeneration=0,directoryStateRestored=false,directoryRevision=0,directoryEmptySnapshotRetry=false,directoryFeatures={groupSfu:false,encryptedFileRelay:false},accountAuthGeneration=0,directoryUserId='',directoryToken='',directoryAccountName='',transientDirectorySession=false,pendingAccountRemember=true,directorySnapshot={friends:[],servers:[],groupDms:[],members:{},voiceStates:{}},activePeerId='',dmPeerId='',dmCallPeerId='',activeServerId='',activeGroupDmId='',activeChannelId='',activeConversationKey='',historyRendering=false,dmConnectingPeerId='',pendingVoiceStartPeerId='',conversationScrollEpoch=0,conversationScrollObserver=null,conversationScrollTimer=null,conversationScrollLoadListener=null;
 let conversationHistories={},conversationRenderState=null,conversationLoadGeneration=0,serverVoiceStream=null,serverVoiceRawStream=null,serverVoiceNoisePipeline=null,serverVoiceAttempt=null,serverVoiceStarting=false,serverVoiceGen=0,serverScreenStream=null,serverNativeScreenSession=null,serverNativeLocalPlayer=null,serverNativeScreenAudioStream=null,serverNativeScreenInit=null,serverNativeFallbackInFlight=false,serverVoiceMuted=false,serverScreenStarting=false,serverScreenGen=0,joinedVoiceServerId='',joinedVoiceChannelId='',joinedVoiceScope='',joinedVoiceAt=0,voiceElapsedTimer=null,draggedChannelId='';const serverPeers=new Map(),conversationDrafts=new Map(),HISTORY_PAGE_SIZE=80,HISTORY_DOM_LIMIT=120,HISTORY_CACHE_LIMIT=2000;
@@ -3127,8 +3130,11 @@ async function startLanHouse(){
   if(!started?.ok)return;lanStarted=true;
   await window.pairLan.setBeacon(lanSelfFp,lanNonce);
 }
+// Bridge objects from contextBridge are frozen, so a marker property on
+// window.pairLan is silently dropped; remember the binding here instead.
+let lanListenersInstalled=false;
 function installLanListeners(){
-  if(!window.pairLan||window.pairLan._knotBound)return;window.pairLan._knotBound=true;
+  if(!window.pairLan||lanListenersInstalled)return;lanListenersInstalled=true;
   window.pairLan.onBeacon(beacon=>{
     if(!beacon||beacon.fp===lanSelfFp)return;
     const peerId=lanFingerprints.get(beacon.fp);if(!peerId||peerId===directoryUserId)return;
@@ -3323,7 +3329,7 @@ async function startLocalTestCall(){
     localStream=await acquireCallMicrophone();
     monitorSpeaking('dm-self',localStream);
     dmCallPeerId=dmPeerId||activePeerId;callActive=true;callStart=Date.now();renderCallButtonState('end','End call','End local mic test');callBtn.disabled=false;muteBtn.hidden=false;micMuted=false;muteBtn.textContent='Mute';applyMicTransmission();setParticipant(participantYou,true);playSound('connect');callStatus.textContent='Testing microphone locally';callStatus.className='call-status live';
-    callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);callTimerEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');if($('#dmVoiceDockTime'))$('#dmVoiceDockTime').textContent=callTimerEl.textContent},1000);
+    clearInterval(callTimerId);callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);callTimerEl.textContent=Math.floor(s/60)+':'+String(s%60).padStart(2,'0');if($('#dmVoiceDockTime'))$('#dmVoiceDockTime').textContent=callTimerEl.textContent},1000);
   }catch(e){callStatus.textContent='Mic test unavailable';callStatus.className='call-status'}finally{callStarting=false}
 }
 async function startCall(){
@@ -3392,7 +3398,7 @@ async function startCall(){
     setParticipant(participantYou,true);logCallEvent('You joined the call');stopCallTone();
     if(friendInCall)playSound('friend-join');else startCallTone('calling',5);publishCallState(true);try{send({t:'call-ring'})}catch{}
     callStatus.textContent=friendInCall?'Voice live':'Waiting for your friend';callStatus.className=friendInCall?'call-status live':'call-status ringing';
-    callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0');if($('#dmVoiceDockTime'))$('#dmVoiceDockTime').textContent=callTimerEl.textContent},1000);
+    clearInterval(callTimerId);callTimerId=setInterval(()=>{const s=Math.floor((Date.now()-callStart)/1000);const m=Math.floor(s/60),sec=s%60;callTimerEl.textContent=m+':'+String(sec).padStart(2,'0');if($('#dmVoiceDockTime'))$('#dmVoiceDockTime').textContent=callTimerEl.textContent},1000);
   }catch(e){try{send({t:'call-end'})}catch{};endCall(true);const m=String(e?.message||e||'');if(/not\s*found/i.test(m))callStatus.textContent='No mic found — check your microphone connection';else if(/permission|denied|not\s*allowed/i.test(m))callStatus.textContent='Mic access blocked — allow microphone in browser/app settings';else callStatus.textContent='Mic error — '+(e?.message||e);callStatus.className='call-status';
   }finally{callStarting=false}
 }
@@ -3451,11 +3457,11 @@ volumeSlider.oninput=()=>setCallVolume(volumeSlider.value);
 // renegotiation. `renegotiating` is a generation counter: each call increments
 // it and only the most-recent call is allowed to send its offer. That way a
 // quick stop→start (or a preset change) supersedes any in-flight reneg.
-let renegotiating=0,renegotiationTimer=null;
 // Glare guard: if we receive the peer's reneg-offer while we have one pending,
 // we resolve it by role. The joiner defers (answers the host's offer instead of
 // insisting on its own); the host wins. role is deterministic across peers.
-let renegPending=false;
+// (renegotiating, renegotiationTimer and renegPending are declared at the top:
+// the startup setStatus() reaches endCall(), which uses them.)
 function settleDirectRenegotiation(){clearTimeout(renegotiationTimer);renegotiationTimer=null;renegPending=false}
 function armDirectRenegotiationTimeout(target,generation){
   clearTimeout(renegotiationTimer);renegotiationTimer=setTimeout(async()=>{if(generation!==renegotiating||target!==pc)return;renegotiating++;settleDirectRenegotiation();if(target.signalingState==='have-local-offer')try{await target.setLocalDescription({type:'rollback'})}catch{}if(target===pc)pairHint.textContent='Screen-share negotiation timed out. Stop and retry the share.'},12000)
