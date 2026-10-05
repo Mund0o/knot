@@ -1130,9 +1130,11 @@ function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
     }
     if(received<50000)return;
     stalls++;
-    if(stalls===1){try{receiver.requestKeyFrame?.()}catch{};return}
-    if(stalls>=2&&/video\/(?:AV1|H264)/i.test(codec?.mimeType||'')){
-      screenStatus.textContent=(/AV1/i.test(codec?.mimeType||'')?'AV1':'H.264')+' decoder stalled — switching to '+compatibilityScreenCodec();
+    // AV1 stays AV1: a stall on a weak link keeps asking for a fresh key picture and
+    // the viewer shows the buffering view, instead of switching codec.
+    if(stalls===1||/video\/AV1/i.test(codec?.mimeType||'')){try{receiver.requestKeyFrame?.()}catch{};return}
+    if(stalls>=2&&/video\/H264/i.test(codec?.mimeType||'')){
+      screenStatus.textContent='H.264 decoder stalled — switching to '+compatibilityScreenCodec();
       const requested=requestFallback?requestFallback():(chat?.readyState==='open'&&send({t:'screen-codec-fallback'}));if(requested!==false)stop();
     }
   }catch{}finally{sampleInFlight=false}};
@@ -1140,7 +1142,12 @@ function monitorRemoteScreenDecode(receiver,track,requestFallback,isActive){
 }
 function monitorNativeScreenBuffering(channel,{isActive}={}){
   let previousPainted=0,previousDropped=0,previousGaps=0,previousBytes=0,previousAt=0,blackStalls=0,advancedBackend=false,finished=false;
-  const stop=()=>{if(finished)return;finished=true;clearInterval(timer);clearInterval(paintTimer)};
+  const stopBuffering=watchShareBuffering({
+    host:()=>channel?._nativeReceive?.player?.host?.()||null,
+    read:()=>{const state=channel?._nativeReceive,stats=state?.player?.stats?.()||{};return{painted:Number(stats.paintedFrames)||0,lastPacketAt:state?.lastPacketAt||0,lastLiveAt:state?.lastLiveAt||0,liveCapable:!!state?.liveCapable}},
+    active:()=>!finished&&!!channel?._nativeReceive&&(typeof isActive!=='function'||isActive())
+  });
+  const stop=()=>{if(finished)return;finished=true;stopBuffering();clearInterval(timer);clearInterval(paintTimer)};
   const sample=()=>{
     if(finished)return;
     if(typeof isActive==='function'&&!isActive())return;
@@ -2798,7 +2805,7 @@ function bindServerReservedScreenAudio(peerId,state){
   const stream=new MediaStream([track]);stream._knotPeerId=peerId;addServerNativeScreenAudio(state,track,stream);return state.screenAudio;
 }
 function wireServerNativeScreenChannel(peerId,state,channel,{remote=false}={}){
-  channel.binaryType='arraybuffer';if(remote){state.nativeReceiveChannel=channel;channel._nativePreMeta=[];channel.onmessage=event=>{if(typeof event.data==='string'){if(event.data.length>64*1024)return;try{const value=JSON.parse(event.data);if(value.t==='native-screen-meta')beginServerNativeScreen(peerId,state,value,channel);else if(value.t==='native-screen-audio'&&value.serverId===state.context.serverId){state.nativeScreenAudioExpected=!!value.active;if(value.active)bindServerReservedScreenAudio(peerId,state)}else if(value.t==='native-screen-end'&&value.serverId===state.context.serverId)clearServerNativeScreen(state,{keepChannel:true,keepAudio:true})}catch{}return}if(!channel._nativeReceive)holdNativeScreenPreMeta(channel,event.data);else receiveNativeScreenPacket(channel,event.data)};channel.onclose=()=>{channel._nativePreMeta=[];if(state.nativeReceiveChannel===channel){clearServerNativeScreen(state,{keepChannel:true,keepAudio:true});state.nativeReceiveChannel=null;renderServerVoiceUI()}};if(state.pendingNativeMeta){const held=state.pendingNativeMeta;state.pendingNativeMeta=null;beginServerNativeScreen(peerId,state,held,channel)}return}
+  channel.binaryType='arraybuffer';if(remote){state.nativeReceiveChannel=channel;channel._nativePreMeta=[];channel.onmessage=event=>{if(typeof event.data==='string'){if(event.data.length>64*1024)return;try{const value=JSON.parse(event.data);if(value.t==='native-screen-meta')beginServerNativeScreen(peerId,state,value,channel);else if(value.t==='native-screen-audio'&&value.serverId===state.context.serverId){state.nativeScreenAudioExpected=!!value.active;if(value.active)bindServerReservedScreenAudio(peerId,state)}else if(value.t==='native-screen-live'){const live=channel._nativeReceive;if(live){live.liveCapable=true;live.lastLiveAt=performance.now()}}else if(value.t==='native-screen-end'&&value.serverId===state.context.serverId)clearServerNativeScreen(state,{keepChannel:true,keepAudio:true})}catch{}return}if(!channel._nativeReceive)holdNativeScreenPreMeta(channel,event.data);else receiveNativeScreenPacket(channel,event.data)};channel.onclose=()=>{channel._nativePreMeta=[];if(state.nativeReceiveChannel===channel){clearServerNativeScreen(state,{keepChannel:true,keepAudio:true});state.nativeReceiveChannel=null;renderServerVoiceUI()}};if(state.pendingNativeMeta){const held=state.pendingNativeMeta;state.pendingNativeMeta=null;beginServerNativeScreen(peerId,state,held,channel)}return}
   state.nativeSendChannel=channel;channel.onmessage=event=>{if(typeof event.data!=='string'||event.data.length>64*1024)return;try{const value=JSON.parse(event.data);if(value.t==='native-screen-ready'&&value.serverId===state.context.serverId){channel._nativePeerProtocol=Math.max(0,Math.min(16,Number(value.transportVersion)||0));if(channel._nativePeerProtocol>=NATIVE_SCREEN_PROTOCOL)settleNativeScreenReady(channel,true)}else if(value.t==='native-screen-fallback'&&value.serverId===state.context.serverId){void fallbackServerNativeToWebRtc(channel._nativeSend?.sessionId)}}catch{}};channel.onopen=()=>announceServerNativeChannel(channel);channel.onclose=()=>{settleNativeScreenReady(channel,false);if(channel._serverNativeQueue)channel._serverNativeQueue.length=0;if(state.nativeSendChannel===channel)state.nativeSendChannel=null}
 }
 async function activateServerPeerMedia(peerId,state){
@@ -2887,6 +2894,7 @@ async function attachServerNativeScreenAudio(gen){
 async function pumpServerNativeScreen(gen,session){
   let preview=serverNativeLocalPlayer?.mode!=='placeholder';
   void attachServerNativeScreenAudio(gen);
+  startNativeScreenLiveBeat(()=>[...serverPeers.values()].map(state=>state.nativeSendChannel),()=>serverNativeScreenSession?.id===session.id&&gen===serverScreenGen);
   while(serverNativeScreenSession?.id===session.id&&gen===serverScreenGen){
     const queued=[];
     if(typeof window.pairNativeScreen.readMany==='function'){for(;;){const batch=await window.pairNativeScreen.readMany(session.id,{maxItems:NATIVE_SCREEN_DRAIN_ITEMS,maxBytes:NATIVE_SCREEN_DRAIN_BYTES});if(Array.isArray(batch?.items)&&batch.items.length){queued.push(...batch.items);continue}if(batch&&!batch.active){if(batch.error)setServerStatus('Native share stopped: '+batch.error)}break}}
@@ -4193,7 +4201,9 @@ async function configureScreenVideoSender(sender,track,fps,viewers=1,viewerRecei
   // that made WebRTC drop display frames before the encoder or network were
   // actually saturated. Keep the call audio on its own RTP stream but give an
   // interactive share normal high-priority scheduling.
-  encoding.priority='high';encoding.networkPriority='high';parameters.degradationPreference=screenContentHint==='detail'?'maintain-resolution':'maintain-framerate';return parameters};
+  // A weak link slows the share down (the viewer sees buffering) instead of
+  // shrinking it: the resolution the sharer picked is never traded for frame rate.
+  encoding.priority='high';encoding.networkPriority='high';parameters.degradationPreference='maintain-resolution';return parameters};
   try{await sender.setParameters(tune(sender.getParameters(),temporal));return true}catch(error){if(temporal)try{await sender.setParameters(tune(sender.getParameters(),false));return true}catch{}console.warn('[VIDEO] sender tuning unavailable:',error?.message||error);return false}
 }
 function startScreenStats(sender){
@@ -4361,6 +4371,72 @@ function resetShareSurface(el){
   if(el.tagName==='VIDEO')holdShareVideo(el);
   else paintShareSurfaceDark(el);
   return el;
+}
+// A still screen sends no pictures at all, so a viewer cannot tell it from a dead
+// link. While a native share runs, the sharer sends this small message so the
+// viewer knows the connection is still carrying data.
+const NATIVE_SCREEN_LIVE_MS=500,NATIVE_SCREEN_LIVE_FRAME=JSON.stringify({t:'native-screen-live'});
+function startNativeScreenLiveBeat(channels,isCurrent){
+  const timer=setInterval(()=>{
+    if(!isCurrent()){clearInterval(timer);return}
+    for(const channel of channels())if(channel?.readyState==='open'&&channel._nativePeerProtocol>=NATIVE_SCREEN_PROTOCOL)try{channel.send(NATIVE_SCREEN_LIVE_FRAME)}catch{}
+  },NATIVE_SCREEN_LIVE_MS);
+}
+// Buffering view. When a viewer's picture stops advancing (a weak connection, a
+// lost key picture) the last frame stays up under a ring of running cats, so the
+// share reads as "catching up" and never as broken or lowered in quality.
+const SHARE_BUFFERING_STALL_MS=900,SHARE_BUFFERING_PACKET_MS=1000,SHARE_BUFFERING_LIVE_MS=1600;
+function shareBufferingDue({painted=0,idleMs=0,packetAgeMs=Infinity,liveAgeMs=Infinity,liveCapable=false}={}){
+  if(idleMs<SHARE_BUFFERING_STALL_MS)return false;
+  // Nothing has been shown yet: the first picture is still on its way.
+  if(!painted)return true;
+  // Pictures keep arriving but are not reaching the screen.
+  if(packetAgeMs<SHARE_BUFFERING_PACKET_MS)return true;
+  // Silence is only a still screen while the sharer's heartbeat keeps arriving.
+  return liveCapable&&liveAgeMs>=SHARE_BUFFERING_LIVE_MS;
+}
+function shareBufferingCat(angle,fur,inner){
+  const stroke=`stroke="${fur}" stroke-width="2.6" stroke-linecap="round"`;
+  return `<g transform="rotate(${angle} 50 50) translate(37.2 1) scale(.8)"><g class="cat">`+
+    `<path d="M6 9.5C1.8 9.2 1 4.2 4.4 2.4" fill="none" stroke="${fur}" stroke-width="2.4" stroke-linecap="round"/>`+
+    `<line class="leg leg-a" x1="9.5" y1="13" x2="9.5" y2="19.4" ${stroke}/><line class="leg leg-b" x1="12.8" y1="13" x2="12.8" y2="19.4" ${stroke}/>`+
+    `<line class="leg leg-b" x1="21" y1="13" x2="21" y2="19.4" ${stroke}/><line class="leg leg-a" x1="24" y1="13" x2="24" y2="19.4" ${stroke}/>`+
+    `<ellipse cx="16" cy="11" rx="10.5" ry="5.4" fill="${fur}"/><circle cx="26.2" cy="8" r="4.7" fill="${fur}"/>`+
+    `<path d="M22.4 5.6L23.2 1.2L26.2 3.6Z" fill="${fur}"/><path d="M26.4 3.5L29.6 1.4L30 5.9Z" fill="${fur}"/>`+
+    `<path d="M23.6 4.5L23.9 2.7L25.2 3.8Z" fill="${inner}"/><path d="M27.3 3.8L29 2.7L29.2 4.8Z" fill="${inner}"/>`+
+    `<circle cx="28" cy="7.4" r=".9" fill="#2b2d42"/><circle cx="30.5" cy="9.1" r=".75" fill="#ff8fa3"/></g></g>`;
+}
+function shareBufferingMarkup(){
+  return '<div class="share-buffering-ring" aria-hidden="true"><svg viewBox="0 0 100 100" focusable="false">'+
+    '<circle cx="50" cy="50" r="33" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1.5" stroke-dasharray="2 4"/>'+
+    shareBufferingCat(0,'#f2a65a','#ffc2cf')+shareBufferingCat(120,'#b8c1cc','#ffc2cf')+shareBufferingCat(240,'#f7e3c3','#ffb3c1')+
+    '</svg></div><span class="share-buffering-label">Buffering…</span>';
+}
+function createShareBufferingOverlay(){
+  const element=document.createElement('div');element.className='share-buffering';element.setAttribute('role','status');element.setAttribute('aria-live','polite');element.hidden=true;
+  element.innerHTML=shareBufferingMarkup();return element;
+}
+// Watches one share's picture and lays the buffering view over its host while it
+// is stalled. read() reports the viewer's counters; the picture itself is never
+// touched, so the last frame that arrived stays on screen underneath.
+function watchShareBuffering({host,read,active=()=>true}){
+  let overlay=null,lastPainted=-1,lastPaintAt=performance.now(),due=0,stopped=false;
+  const show=on=>{
+    const target=host();
+    if(!on||!target?.isConnected){if(overlay)overlay.hidden=true;return}
+    if(!overlay||overlay.parentElement!==target){overlay?.remove();overlay=createShareBufferingOverlay();target.append(overlay)}
+    overlay.hidden=false;
+  };
+  const timer=setInterval(()=>{
+    if(stopped)return;
+    const now=performance.now(),state=read();
+    if(!active()||document.visibilityState!=='visible'){lastPainted=state.painted;lastPaintAt=now;due=0;show(false);return}
+    if(state.painted!==lastPainted){lastPainted=state.painted;lastPaintAt=now;due=0;show(false);return}
+    // Two samples in a row, so a picture that is about to land never flashes the view.
+    due=shareBufferingDue({painted:state.painted,idleMs:now-lastPaintAt,packetAgeMs:now-(state.lastPacketAt||0),liveAgeMs:now-(state.lastLiveAt||0),liveCapable:!!state.liveCapable})?due+1:0;
+    show(due>=2);
+  },250);
+  return ()=>{stopped=true;clearInterval(timer);overlay?.remove();overlay=null};
 }
 function attachNativeScreenSurface(video){
   if(!video)return null;
@@ -4623,11 +4699,12 @@ function createNativeScreenPlayer(video,codec,onError=()=>{},options={}){
       return !finalFailure;
     },
     destroy(){if(destroyed)return;destroyed=true;generation++;replay=[];replayBytes=0;try{backend?.destroy()}catch{}backend=null;surface.destroy()},
-    stats(){return{...(backend?.stats?.()||{}),backend:backend?.mode||'',backendFailures}}
+    stats(){return{...(backend?.stats?.()||{}),backend:backend?.mode||'',backendFailures}},
+host(){return surface.canvas?.parentElement||null}
   };
 }
 function nativeScreenSegmentInfo(data,fps=60){const bytes=data instanceof Uint8Array?data:new Uint8Array(data),cluster=bytes.byteLength>=4&&bytes[0]===0x1f&&bytes[1]===0x43&&bytes[2]===0xb6&&bytes[3]===0x75;if(!cluster)return{kind:'init',key:false,frameCount:0};try{const meta=window.KnotNativeVideo?.webmAv1FrameMeta?.(bytes,fps);if(meta)return{kind:'cluster',key:!!meta.key,frameCount:meta.frameCount||0}}catch{}return{kind:'cluster',key:false,frameCount:0}}
-function nativeScreenReceiveState(player,meta={},onGap=()=>{}){return{fragments:new Map(),complete:new Map(),nextSeq:0,pendingBytes:0,bytesReceived:0,gapRecoveries:0,expectedMbps:Number(meta.bitrateKbps)>0?Number(meta.bitrateKbps)/1000:NaN,player,fps:Number(meta.fps)||60,haveInit:false,latestInit:null,resetBeforeKey:false,gapSince:0,gapTimer:null,fallbackRequested:false,onGap}}
+function nativeScreenReceiveState(player,meta={},onGap=()=>{}){return{fragments:new Map(),complete:new Map(),nextSeq:0,pendingBytes:0,bytesReceived:0,gapRecoveries:0,expectedMbps:Number(meta.bitrateKbps)>0?Number(meta.bitrateKbps)/1000:NaN,player,fps:Number(meta.fps)||60,haveInit:false,latestInit:null,resetBeforeKey:false,gapSince:0,gapTimer:null,fallbackRequested:false,lastPacketAt:0,lastLiveAt:0,liveCapable:false,onGap}}
 function requestNativeReceiveFallback(state,error){if(!state||state.fallbackRequested)return;state.fallbackRequested=true;state.onGap?.(error)}
 function clearNativeScreenReceiveState(channel){const state=channel?._nativeReceive;if(!state)return;clearTimeout(state.gapTimer);state.gapTimer=null;state.fragments?.clear();state.complete?.clear();state.pendingBytes=0;channel._nativeReceive=null}
 function holdNativeScreenPreMeta(channel,data){
@@ -4795,12 +4872,6 @@ function scheduleRemoteShareAudioBind(){
 // arrive, and a standard WebRTC share would cross the same link, so wait for a
 // key picture before blaming the decoder.
 const NATIVE_FIRST_PICTURE_GRACE_MS=4000;
-// Waiting for a key picture has to end. A link that cannot carry the first AV1
-// key picture (the sharer drops keys it cannot send, and the unordered channel
-// abandons a large key when one part is lost) never delivers it, and the sharer
-// only gives up AV1 for an older peer, so both sides waited forever. The
-// compatibility share is bandwidth-capped and restarts without the picker.
-const NATIVE_FIRST_KEY_CEILING_MS=12000;
 function armNativeScreenArrive(startedAt=performance.now()){
   clearTimeout(remoteNativeArriveTimer);
   remoteNativeArriveTimer=setTimeout(()=>{
@@ -4808,12 +4879,6 @@ function armNativeScreenArrive(startedAt=performance.now()){
     const stats=nativeRemotePlayer?.stats?.()||{},receive=remoteNativeScreenChannel?._nativeReceive;
     if(nativeRemotePlayer&&(Number(stats.paintedFrames)||0)>0)return;
     if(!receive?.firstKeyAt||performance.now()-receive.firstKeyAt<NATIVE_FIRST_PICTURE_GRACE_MS){
-      if(!receive?.firstKeyAt&&performance.now()-startedAt>=NATIVE_FIRST_KEY_CEILING_MS){
-        screenStatus.textContent='Friend’s AV1 share is not getting through · asking for a compatibility share';
-        if(receive)requestNativeReceiveFallback(receive,new Error('No AV1 key picture arrived'));
-        else try{send({t:'native-screen-fallback'})}catch{}
-        return;
-      }
       if(performance.now()-startedAt>=2500)screenStatus.textContent='Friend’s screen is loading slowly · waiting for the first picture';
       armNativeScreenArrive(startedAt);return;
     }
@@ -4878,10 +4943,13 @@ function drainNativeScreenReceive(channel){
   state.gapRecoveries=(Number(state.gapRecoveries)||0)+1;state.nextSeq=keySeq+1;state.gapSince=0;drainNativeScreenReceive(channel)
 }
 function receiveNativeScreenPacket(channel,data){
-  const state=channel._nativeReceive,bytes=data instanceof ArrayBuffer?new Uint8Array(data):ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,data.byteLength):null;if(!state||!bytes||bytes.byteLength<12||bytes.byteLength>NATIVE_SCREEN_PART+12)return;const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);if(view.getUint32(0)!==NATIVE_SCREEN_PACKET)return;const seq=view.getUint32(4),part=view.getUint16(8),total=view.getUint16(10);if(!total||total>NATIVE_SCREEN_MAX_PARTS||part>=total||seq<state.nextSeq||seq>state.nextSeq+4096)return;state.pendingBytes=Number(state.pendingBytes)||0;let entry=state.fragments.get(seq);if(!entry){if(state.fragments.size>=64){const oldest=[...state.fragments.keys()].sort((a,b)=>a-b)[0];removeNativeReceiveSequence(state,oldest)}entry={parts:new Array(total),count:0,bytes:0,receivedAt:performance.now()};state.fragments.set(seq,entry)}if(entry.parts.length!==total||entry.parts[part])return;entry.parts[part]=bytes.slice(12);entry.count++;entry.bytes+=bytes.byteLength-12;state.pendingBytes+=bytes.byteLength-12;if(entry.bytes>NATIVE_SCREEN_MAX_SEGMENT||state.pendingBytes>12*1024*1024){state.fragments.clear();state.complete.clear();state.pendingBytes=0;requestNativeReceiveFallback(state,new Error('Native AV1 receive queue exceeded its real-time limit'));return}if(entry.count===total){const joined=new Uint8Array(entry.bytes);let offset=0;for(const value of entry.parts){joined.set(value,offset);offset+=value.byteLength}state.fragments.delete(seq);state.bytesReceived=(Number(state.bytesReceived)||0)+joined.byteLength;const info=nativeScreenSegmentInfo(joined,state.fps);state.complete.set(seq,{data:joined,...info,receivedAt:entry.receivedAt});drainNativeScreenReceive(channel)}
+  const state=channel._nativeReceive,bytes=data instanceof ArrayBuffer?new Uint8Array(data):ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,data.byteLength):null;if(!state||!bytes||bytes.byteLength<12||bytes.byteLength>NATIVE_SCREEN_PART+12)return;const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);if(view.getUint32(0)!==NATIVE_SCREEN_PACKET)return;state.lastPacketAt=performance.now();const seq=view.getUint32(4),part=view.getUint16(8),total=view.getUint16(10);if(!total||total>NATIVE_SCREEN_MAX_PARTS||part>=total||seq<state.nextSeq||seq>state.nextSeq+4096)return;state.pendingBytes=Number(state.pendingBytes)||0;let entry=state.fragments.get(seq);if(!entry){if(state.fragments.size>=64){const oldest=[...state.fragments.keys()].sort((a,b)=>a-b)[0];removeNativeReceiveSequence(state,oldest)}entry={parts:new Array(total),count:0,bytes:0,receivedAt:performance.now()};state.fragments.set(seq,entry)}if(entry.parts.length!==total||entry.parts[part])return;entry.parts[part]=bytes.slice(12);entry.count++;entry.bytes+=bytes.byteLength-12;state.pendingBytes+=bytes.byteLength-12;if(entry.bytes>NATIVE_SCREEN_MAX_SEGMENT){state.fragments.clear();state.complete.clear();state.pendingBytes=0;requestNativeReceiveFallback(state,new Error('Native AV1 segment is larger than any valid picture'));return}
+// A backlog of half-received pictures means the link is behind, not that AV1 is
+// unusable. Drop it and wait for the next key picture rather than leaving AV1.
+if(state.pendingBytes>12*1024*1024){state.fragments.clear();state.complete.clear();state.pendingBytes=0;return}if(entry.count===total){const joined=new Uint8Array(entry.bytes);let offset=0;for(const value of entry.parts){joined.set(value,offset);offset+=value.byteLength}state.fragments.delete(seq);state.bytesReceived=(Number(state.bytesReceived)||0)+joined.byteLength;const info=nativeScreenSegmentInfo(joined,state.fps);state.complete.set(seq,{data:joined,...info,receivedAt:entry.receivedAt});drainNativeScreenReceive(channel)}
 }
 function wireNativeScreenChannel(channel,{remote=false}={}){
-  channel.binaryType='arraybuffer';if(remote){remoteNativeScreenChannel=channel;channel._nativePreMeta=[];channel.onmessage=event=>{if(typeof event.data==='string'){if(event.data.length>64*1024)return;try{const value=JSON.parse(event.data);if(value.t==='native-screen-meta')beginRemoteNativeScreen(value,channel);else if(value.t==='native-screen-audio'){if(value.active){remoteNativeScreenExpected=true;screenAudioDebug=' · audio received';scheduleRemoteShareAudioBind();if(remoteScreenExpected)screenStatus.textContent='Friend sharing'+screenAudioDebug}else if(remoteScreenExpected){screenAudioDebug=' · sound unavailable';screenStatus.textContent='Friend sharing'+screenAudioDebug}}else if(value.t==='native-screen-end'){cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true,keepVideo:true});if(remoteScreen.srcObject){prepareShareSurface(remoteScreen);playShareVideo(remoteScreen)}else if(!remoteScreenExpected)clearRemoteScreenShare()}}catch{}return}if(!channel._nativeReceive)holdNativeScreenPreMeta(channel,event.data);else receiveNativeScreenPacket(channel,event.data)};channel.onclose=()=>{channel._nativePreMeta=[];clearNativeScreenReceiveState(channel);if(remoteNativeScreenChannel===channel){cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true,keepVideo:true});if(remoteScreen.srcObject){prepareShareSurface(remoteScreen);playShareVideo(remoteScreen)}else if(!remoteScreenExpected)clearRemoteScreenShare()}};if(pendingRemoteNativeMeta){const held=pendingRemoteNativeMeta;pendingRemoteNativeMeta=null;beginRemoteNativeScreen(held,channel)}return}
+  channel.binaryType='arraybuffer';if(remote){remoteNativeScreenChannel=channel;channel._nativePreMeta=[];channel.onmessage=event=>{if(typeof event.data==='string'){if(event.data.length>64*1024)return;try{const value=JSON.parse(event.data);if(value.t==='native-screen-meta')beginRemoteNativeScreen(value,channel);else if(value.t==='native-screen-audio'){if(value.active){remoteNativeScreenExpected=true;screenAudioDebug=' · audio received';scheduleRemoteShareAudioBind();if(remoteScreenExpected)screenStatus.textContent='Friend sharing'+screenAudioDebug}else if(remoteScreenExpected){screenAudioDebug=' · sound unavailable';screenStatus.textContent='Friend sharing'+screenAudioDebug}}else if(value.t==='native-screen-live'){const live=channel._nativeReceive;if(live){live.liveCapable=true;live.lastLiveAt=performance.now()}}else if(value.t==='native-screen-end'){cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true,keepVideo:true});if(remoteScreen.srcObject){prepareShareSurface(remoteScreen);playShareVideo(remoteScreen)}else if(!remoteScreenExpected)clearRemoteScreenShare()}}catch{}return}if(!channel._nativeReceive)holdNativeScreenPreMeta(channel,event.data);else receiveNativeScreenPacket(channel,event.data)};channel.onclose=()=>{channel._nativePreMeta=[];clearNativeScreenReceiveState(channel);if(remoteNativeScreenChannel===channel){cleanupRemoteNativeScreen({keepChannel:true,keepAudio:true,keepVideo:true});if(remoteScreen.srcObject){prepareShareSurface(remoteScreen);playShareVideo(remoteScreen)}else if(!remoteScreenExpected)clearRemoteScreenShare()}};if(pendingRemoteNativeMeta){const held=pendingRemoteNativeMeta;pendingRemoteNativeMeta=null;beginRemoteNativeScreen(held,channel)}return}
   nativeScreenChannel=channel;channel.onmessage=event=>{if(typeof event.data!=='string'||event.data.length>64*1024)return;try{const value=JSON.parse(event.data);if(value.t==='native-screen-ready'){channel._nativePeerProtocol=Math.max(0,Math.min(16,Number(value.transportVersion)||0));if(channel._nativePeerProtocol>=NATIVE_SCREEN_PROTOCOL)settleNativeScreenReady(channel,true)}else if(value.t==='native-screen-fallback')fallbackNativeScreenToWebRtc(channel._nativeSend?.sessionId)}catch{}};channel.onclose=()=>settleNativeScreenReady(channel,false);
 }
 async function waitNativeScreenChannel(channel){if(channel.readyState==='open')return true;return new Promise(resolve=>{let done=false;const finish=value=>{if(done)return;done=true;clearTimeout(timer);channel.removeEventListener('open',opened);channel.removeEventListener('close',closed);resolve(value)};const opened=()=>finish(true),closed=()=>finish(false),timer=setTimeout(()=>finish(false),5000);channel.addEventListener('open',opened,{once:true});channel.addEventListener('close',closed,{once:true})})}
@@ -4974,6 +5042,7 @@ async function attachNativeShareAudio(gen){
 async function pumpNativeScreen(gen,session,channel){
   let preview=nativeLocalPlayer?.mode!=='placeholder',emptyReads=0,sendFails=0;
   void attachNativeShareAudio(gen);
+  startNativeScreenLiveBeat(()=>[channel],()=>screenActive&&gen===screenGen&&nativeScreenSession?.id===session.id);
   while(screenActive&&gen===screenGen&&nativeScreenSession?.id===session.id){
     const queued=[];
     if(typeof window.pairNativeScreen.readMany==='function'){for(;;){const batch=await window.pairNativeScreen.readMany(session.id,{maxItems:NATIVE_SCREEN_DRAIN_ITEMS,maxBytes:NATIVE_SCREEN_DRAIN_BYTES});if(Array.isArray(batch?.items)&&batch.items.length){queued.push(...batch.items);continue}if(batch&&!batch.active){if(batch.error){screenStatus.textContent='Native share interrupted: '+batch.error;logCallEvent('Diag: native readMany inactive · '+batch.error)}}break}}

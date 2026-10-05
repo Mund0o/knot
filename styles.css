@@ -1093,3 +1093,18 @@ html[data-theme] .screen-tile,html[data-theme] .screen-tile video,html[data-them
 .server-voice-stage .watch-mount:has(.watch-together:not([hidden])){position:relative;z-index:6;padding:58px 16px 0}
 .server-voice-stage .watch-mount:has(.watch-together:not([hidden]))+.server-stage-members{height:auto;min-height:330px;padding-top:18px}
 .server-voice-stage .watch-bar{pointer-events:auto}
+
+/* Buffering view: a ring of running cats over the last frame a stalled share showed. */
+.share-buffering{position:absolute;inset:0;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(5,6,9,.4);pointer-events:none;animation:knot-buffering-in .25s ease both}
+.share-buffering[hidden]{display:none}
+.share-buffering-ring{width:clamp(72px,16%,132px);aspect-ratio:1;animation:knot-cat-orbit 1.6s linear infinite;filter:drop-shadow(0 2px 6px rgba(0,0,0,.55))}
+.share-buffering-ring svg{display:block;width:100%;height:100%;overflow:visible}
+.share-buffering-label{font:600 13px/1.2 system-ui,sans-serif;letter-spacing:.02em;color:#e8eaf1;text-shadow:0 1px 4px rgba(0,0,0,.75)}
+.share-buffering .cat{animation:knot-cat-bob .3s ease-in-out infinite alternate}
+.share-buffering .leg{transform-box:fill-box;transform-origin:50% 0;animation:knot-cat-leg .3s ease-in-out infinite alternate}
+.share-buffering .leg-b{animation-delay:-.3s}
+@keyframes knot-cat-orbit{to{transform:rotate(360deg)}}
+@keyframes knot-cat-leg{from{transform:rotate(32deg)}to{transform:rotate(-32deg)}}
+@keyframes knot-cat-bob{from{transform:translateY(0)}to{transform:translateY(-1.2px)}}
+@keyframes knot-buffering-in{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.share-buffering-ring,.share-buffering .cat,.share-buffering .leg{animation:none}}
