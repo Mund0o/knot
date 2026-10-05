@@ -1,11 +1,11 @@
 {
-  "version": "1.1.123",
-  "notes": "A friend's share now shows its fps, bitrate and decoder, and whether sound is really playing; stuck share sound restarts itself; NVIDIA GPU decoding that can't keep up switches to the CPU, with a switch in Settings.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.123/pair-p2p-1.1.123.tar.gz",
-  "linuxSha256": "eb52de85bb1970abf574a096e9e67a1764563c44b9cbe1c6e6d61d6e848479d5",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.123/Knot-1.1.123.AppImage",
-  "linuxAppImageSha256": "55756da69ae03e1708e9db25c19a2143f850a1da4ae174c20b1f76f3d56dc81e",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.123/Knot.Setup.1.1.123.exe",
-  "winSha256": "506d04a24519618c28bc99394d22a9d2255fc67f010c33994868eff16d76e6d7",
-  "signature": "b4ZQO16jdvE2HLpNY8dtu79wmasqGcDN18M6cmp64+gOi3a4wl5Bc4IB6MHXv3BO9DNRoU4qrU0Vj6VWR70lDw=="
+  "version": "1.1.124",
+  "notes": "A friend's share that can't get its first picture through now switches to a compatibility share after 12 seconds instead of hanging.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.124/pair-p2p-1.1.124.tar.gz",
+  "linuxSha256": "67e5bd55f9efefbee70a8a286bd58bf5cf52cc0cb5a2926b36d3b1d9cc96a738",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.124/Knot-1.1.124.AppImage",
+  "linuxAppImageSha256": "169c62e3c963fc06cea0af779543305f65f002177b90e097a1728a208df6ca43",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.124/Knot.Setup.1.1.124.exe",
+  "winSha256": "ea4ce4ca180f5f1842024d3234c520317bdaf1e6c4e22f1d6eaccf6c7726b515",
+  "signature": "mVjTCopNT+E2HOKSbQ/X6vL+LPzNE2VL7ToW57r2l7bW4LSh+jvDtU8W7+9xovrWnoSrgXMslWpViN149jbDAw=="
 }
