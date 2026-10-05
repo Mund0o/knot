@@ -1323,6 +1323,11 @@ app.whenReady().then(async () => {
     callback(pairRendererPermission(webContents, permission,details));
   });
   session.defaultSession.setPermissionCheckHandler((webContents, permission,_origin,details) => pairRendererPermission(webContents, permission,details));
+// Watch Together's YouTube player is refused without a Referer (Error 153), and
+// a file:// page sends none. Only the embed frame request is touched.
+session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['https://www.youtube-nocookie.com/embed/*', 'https://www.youtube.com/embed/*'] }, (details, callback) => {
+  callback({ requestHeaders: require('./watch-together').embedRequestHeaders(details) });
+});
   // Required for navigator.mediaDevices.getDisplayMedia() in Electron 28+.
   // Without this handler the API throws "Not supported".
   // System audio is deliberately not granted here. Chromium "loopback" captures

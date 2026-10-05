@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { youtubeVideoId, watchEmbedUrl, mediaTime, drifted, watchRoom, cleanWatchMessage, newerWatch, hashPrefix } = require('../watch-together');
+const { youtubeVideoId, watchEmbedUrl, embedRequestHeaders, EMBED_REFERRER, mediaTime, drifted, watchRoom, cleanWatchMessage, newerWatch, hashPrefix } = require('../watch-together');
 
 assert.strictEqual(youtubeVideoId('https://youtu.be/dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
 assert.strictEqual(youtubeVideoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'dQw4w9WgXcQ');
@@ -16,6 +16,29 @@ assert.ok(embed.includes('autoplay=1'));
 assert.ok(embed.includes('start=83'));
 assert.ok(embed.includes('controls=0'));
 assert.strictEqual(watchEmbedUrl('bad'), '');
+
+// The embed frame needs an https Referer or YouTube shows Error 153.
+const frame = { url: embed, resourceType: 'subFrame', requestHeaders: { 'User-Agent': 'Knot', Accept: '*/*' } };
+const withReferer = embedRequestHeaders(frame);
+assert.strictEqual(withReferer.Referer, EMBED_REFERRER);
+assert.ok(/^https:\/\//.test(EMBED_REFERRER));
+assert.strictEqual(withReferer['User-Agent'], 'Knot');
+assert.ok(!('Referer' in frame.requestHeaders), 'the original header object must not be modified');
+assert.strictEqual(embedRequestHeaders({ ...frame, url: 'https://www.youtube.com/embed/dQw4w9WgXcQ?x=1' }).Referer, EMBED_REFERRER);
+assert.strictEqual(embedRequestHeaders({ ...frame, requestHeaders: { referer: 'https://example.com/a' } }).referer, 'https://example.com/a');
+assert.ok(!('Referer' in embedRequestHeaders({ ...frame, requestHeaders: { referer: 'https://example.com/a' } })), 'an existing https Referer is kept as it is');
+const replaced = embedRequestHeaders({ ...frame, requestHeaders: { Referer: 'file:///app/index.html' } });
+assert.strictEqual(replaced.Referer, EMBED_REFERRER, 'a non-https Referer is replaced');
+for (const other of [
+  { ...frame, resourceType: 'xhr' },
+  { ...frame, resourceType: 'mainFrame' },
+  { ...frame, url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+  { ...frame, url: 'https://evil.example/embed/dQw4w9WgXcQ' },
+  { ...frame, url: 'http://www.youtube.com/embed/dQw4w9WgXcQ' },
+  { ...frame, url: 'https://www.youtube.com.evil.example/embed/dQw4w9WgXcQ' },
+  { ...frame, url: 'not a url' },
+]) assert.ok(!('Referer' in embedRequestHeaders(other)), 'only the YouTube embed frame request may be given a Referer: ' + other.url + ' ' + other.resourceType);
+assert.deepStrictEqual(embedRequestHeaders(undefined), {});
 
 assert.strictEqual(mediaTime({ playing: false, time: 12, at: 0 }, 5000), 12);
 assert.ok(Math.abs(mediaTime({ playing: true, time: 10, at: 1000 }, 3500) - 12.5) < 0.001);

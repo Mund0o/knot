@@ -1108,3 +1108,15 @@ html[data-theme] .screen-tile,html[data-theme] .screen-tile video,html[data-them
 @keyframes knot-cat-bob{from{transform:translateY(0)}to{transform:translateY(-1.2px)}}
 @keyframes knot-buffering-in{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.share-buffering-ring,.share-buffering .cat,.share-buffering .leg{animation:none}}
+
+/* Microphone toggle: a plain mic while the mic is live, the same mic crossed out while it is muted. */
+.mic-toggle .mic-off{display:none}
+.mic-toggle.active .mic-on{display:none}
+.mic-toggle.active .mic-off{display:block}
+.server-voice-actions .mic-toggle.active,.server-stage-controls .mic-toggle.active{color:#ff8087;box-shadow:inset 0 0 0 1px rgba(255,128,135,.5)}
+.server-stage-controls .mic-toggle.active{box-shadow:inset 0 0 0 1px rgba(255,128,135,.5),0 7px 18px rgba(0,0,0,.3)}
+
+/* Screen share toggle: a monitor with an up arrow while idle, a monitor with a stop square while sharing. */
+.share-toggle .share-off{display:none}
+.share-toggle.active .share-on{display:none}
+.share-toggle.active .share-off{display:block}

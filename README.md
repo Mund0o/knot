@@ -13,8 +13,8 @@ encrypted on-device; offline direct- and group-DM ciphertext is held for up to
 30 days in a bounded mailbox and deleted separately for each recipient after
 their device decrypts and acknowledges it.
 Cloudflare never receives the message keys or readable text. Calls and screen
-shares create direct WebRTC connections only when used. Files prefer authenticated
-direct TCP and then direct WebRTC. The optional SFU and encrypted object-relay
+shares create direct WebRTC connections only when used. Files travel over the
+encrypted direct WebRTC connection, with no port forwarding. The optional SFU and encrypted object-relay
 adapters are feature-flagged off in `wrangler.jsonc`; see
 [`docs/deployment-envelope.md`](docs/deployment-envelope.md). Screen shares appear beside their owners and open
 into a single focused viewer; use a stream's context menu to stop watching
@@ -302,9 +302,9 @@ TURN only relays already-encrypted WebRTC bytes (DTLS-SRTP); it cannot read any 
 Files are sliced into independently authenticated chunks. WebRTC uses an adaptive
 8–48 MiB send window with a bounded 32 MiB encryption look-ahead; receiving is
 capped at 64 MiB per transfer and 96 MiB across active transfers before
-backpressure stops the sender. The native TCP lane adds mutual one-time-key
-authentication, replay-ordered AEAD frames, and a bounded 48 MiB renderer handoff.
-The whole file is never loaded into memory during a normal direct send or desktop
+backpressure stops the sender. Files no longer use a TCP lane: it needed a forwarded
+router port and delayed every first transfer, so Knot refuses a TCP offer from an older
+version and carries on over the direct connection. The whole file is never loaded into memory during a normal direct send or desktop
 receive. Receiving very large files requires a Chromium browser with the File
 System Access API or the Knot app's durable temporary-file/atomic-rename path;
 the in-memory browser fallback is limited to 64 MiB. The 200 GiB direct-transfer

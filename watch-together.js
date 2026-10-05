@@ -41,6 +41,25 @@
     return 'https://www.youtube-nocookie.com/embed/' + id + '?' + params.toString();
   }
 
+  // YouTube answers an embed that arrives without a Referer with "Video player
+  // configuration error" (Error 153) and refuses to play it. Knot's page is a
+  // file:// URL, which never sends one, so the main process gives the embed frame
+  // an identifying https Referer instead.
+  const EMBED_REFERRER = 'https://github.com/Mund0o/knot';
+  const EMBED_HOSTS = new Set(['www.youtube-nocookie.com', 'www.youtube.com']);
+
+  function embedRequestHeaders(details) {
+    const headers = { ...(details?.requestHeaders || {}) };
+    let url;
+    try { url = new URL(String(details?.url || '')); } catch { return headers; }
+    if (details?.resourceType !== 'subFrame' || url.protocol !== 'https:' || !EMBED_HOSTS.has(url.hostname) || !url.pathname.startsWith('/embed/')) return headers;
+    const names = Object.keys(headers).filter(name => name.toLowerCase() === 'referer');
+    if (names.some(name => /^https:\/\//i.test(String(headers[name])))) return headers;
+    for (const name of names) delete headers[name];
+    headers.Referer = EMBED_REFERRER;
+    return headers;
+  }
+
   function mediaTime(state, now = Date.now()) {
     const time = Math.max(0, Number(state?.time) || 0);
     if (!state?.playing) return time;
@@ -137,6 +156,8 @@
   return {
     youtubeVideoId,
     watchEmbedUrl,
+    embedRequestHeaders,
+    EMBED_REFERRER,
     mediaTime,
     drifted,
     watchRoom,

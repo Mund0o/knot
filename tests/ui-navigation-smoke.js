@@ -372,6 +372,22 @@ app.whenReady().then(async () => {
       const startSymbol=document.querySelector('#icon-call-start'),endSymbol=document.querySelector('#icon-call-end'),hangupUses=[...document.querySelectorAll('#serverVoiceHangup use,#dmVoiceHangup use,#serverStageLeave use')];assert(startSymbol&&endSymbol&&startSymbol.innerHTML!==endSymbol.innerHTML&&hangupUses.length===3&&hangupUses.every(use=>use.getAttribute('href')==='#icon-call-end'),'start and hang-up controls do not use distinct canonical SVG icons');renderCallButtonState('end','End call','End voice call');assert(document.querySelector('#callBtn').dataset.callState==='end'&&document.querySelector('[data-call-icon="start"]').hidden&&!document.querySelector('[data-call-icon="end"]').hidden&&document.querySelector('#callBtn').getAttribute('aria-label')==='End voice call','central call control did not render its explicit end-call state');renderCallButtonState('start','Start call','Start voice call');assert(!document.querySelector('[data-call-icon="start"]').hidden&&document.querySelector('[data-call-icon="end"]').hidden,'central call control did not restore its distinct start-call icon');
       document.querySelector('#serverVoiceMute').click();
       assert(!voiceTrack.enabled&&serverVoiceMuted,'server mute control did not mute the microphone');
+      {
+        // A plain microphone while live, the same microphone crossed out while muted, on every mute control.
+        const shown=(button,selector)=>getComputedStyle(button.querySelector(selector)).display!=='none';
+        const micIs=(muted)=>['#serverVoiceMute','#serverStageMute'].every(id=>{const button=document.querySelector(id);return button.classList.contains('active')===muted&&shown(button,'.mic-on')===!muted&&shown(button,'.mic-off')===muted&&button.getAttribute('aria-label')===(muted?'Unmute microphone':'Mute microphone')});
+        assert(micIs(true),'a muted mic control does not show the crossed-out microphone');
+        document.querySelector('#serverVoiceMute').click();
+        assert(micIs(false),'an unmuted mic control does not show the plain microphone');
+        document.querySelector('#serverVoiceMute').click();
+        assert(micIs(true),'muting again did not restore the crossed-out microphone');
+        const micButtons=[...document.querySelectorAll('#serverVoiceMute,#dmVoiceMute,#serverStageMute')];
+        assert(micButtons.length===3&&micButtons.every(button=>!button.textContent.includes('♩')&&button.querySelector('.mic-on use')?.getAttribute('href')==='#icon-mic'&&button.querySelector('.mic-off use')?.getAttribute('href')==='#icon-mic-off'),'a mic control still uses the note glyph or the wrong icons');
+        assert(document.querySelector('#icon-mic')&&document.querySelector('#icon-mic-off')&&document.querySelector('#icon-screen-share')&&document.querySelector('#icon-screen-stop'),'the mic or screen-share icon symbols are missing');
+        const shareButtons=[...document.querySelectorAll('#serverVoiceShare,#dmVoiceShare,#serverStageShare')];
+        assert(shareButtons.length===3&&shareButtons.every(button=>button.querySelector('.share-on use')?.getAttribute('href')==='#icon-screen-share'&&button.querySelector('.share-off use')?.getAttribute('href')==='#icon-screen-stop'),'a share control does not use the screen-share icons');
+        for(const button of shareButtons){assert(shown(button,'.share-on')&&!shown(button,'.share-off'),'an idle share control does not show the share icon');button.classList.add('active');assert(!shown(button,'.share-on')&&shown(button,'.share-off'),'a sharing control does not show the stop icon');button.classList.remove('active')}
+      }
       await selectServerChannel(serverId,generalId);
       assert(joinedVoiceChannelId===voiceId&&!document.querySelector('#serverVoiceDock').hidden,'opening text disconnected server voice');
       const browseServerId='88888888888888888888888888888888',browseChannelId='99999999999999999999999999999999';

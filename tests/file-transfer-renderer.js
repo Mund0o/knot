@@ -139,6 +139,23 @@ app.whenReady().then(async () => {
       assert(FILE_ACCEPT_TIMEOUT===5*60*1000&&FILE_RECEIPT_TIMEOUT===10*60*1000,'human/save durability timeouts regressed');
       assert(negotiatedFileChunkSize(64*1024)<=64*1024-FILE_FRAME_RESERVE_BYTES,'64 KiB SCTP peer was given an oversized plaintext chunk');
 
+      // Files use the encrypted direct connection only. The settings page offers no TCP, and a friend on an
+      // older Knot that offers a TCP lane is refused at once without opening a listening port.
+      {
+        const panel=document.querySelector('[data-settings-page="transfers"]');
+        assert(panel&&!/\\bTCP\\b/i.test(panel.textContent),'file transfer settings still mention TCP');
+        assert(!document.querySelector('#fileTransport')&&!document.querySelector('#tcpListenPort'),'file transfer settings still offer a transport or a TCP port');
+        const fixture=await bind();
+        let listened=0;const realListen=window.pairDirectFile.listen;window.pairDirectFile.listen=async()=>{listened++;return{ok:true,port:8787}};
+        try{
+          const token='ab'.repeat(24);
+          await onFileFrame({data:JSON.stringify({t:'tcp-prepare',token,port:8787})},false,fixture.context);
+          assert(listened===0,'a TCP offer opened a listening port');
+          assert(controls(fixture.bus).some(value=>value.t==='tcp-unavailable'&&value.token===token),'a TCP offer was not refused');
+          await onFileFrame({data:JSON.stringify({t:'tcp-prepare',token:'bad'})},false,fixture.context);
+          assert(controls(fixture.bus).filter(value=>value.t==='tcp-unavailable').length===1,'an invalid TCP offer was answered');
+        }finally{window.pairDirectFile.listen=realListen}
+      }
       // Auto TCP probing happens alongside the human accept/save step. A dead
       // firewall port must not delay the offer card itself by five seconds, and
       // the resolved WebRTC fallback must be announced before binary chunks.
