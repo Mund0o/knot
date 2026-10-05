@@ -1,11 +1,11 @@
 {
-  "version": "1.1.124",
-  "notes": "A friend's share that can't get its first picture through now switches to a compatibility share after 12 seconds instead of hanging.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.124/pair-p2p-1.1.124.tar.gz",
-  "linuxSha256": "67e5bd55f9efefbee70a8a286bd58bf5cf52cc0cb5a2926b36d3b1d9cc96a738",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.124/Knot-1.1.124.AppImage",
-  "linuxAppImageSha256": "169c62e3c963fc06cea0af779543305f65f002177b90e097a1728a208df6ca43",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.124/Knot.Setup.1.1.124.exe",
-  "winSha256": "ea4ce4ca180f5f1842024d3234c520317bdaf1e6c4e22f1d6eaccf6c7726b515",
-  "signature": "mVjTCopNT+E2HOKSbQ/X6vL+LPzNE2VL7ToW57r2l7bW4LSh+jvDtU8W7+9xovrWnoSrgXMslWpViN149jbDAw=="
+  "version": "1.1.125",
+  "notes": "A weak connection now buffers (ring of running cats over the last frame) instead of dropping a share to a lower codec or smaller picture. Both of you need this version.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.125/pair-p2p-1.1.125.tar.gz",
+  "linuxSha256": "8890f61583f2a47ca36b4628d792bb80f22212f56859d433d75dbd35ceffb7a1",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.125/Knot-1.1.125.AppImage",
+  "linuxAppImageSha256": "1aeca31dd776da70fde98396d8bb8af0d8a717179f472effa071a3f84cadbee6",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.125/Knot.Setup.1.1.125.exe",
+  "winSha256": "0cb5641df9272b5b7ffbc6148989ed1bab09ce3fde8fd188ffa4e6d71216ef66",
+  "signature": "DaD/0K/MIxQdOfxLwYzYHR9+ClKruUBNJntLgPZ66p56wDmud/3KPIlyXMCiR0DYWwa+nl3OTy01nKZSx+VgAA=="
 }
