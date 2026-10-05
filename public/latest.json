@@ -1,11 +1,11 @@
 {
-  "version": "1.1.125",
-  "notes": "A weak connection now buffers (ring of running cats over the last frame) instead of dropping a share to a lower codec or smaller picture. Both of you need this version.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.125/pair-p2p-1.1.125.tar.gz",
-  "linuxSha256": "8890f61583f2a47ca36b4628d792bb80f22212f56859d433d75dbd35ceffb7a1",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.125/Knot-1.1.125.AppImage",
-  "linuxAppImageSha256": "1aeca31dd776da70fde98396d8bb8af0d8a717179f472effa071a3f84cadbee6",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.125/Knot.Setup.1.1.125.exe",
-  "winSha256": "0cb5641df9272b5b7ffbc6148989ed1bab09ce3fde8fd188ffa4e6d71216ef66",
-  "signature": "DaD/0K/MIxQdOfxLwYzYHR9+ClKruUBNJntLgPZ66p56wDmud/3KPIlyXMCiR0DYWwa+nl3OTy01nKZSx+VgAA=="
+  "version": "1.1.126",
+  "notes": "YouTube links play in Watch Together, clean mic and share icons, no more hearing a share you aren't watching, and file transfers now use the encrypted direct connection only (TCP removed).",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.126/pair-p2p-1.1.126.tar.gz",
+  "linuxSha256": "9b293710161d5330a2af153be30b0bcd34169ab0ddff13347b1b38483719974b",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.126/Knot-1.1.126.AppImage",
+  "linuxAppImageSha256": "00b371a0d185b01365d52532dd92d7dbf1fad2674d97e53ff757eee6f159c387",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.126/Knot.Setup.1.1.126.exe",
+  "winSha256": "bd08a8e4688e2a16fdf21e586e315238f36fb9da1c0d965003d9040b9bec7e43",
+  "signature": "XckSEsF9mnjOHqKv8LhB9K90VlmJB6HTK8TN2k/SGY/pF3EouZFRbUZBW49NDhaHGUViJd5xjP6LhuK3dF6nDQ=="
 }
