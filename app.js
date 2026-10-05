@@ -4795,6 +4795,12 @@ function scheduleRemoteShareAudioBind(){
 // arrive, and a standard WebRTC share would cross the same link, so wait for a
 // key picture before blaming the decoder.
 const NATIVE_FIRST_PICTURE_GRACE_MS=4000;
+// Waiting for a key picture has to end. A link that cannot carry the first AV1
+// key picture (the sharer drops keys it cannot send, and the unordered channel
+// abandons a large key when one part is lost) never delivers it, and the sharer
+// only gives up AV1 for an older peer, so both sides waited forever. The
+// compatibility share is bandwidth-capped and restarts without the picker.
+const NATIVE_FIRST_KEY_CEILING_MS=12000;
 function armNativeScreenArrive(startedAt=performance.now()){
   clearTimeout(remoteNativeArriveTimer);
   remoteNativeArriveTimer=setTimeout(()=>{
@@ -4802,6 +4808,12 @@ function armNativeScreenArrive(startedAt=performance.now()){
     const stats=nativeRemotePlayer?.stats?.()||{},receive=remoteNativeScreenChannel?._nativeReceive;
     if(nativeRemotePlayer&&(Number(stats.paintedFrames)||0)>0)return;
     if(!receive?.firstKeyAt||performance.now()-receive.firstKeyAt<NATIVE_FIRST_PICTURE_GRACE_MS){
+      if(!receive?.firstKeyAt&&performance.now()-startedAt>=NATIVE_FIRST_KEY_CEILING_MS){
+        screenStatus.textContent='Friend’s AV1 share is not getting through · asking for a compatibility share';
+        if(receive)requestNativeReceiveFallback(receive,new Error('No AV1 key picture arrived'));
+        else try{send({t:'native-screen-fallback'})}catch{}
+        return;
+      }
       if(performance.now()-startedAt>=2500)screenStatus.textContent='Friend’s screen is loading slowly · waiting for the first picture';
       armNativeScreenArrive(startedAt);return;
     }
