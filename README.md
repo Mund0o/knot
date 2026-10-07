@@ -13,8 +13,9 @@ encrypted on-device; offline direct- and group-DM ciphertext is held for up to
 30 days in a bounded mailbox and deleted separately for each recipient after
 their device decrypts and acknowledges it.
 Cloudflare never receives the message keys or readable text. Calls and screen
-shares create direct WebRTC connections only when used. Files travel over the
-encrypted direct WebRTC connection, with no port forwarding. The optional SFU and encrypted object-relay
+shares create direct WebRTC connections only when used. Files travel over a fast UDP
+connection when both networks allow it and over the encrypted direct WebRTC connection
+otherwise, with no port forwarding. The optional SFU and encrypted object-relay
 adapters are feature-flagged off in `wrangler.jsonc`; see
 [`docs/deployment-envelope.md`](docs/deployment-envelope.md). Screen shares appear beside their owners and open
 into a single focused viewer; use a stream's context menu to stop watching
@@ -84,27 +85,57 @@ chooses **Download & install**.
 
 ## Screen sharing architecture
 
-Knot keeps screen video, computer sound, and voice on separate WebRTC paths.
-The share dialog explicitly selects the source, resolution, frame rate, and
-sound setting before Go Live. A selected 4K60 stream starts and remains at
-3840×2160/60 instead of stepping through lower resolutions; congestion is
-reported and stale frames may be discarded, but the selected dimensions are
-not changed. Chromium shares prefer broadly hardware-accelerated codecs and
-retain retransmission/FEC support under a user-controlled bitrate ceiling.
+Screen video, computer sound, and voice travel separately. The share dialog
+selects the source, resolution, frame rate, and sound setting before Go Live;
+a 4K60 share starts and stays at 3840×2160/60.
 
-Native AV1 keeps 3840×2160 capture at 60 fps while targeting about 16 Mbps so
-fine motion has more detail. NVENC uses spatial adaptive quantization without
-lookahead so visible block edges receive better allocation without buffering
-future frames, while strict GOP rate control contains scene-change bursts.
-Native capture follows changing content instead of
-manufacturing duplicate frames when a heavy game misses a deadline, and emits
-each encoded frame as its own live WebM cluster instead of an eight-frame burst.
-Its low-priority, unordered, one-retransmit
-transport uses a 1 MiB segment-aware admission budget, drops stale deltas, and
-recovers at 150 ms keyframes. Mic audio remains high
-priority. Congestion stays on efficient AV1; only a decoder failure or
-incompatible client switches that viewer to a bandwidth-capped compatibility
-codec without changing the chosen resolution.
+**Nothing is lowered for the connection.** Knot never changes the codec,
+resolution, frame rate, or bitrate of a share because of how a link is doing.
+The quality is decided by what the sharer's computer can really encode. If a
+viewer's connection cannot keep up, that viewer waits behind a buffering view
+(running cats over the last picture) and catches up when the link allows; the
+picture is never made worse for them. The starting bitrate is sized from the
+speed test and the viewer's reported capacity, and is fixed from then on.
+
+**Capture and encode** happen once per share. On Linux with a discrete NVIDIA
+or AMD GPU and GPU Screen Recorder, the GPU encodes AV1 for the whole share
+(NVENC or VA-API, constant bitrate, a key picture every two seconds, which at
+the same bitrate buys noticeably more detail than a very short key interval).
+Everywhere else (Windows, other Linux machines, or a codec the sharer asked
+for), the browser captures the screen and Knot encodes it in the page with
+WebCodecs: AV1, H.264 or VP9, hardware first, whichever the computer can
+actually sustain at the chosen size and rate (measured at start, in about a
+second or two). If the machine cannot keep up with the chosen rate, the share
+says so; the network is never consulted.
+
+**Delivery** is a numbered list of encoded pictures, delivered whole and in
+order. Each viewer gets them over a data channel at once and, as soon as the
+two Knots have punched a UDP path through their NATs, over an authenticated,
+encrypted UDP lane (the same one-time token, mutual proof and AES-GCM framing
+as the file lane). Pictures are acknowledged, resent after a lost lane, and
+de-duplicated if two lanes carry the same one. The sharer keeps everything a
+viewer has not yet acknowledged (capped at 384 MiB shared by all viewers); a
+viewer more than 45 seconds behind is moved up to the live picture, told what
+it missed, and the jump is counted. A still screen sends no pictures, so the
+sharer says "still here" ten times a second and the viewer can tell a quiet
+screen from a dead link.
+
+**Viewing** decodes with WebCodecs (the hardware decoder first; the software
+decoder only if the hardware one rejects the stream or produces nothing) and
+draws on a canvas at the display's refresh. The picture plays 250 ms behind the
+newest one, a little longer after the link has stalled, runs at most 1.15× to
+catch up, and jumps to live only when it is more than four seconds behind. A
+group share has one host and one viewer per friend who chooses to watch; nobody
+who is not watching is sent anything.
+
+The **Optimize for** choice (Game or Desktop) is only a hint to the encoder about what it is looking at, and never changes the size or rate. Desktop turns on AV1's screen-content tools when the share is AV1 (measured: about half the bits and better quality on text); other codecs are left alone because the hint made them worse.
+
+**Sound** keeps its own WebRTC path (a reserved stereo Opus sender per call or
+per group peer). The viewer holds it back by the picture's delay so lips and
+clicks stay together.
+
+Knots before this design cannot show these shares and say so; they need to
+update.
 
 On Windows, shared computer sound comes from process-loopback capture. Both
 application and display shares capture desktop playback while excluding Knot's
@@ -118,28 +149,22 @@ for compositing, image and canvas rasterization, zero-copy tile presentation,
 WebGL/WebGPU, and supported video encode/decode paths. Software 3D rasterization
 is disabled in this mode. On Linux systems with both integrated and discrete
 graphics, Knot excludes the integrated render node, pins Chromium and VA-API to
-the main discrete card, and uses NVENC on NVIDIA or VA-API on AMD for its native
-GPU-only AV1 screen route. The 4K60 route measures segment-arrival-to-presentation
-latency, targets about 110 ms on WebCodecs, and caps live latency at
-260 ms without faster-than-display playback. If a Linux driver advertises AV1
-decoding but rejects or silently
-stalls on the stream, Knot retries with CPU decode as the necessary compatibility
-fallback while capture and encode remain on the discrete GPU. Decoded frames feed
-a generated video track directly into Chromium's compositor instead of copying
-every 4K frame through a renderer canvas. The sender's own preview never falls back to CPU AV1 decode;
-if hardware preview decode is unavailable, Knot shows a lightweight live-share
-placeholder. A receiver that cannot decode AV1 within the 260 ms ceiling requests
-H.264 rather than remaining black or accumulating stale frames.
-PipeWire capture import remains compositor-managed so Wayland screen shares
-continue to produce valid frames. Audio processing, encryption, networking,
-IPC, and file I/O stay on the CPU because Electron provides no dependable GPU
-implementation for those jobs.
+the main discrete card, and uses NVENC on NVIDIA or VA-API on AMD for the GPU
+screen recorder. PipeWire capture import remains compositor-managed so Wayland
+screen shares continue to produce valid frames. Audio processing, encryption,
+networking, IPC, and file I/O stay on the CPU because Electron provides no
+dependable GPU implementation for those jobs.
 
-`npm test` validates navigation, capture constraints, congestion-safe sender
-parameters, overload recovery, isolated audio delivery, H.264 transport, live
-AV1 decode, and two complete Knot app windows sharing 4K60 with voice over a
-bursty constrained uplink. Set `PAIR_TEST_4K60=1` when running an individual
-codec test to turn it into a strict local 4K60 hardware stress benchmark.
+`npm run test:share` covers the share engine: the wire format, the sender's and
+receiver's bookkeeping under reordering, loss and lane switches, the playout
+clock, real UDP lanes, the in-page encoder and decoder against bit-exact
+references, the Linux recorder (including that it never outlives Knot), the
+page-to-main-process bridge, and that every module loads as a plain script.
+`npm run test:share:e2e` runs real Knot apps against a local Worker: a share
+reaching the other window (checked against pixels from a screenshot, not just
+the canvas), sound held back with the picture, a stalled link showing the
+buffering view and recovering without lowering anything, data-channel-only
+delivery, the Linux recorder, and a three-person group share.
 
 Screen sharing settings include **Test isolated computer audio**. It exercises
 the same OS route used by a real share and reports the capture stage, format,
@@ -188,14 +213,18 @@ The repository includes three SQLite-backed Durable Object classes. `PairDirecto
 stores authenticated device identity, friend relationships, presence, server
 membership, content-addressed image references, and text/voice channel metadata.
 `PairDirectoryShardV2` holds versioned public directory records during a gradual
-dual-read/dual-write migration, and `PairRoom`
-coordinates ephemeral two-person WebRTC setup. The Worker rejects binary frames
+dual-read/dual-write migration. `PairRoom`
+is no longer used for friend calls (it stays for older clients): a call keeps no server
+state beyond one presence line per person, and its WebRTC setup travels through the
+directory socket's stateless relay. The Worker rejects binary frames
 and handles only authenticated, opaque client-encrypted text and group-key
 envelopes. Direct- and group-DM ciphertext uses a bounded 256-message/8 MiB
 mailbox per recipient with a 30-day TTL and is removed after recipient
 acknowledgement; server text and group-key envelopes remain live-only. It never relays files, video, or screen
-shares. The normal deployment has no R2 binding and no managed SFU secrets. After three failed direct attempts, it can optionally issue short-lived
-Cloudflare TURN credentials for a deliberately low-bitrate audio-only call.
+shares. The normal deployment has no R2 binding and no managed SFU secrets. When a direct path has not connected a few seconds after the two sides exchanged
+descriptions, the app can ask for short-lived Cloudflare TURN credentials and retry with the
+relay added (a call that connects directly never touches it); a relayed call is deliberately
+low-bitrate and audio-only.
 
 Cloudflare's Git build command is:
 
@@ -232,13 +261,39 @@ For localhost testing use `ws://localhost:8787`. For a remote peer, put this ser
 
 If Windows Firewall asks whether Node.js can accept connections, allow it on the intended network. If your ISP uses CGNAT, port forwarding will not work; you would need a public VPS or a VPN overlay.
 
+## How a DM call connects
+
+- **Ringing is presence, not a connection.** Pressing Call publishes one short
+  presence line (`call-presence`) to your friend and repeats it every 8 seconds
+  while you are in the call. Their Knot rings immediately, whether or not the
+  audio connection can be built yet, and whether or not they have your DM open.
+  Pressing Call while your friend is already in a call joins it. If you both
+  press at the same moment, the two calls merge into one.
+- **The connection is built while it rings.** Your Knot offers a WebRTC
+  connection straight away (voice, chat and files together) and your friend's
+  Knot answers it in the background, so by the time they press Join the
+  microphone only has to be attached. Network candidates are sent as they are
+  found instead of waiting for all of them.
+- **Either side can change the call at any time.** Offers and answers follow
+  the "perfect negotiation" pattern, so two changes at once (both starting a
+  share, both reconnecting) settle on their own, and every message is safe to
+  receive twice. Anything lost while Knot was offline is sent again when it
+  reconnects.
+- **Direct first, relay only if needed.** If nothing has connected about six
+  seconds after the two sides exchanged descriptions, the TURN relay is added
+  and ICE restarts once.
+- **No call state on the server.** Signalling uses the directory socket's
+  stateless relay; the Worker keeps nothing about the call. Between calls the
+  connection stays up for an instant redial but sends no audio.
+
 ## TURN fallback for restrictive networks
 
 WebRTC cannot always connect two peers on different home networks directly —
 symmetric NATs and restrictive firewalls can block direct ICE candidates. Knot
-tries a direct P2P connection three times. Only then does it offer a TURN
-fallback. In relay mode it forces low-bitrate Opus voice (24 kbps), disables
-file transfer and screen/video sharing, and uses relay-only ICE. Text remains
+tries a direct P2P connection first and sends its network candidates as they are
+found. If nothing has connected after about six seconds it adds the TURN relay and
+restarts ICE once. When the connection that results goes through the relay it forces
+low-bitrate Opus voice (24 kbps) and disables file transfer and screen/video sharing. Text remains
 on the separately encrypted Cloudflare mailbox/relay.
 
 ### Cloudflare Realtime TURN (recommended optional fallback)
@@ -267,7 +322,7 @@ WebRTC transport bytes, not chat plaintext or file contents.
 
 If you prefer not to use Cloudflare Realtime TURN, run a self-hosted TURN relay
 on the host's PC via Docker. Set `PAIR_TURN` in the desktop app on both devices;
-Knot uses it only after the same three direct attempts fail.
+Knot uses it only after the direct attempt has not connected.
 
 **One-time setup:**
 
@@ -304,7 +359,27 @@ Files are sliced into independently authenticated chunks. WebRTC uses an adaptiv
 capped at 64 MiB per transfer and 96 MiB across active transfers before
 backpressure stops the sender. Files no longer use a TCP lane: it needed a forwarded
 router port and delayed every first transfer, so Knot refuses a TCP offer from an older
-version and carries on over the direct connection. The whole file is never loaded into memory during a normal direct send or desktop
+version and carries on over the direct connection.
+
+### Fast UDP lane
+
+A WebRTC data channel is window-limited: over an 80 ms path it tops out near 14 Mbit/s
+and falls to about 1 Mbit/s at 1% packet loss, however fast the connection is. When both
+Knots support it, a transfer therefore runs over a UDX stream (reliable, congestion
+controlled UDP, `udx-native`) instead. The two Knots swap UDP endpoints over their
+authenticated WebRTC session, find their public addresses with STUN, punch through their
+NATs, and then run the same one-time-token handshake and AES-GCM framing as before over the
+stream, so UDX itself is trusted with nothing. The lane is probed while the receiver is
+still choosing whether to accept, and a transfer uses the WebRTC connection when the lane
+does not come up (a symmetric NAT, a blocked UDP path, an older Knot) or when **Settings →
+File transfers → Fast direct transfer (UDP)** is off.
+
+Measured through two emulated NAT routers at 80 ms round trip: 385 Mbit/s clean, 267 at
+2% loss and 147 at 5%, against 14, 0.8 and 0.6 for one WebRTC data channel. The first
+punches carry a TTL of 2 or 3 so they open each side's own router without reaching the
+other, and normal punches are released only once both sides have said they are armed;
+without that, a punch that arrives early makes a Linux NAT remap the sender's port and
+neither side reaches the other. The whole file is never loaded into memory during a normal direct send or desktop
 receive. Receiving very large files requires a Chromium browser with the File
 System Access API or the Knot app's durable temporary-file/atomic-rename path;
 the in-memory browser fallback is limited to 64 MiB. The 200 GiB direct-transfer

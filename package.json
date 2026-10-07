@@ -14,21 +14,15 @@
     "signal": "node server.js",
     "worker:dev": "wrangler dev",
     "worker:check": "wrangler deploy --dry-run",
-    "test:ui": "node tests/run-electron-smoke.js tests/ui-navigation-smoke.js && node tests/run-electron-smoke.js tests/group-dm-call-ui.js && node tests/run-electron-smoke.js tests/dm-call-join.js && node tests/run-electron-smoke.js tests/dm-outbox.js && node tests/run-electron-smoke.js tests/microphone-recovery.js && node tests/run-electron-smoke.js tests/watch-lan-ui.js && node tests/run-electron-smoke.js tests/screen-share-visible-smoke.js",
+    "test:ui": "node tests/run-electron-smoke.js tests/ui-navigation-smoke.js && node tests/run-electron-smoke.js tests/group-dm-call-ui.js && node tests/run-electron-smoke.js tests/dm-call-join.js && node tests/run-electron-smoke.js tests/dm-outbox.js && node tests/run-electron-smoke.js tests/microphone-recovery.js && node tests/run-electron-smoke.js tests/watch-lan-ui.js",
     "test:direct-file": "node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/file-transfer-preload-ipc.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js",
     "test:deepfilter": "node tests/run-electron-smoke.js tests/deepfilter-local-smoke.js",
-    "test:screen:h264": "node tests/run-electron-smoke.js tests/screen-quality-smoke.js --codec=H264",
-    "test:screen:av1": "node tests/run-electron-smoke.js tests/screen-quality-smoke.js --codec=AV1",
-    "test:screen:native": "node tests/run-electron-smoke.js tests/native-presentation-cadence.js && node tests/native-screen-live.js && node tests/run-electron-smoke.js tests/native-screen-transport.js",
-    "test:screen:visible": "node tests/run-electron-smoke.js tests/screen-share-visible-smoke.js",
-    "test:screen:full": "node tests/run-electron-smoke.js tests/full-app-screen-endurance.js",
-    "test:screen": "node tests/run-screen-suite.js",
     "test:windows-audio": "node tests/windows-audio-addon-guard.js && node tests/run-electron-smoke.js tests/windows-audio-renderer-smoke.js",
     "test:worker": "node tests/worker-offline-mailbox.js && node tests/presence-heartbeat.js && wrangler deploy --dry-run",
     "test:sfu": "node tests/realtime-sfu.js",
     "test:network": "node tests/network-conditioned-benchmarks.js",
-    "test:core": "node tests/settings-store.js && node tests/settings-crypto.js && node tests/history-store.js && node tests/local-metrics.js && node tests/save-streams.js && node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/watch-together.js && node tests/lan-house.js && node tests/ice-sdp.js && node tests/network-capacity.js && node tests/file-transfer-preload-ipc.js && node tests/run-electron-smoke.js tests/preload-sandbox-smoke.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js && node tests/signaling-policy.js && node tests/updater-security.js && node tests/publish-update.js && node tests/realtime-sfu.js",
-    "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-service.js && node tests/linux-share-audio-retry.js && node tests/run-electron-smoke.js tests/linux-gpu-runtime.js && node tests/run-electron-smoke.js tests/gpu-decode-check.js",
+    "test:core": "node tests/settings-store.js && node tests/settings-crypto.js && node tests/history-store.js && node tests/local-metrics.js && node tests/save-streams.js && node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/udx-lane.js && node tests/watch-together.js && node tests/lan-house.js && node tests/ice-sdp.js && node tests/call-control.js && node tests/share-core.js && node tests/share-playout.js && node tests/share-session.js && node tests/share-controller.js && node tests/share-bridge-ipc.js && node tests/share-browser-load.js && node tests/network-capacity.js && node tests/file-transfer-preload-ipc.js && node tests/run-electron-smoke.js tests/preload-sandbox-smoke.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js && node tests/signaling-policy.js && node tests/updater-security.js && node tests/publish-update.js && node tests/realtime-sfu.js",
+    "test:gpu": "node tests/linux-gpu-selection.js && node tests/gpu-acceleration-policy.js && node tests/native-screen-info.js && node tests/linux-share-audio-retry.js && node tests/run-electron-smoke.js tests/linux-gpu-runtime.js && node tests/run-electron-smoke.js tests/gpu-decode-check.js",
     "test": "npm run test:core && npm run test:emoji && npm run test:network && npm run test:worker && npm run test:windows-audio && npm run test:gpu && npm run test:ui && npm run test:screen",
     "test:emoji": "node tests/emoji-catalog.js && node tests/emoji-catalog-worker.js && node tests/emoji-packaging-readonly.js",
     "deploy": "wrangler deploy",
@@ -37,7 +31,9 @@
     "dist:all": "npm run verify:addon && electron-builder --win nsis --linux tar.gz AppImage",
     "rebuild:addon": "node rebuild-addon.js",
     "verify:addon": "node scripts/windows-audio-addon-guard.js",
-    "publish": "node publish-update.js"
+    "publish": "node publish-update.js",
+    "test:share": "node tests/share-core.js && node tests/share-playout.js && node tests/share-session.js && node tests/share-lane.js && node tests/share-controller.js && node tests/share-bridge-ipc.js && node tests/share-browser-load.js && node tests/share-capture-gsr.js && node tests/native-screen-info.js && node tests/run-electron-smoke.js tests/share-player.js && node tests/run-electron-smoke.js tests/share-player-4k.js && node tests/run-electron-smoke.js tests/share-player-gpu.js && node tests/run-electron-smoke.js tests/share-encoder.js",
+    "test:share:e2e": "node tests/e2e/shares.js"
   },
   "devDependencies": {
     "electron": "^43.2.0",
@@ -49,6 +45,7 @@
     "deepfilternet3-noise-filter": "1.3.0",
     "node-addon-api": "^8.5.0",
     "simple-rnnoise-wasm": "1.1.0",
+    "udx-native": "^1.21.3",
     "ws": "^8.18.3"
   },
   "build": {
@@ -72,6 +69,8 @@
       "gpu-acceleration.js",
       "native-video.js",
       "ice-sdp.js",
+      "call-control.js",
+      "call-link.js",
       "watch-together.js",
       "network-capacity.js",
       "lan-house.js",
@@ -92,7 +91,35 @@
       "updater.js",
       "update-signing.js",
       "linux-launcher.js",
-      "build/**/*"
+      "build/**/*",
+      "node_modules/udx-native/**/*",
+      "!node_modules/udx-native/prebuilds/android-*/**",
+      "!node_modules/udx-native/prebuilds/ios-*/**",
+      "!node_modules/udx-native/prebuilds/darwin-*/**",
+      "!node_modules/udx-native/prebuilds/linux-arm*/**",
+      "!node_modules/udx-native/prebuilds/win32-arm64/**",
+      "!node_modules/udx-native/binding.cc",
+      "!node_modules/udx-native/CMakeLists.txt",
+      "node_modules/b4a/**/*",
+      "node_modules/bare-addon-resolve/**/*",
+      "node_modules/bare-events/**/*",
+      "node_modules/bare-module-resolve/**/*",
+      "node_modules/bare-semver/**/*",
+      "node_modules/events-universal/**/*",
+      "node_modules/fast-fifo/**/*",
+      "node_modules/require-addon/**/*",
+      "node_modules/streamx/**/*",
+      "node_modules/text-decoder/**/*",
+      "udx-lane.js",
+      "share-wire.js",
+      "share-core.js",
+      "share-playout.js",
+      "share-player.js",
+      "share-encoder.js",
+      "share-session.js",
+      "share-controller.js",
+      "share-lane-runtime.js",
+      "share-capture-gsr.js"
     ],
     "linux": {
       "target": [
@@ -138,7 +165,10 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "runAfterFinish": "true"
-    }
+    },
+    "asarUnpack": [
+      "node_modules/udx-native/prebuilds/**/*"
+    ]
   },
   "allowScripts": {
     "electron@43.2.0": true,

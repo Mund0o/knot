@@ -99,6 +99,51 @@ async function rejects(promise, pattern) {
   events.emit('pair:directFileClose', {}, documentId, 'd'.repeat(32));
   assert.deepStrictEqual([opened, framed, closed], [1, 1, 1], 'stale or malformed native events reached renderer callbacks');
 
+  // The UDP lane bridge validates everything before it reaches the main process.
+  const udx = exposed.pairUdxLane;
+  assert(udx, 'the UDP lane bridge was not exposed');
+  const laneId = 'a1'.repeat(12), udxToken = 't'.repeat(48), udxKey = new Uint8Array(32).fill(5);
+  const remote = { streamId: 77, endpoints: [{ ip: '203.0.113.9', port: 41000, kind: 'srflx' }, { ip: '192.168.1.5', port: 41000, kind: 'host', extra: 'dropped' }] };
+  invoked.length = 0;
+  await udx.open();
+  assert.deepStrictEqual(invoked.pop(), ['pair:udxOpen', documentId]);
+  assert.strictEqual(await udx.register('bad', udxKey), false);
+  assert.strictEqual(await udx.register(udxToken, new Uint8Array(8)), false);
+  assert.strictEqual(invoked.length, 0, 'an invalid registration reached the main process');
+  await udx.register(udxToken, udxKey);
+  assert.strictEqual(invoked.at(-1)[0], 'pair:udxRegister');
+  const badEstablish = [
+    undefined, null, {}, { id: 'x', role: 'connect', token: udxToken, key: udxKey, remote },
+    { id: laneId, role: 'sideways', token: udxToken, key: udxKey, remote },
+    { id: laneId, role: 'connect', token: 'short', key: udxKey, remote },
+    { id: laneId, role: 'connect', token: udxToken, key: new Uint8Array(8), remote },
+    { id: laneId, role: 'connect', token: udxToken, key: udxKey },
+    { id: laneId, role: 'connect', token: udxToken, key: udxKey, remote: { streamId: 0, endpoints: remote.endpoints } },
+    { id: laneId, role: 'connect', token: udxToken, key: udxKey, remote: { streamId: 77, endpoints: [] } },
+    { id: laneId, role: 'connect', token: udxToken, key: udxKey, remote: { streamId: 77, endpoints: new Array(17).fill(remote.endpoints[0]) } },
+    { id: laneId, role: 'connect', token: udxToken, key: udxKey, remote: { streamId: 77, endpoints: [{ ip: 'example.com', port: 41000 }] } },
+    { id: laneId, role: 'connect', token: udxToken, key: udxKey, remote: { streamId: 77, endpoints: [{ ip: '203.0.113.9', port: 80 }] } },
+    { id: laneId, role: 'connect', token: udxToken, key: udxKey, remote: { streamId: 77, endpoints: [{ ip: '203.0.113.9', port: '41000' }] } },
+  ];
+  const before = invoked.length;
+  for (const bad of badEstablish) await rejects(udx.establish(bad), /Invalid UDP lane request/);
+  assert.strictEqual(invoked.length, before, 'an invalid establish reached the main process');
+  await udx.establish({ id: laneId, role: 'connect', token: udxToken, key: udxKey, remote, timeout: 8000, hold: 0 });
+  const udxConnectCall = invoked.at(-1);
+  assert.deepStrictEqual(udxConnectCall.slice(0, 5), ['pair:udxEstablish', documentId, laneId, 'connect', udxToken]);
+  assert.strictEqual(udxConnectCall[5].byteLength, 32, 'the session key was not forwarded for the connecting side');
+  assert.strictEqual(udxConnectCall[6].streamId, 77);
+  assert.deepStrictEqual(udxConnectCall[6].endpoints.map(item => Object.keys(item).sort().join()), ['ip,kind,port', 'ip,kind,port'], 'extra endpoint fields were forwarded');
+  assert.deepStrictEqual(udxConnectCall.slice(7), [8000, 0]);
+  await udx.establish({ id: laneId, role: 'accept', token: udxToken, key: udxKey, remote, timeout: 12000, hold: 30000 });
+  assert.strictEqual(invoked.at(-1)[5], null, 'the accepting side forwarded the session key');
+  assert.strictEqual(await udx.release('nope'), false);
+  await udx.release(laneId);
+  assert.deepStrictEqual(invoked.at(-1), ['pair:udxRelease', documentId, laneId]);
+  assert.strictEqual(udx.close('nope'), false);
+  assert.strictEqual(udx.close(laneId), true);
+  assert.deepStrictEqual(sent.pop(), ['pair:udxClose', documentId, laneId]);
+
   await save.start(7, 'safe.bin', 3);
   assert.deepStrictEqual(invoked.at(-1).slice(0, 5), ['pair:saveStart', documentId, 7, 'safe.bin', 3]);
   console.log('file-transfer preload IPC validation tests passed');

@@ -3,11 +3,11 @@
 const assert = require('assert');
 const {
   mbpsFrom, effectiveUploadCapMbps, voiceBitrateBps, preferAudioRed,
-  recommendShareBudgetMbps, autoShareCeilingMbps, sliderBitrateMaxMbps, classifyShareBuffering, nativeKeyWaitMs, nativeShareRemainingMs, encoderShareCapMbps,
+  recommendShareBudgetMbps, autoShareCeilingMbps, sliderBitrateMaxMbps, encoderShareCapMbps,
   viewerReceiveCapMbps, minViewerReceiveCapMbps, normalizeNetBudget, viewerDecodesInSoftware,
-  nextShareBudgetMbps, shouldAdoptShareBudget, abortCapacityProbe,
+  abortCapacityProbe,
   cachedCapacityFresh, shouldStopProbe, CACHE_MS, PROBE_VERSION,
-  MAX_NATIVE_SHARE_MBPS, MAX_HARDWARE_WEBRTC_SHARE_MBPS, MAX_SLIDER_MBPS, MAX_SHARE_LATENCY_MS,
+  MAX_NATIVE_SHARE_MBPS, MAX_HARDWARE_WEBRTC_SHARE_MBPS, MAX_SLIDER_MBPS,
   PROBE_WINDOW_MS, PROBE_MIN_BYTES, PROBE_MAX_BYTES,
 } = require('../network-capacity');
 
@@ -44,17 +44,6 @@ assert.ok(Math.abs(viewerReceiveCapMbps(50) - 37) < 0.01, 'a 50 Mbps viewer must
 assert.strictEqual(minViewerReceiveCapMbps([]), Infinity, 'unknown viewers must not invent a cap');
 assert.ok(Math.abs(minViewerReceiveCapMbps([{ downloadMbps: 50 }]) - 37) < 0.01);
 assert.ok(Math.abs(minViewerReceiveCapMbps([{ downloadMbps: 1000 }, { downloadMbps: 50 }]) - 37) < 0.01, 'the slowest advertised viewer must win');
-assert.ok(Math.abs(nextShareBudgetMbps(NaN, { senderMbps: 250, viewerMbps: 37 }) - 37) < 0.01, '1 Gbps + 50 Mbps must start at the viewer path');
-assert.ok(Math.abs(nextShareBudgetMbps(80, { senderMbps: 250, viewerMbps: 37 }) - 37) < 0.01, 'a late slow viewer must pull the live share down');
-assert.ok(Math.abs(nextShareBudgetMbps(37, { senderMbps: 80, viewerMbps: 37 }) - 37) < 0.01, 'a healthy path must not climb past the slowest viewer');
-assert.ok(nextShareBudgetMbps(37, { senderMbps: 80, viewerMbps: 37, congested: true }) < 37, 'loss must tighten the live share');
-assert.ok(Math.abs(nextShareBudgetMbps(32.56, { senderMbps: 80, viewerMbps: 37 }) - 37) < 0.01, 'a recovered path must return to the advertised viewer cap');
-assert.ok(Math.abs(nextShareBudgetMbps(37, { senderMbps: 80, viewerMbps: 400 }) - 80) < 0.01, 'an improved viewer advertisement must be allowed up to the sender cap');
-assert.strictEqual(shouldAdoptShareBudget(37, 32), true);
-assert.strictEqual(shouldAdoptShareBudget(37, 36), false, 'tiny drops must not flap the encoder');
-assert.strictEqual(shouldAdoptShareBudget(37, 50, { lastChangeAt: Date.now(), now: Date.now() }), false, 'raises must wait for a hold');
-assert.strictEqual(shouldAdoptShareBudget(37, 50, { lastChangeAt: Date.now() - 20000, now: Date.now() }), true);
-assert.strictEqual(shouldAdoptShareBudget(32.56, 37, { lastChangeAt: Date.now() - 20000, now: Date.now() }), true, 'congestion recovery must be allowed after the hold');
 assert.strictEqual(typeof abortCapacityProbe, 'function');
 abortCapacityProbe();
 assert.ok(normalizeNetBudget({ downloadMbps: 50, uploadMbps: 50, at: 1 }));
@@ -85,15 +74,4 @@ assert.strictEqual(sliderBitrateMaxMbps(), 200, 'an unmeasured path must still e
 assert.strictEqual(sliderBitrateMaxMbps(40, 40), 30, 'a 40 Mbps path must not offer the 200 Mbps slider');
 assert.ok(sliderBitrateMaxMbps(40, 40) < 40, 'the settings slider must stay at the derated safe rate');
 assert.strictEqual(sliderBitrateMaxMbps(2000, 2000), 200, 'gigabit paths must still be allowed the 200 Mbps GPU ceiling');
-assert.strictEqual(classifyShareBuffering({ freezeDelta: 1 }), 'path');
-assert.strictEqual(classifyShareBuffering({ packetsLostDelta: 4 }), 'path');
-assert.strictEqual(classifyShareBuffering({ softwareFallback: true, decodeQueue: 12 }), 'decode');
-assert.strictEqual(classifyShareBuffering({ freezeDelta: 1, softwareFallback: true }), 'path', 'internet under-run must win when decode is also unhappy');
-assert.strictEqual(classifyShareBuffering({}), '');
-assert.strictEqual(MAX_SHARE_LATENCY_MS, 260, 'live share latency must stay at or under 260 ms');
-assert.strictEqual(nativeShareRemainingMs(Date.now()), 260);
-assert.strictEqual(nativeShareRemainingMs(Date.now() - 260), 0, 'a picture older than 260 ms must not be presented');
-assert.ok(nativeKeyWaitMs(2 * 1024 * 1024, 16) >= 800, 'SCTP admit for a 4K key is socket drain time, not viewer delay');
-assert.strictEqual(nativeKeyWaitMs(40 * 1024, 40), 100);
-assert.ok(Math.min(nativeKeyWaitMs(2 * 1024 * 1024, 16), nativeShareRemainingMs(Date.now())) <= 260, 'a live 4K key may only wait the leftover 260 ms budget');
 console.log('PASS network capacity math');

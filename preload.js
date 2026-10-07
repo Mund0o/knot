@@ -108,6 +108,79 @@ contextBridge.exposeInMainWorld('pairDirectFile', {
   }
 });
 
+// The UDP lane bridge is as narrow as the file bridge: the renderer can open, punch and release
+// lanes, and every byte then goes through the authenticated frame path above. Endpoints are
+// checked here as well as in the main process.
+const validLaneId = value => typeof value === 'string' && /^[a-f0-9]{24}$/.test(value);
+const udxEndpoint = value => value && typeof value === 'object' && typeof value.ip === 'string' && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value.ip) && Number.isInteger(value.port) && value.port >= 1024 && value.port <= 65535;
+const udxRemote = value => value && typeof value === 'object' && Number.isInteger(value.streamId) && value.streamId >= 1 && value.streamId <= 0xffffffff
+  && Array.isArray(value.endpoints) && value.endpoints.length >= 1 && value.endpoints.length <= 16 && value.endpoints.every(udxEndpoint)
+  ? { streamId: value.streamId, endpoints: value.endpoints.map(item => ({ ip: item.ip, port: item.port, kind: item.kind === 'host' ? 'host' : 'srflx' })) } : null;
+contextBridge.exposeInMainWorld('pairUdxLane', {
+  open: () => ipcRenderer.invoke('pair:udxOpen', bridgeDocumentId),
+  register: (token, key) => validDirectToken(token) && validDirectKey(key)
+    ? ipcRenderer.invoke('pair:udxRegister', bridgeDocumentId, token, key)
+    : Promise.resolve(false),
+  establish: options => {
+    const remote = udxRemote(options?.remote), role = options?.role;
+    if (!options || !validLaneId(options.id) || (role !== 'accept' && role !== 'connect') || !validDirectToken(options.token) || !remote || (role === 'connect' && !validDirectKey(options.key))) {
+      return Promise.reject(new Error('Invalid UDP lane request'));
+    }
+    return ipcRenderer.invoke('pair:udxEstablish', bridgeDocumentId, options.id, role, options.token, role === 'connect' ? options.key : null, remote,
+      Number.isFinite(options.timeout) ? options.timeout : undefined, Number.isFinite(options.hold) ? options.hold : undefined);
+  },
+  release: id => validLaneId(id) ? ipcRenderer.invoke('pair:udxRelease', bridgeDocumentId, id) : Promise.resolve(false),
+  close: id => validLaneId(id) ? (ipcRenderer.send('pair:udxClose', bridgeDocumentId, id), true) : false,
+});
+
+// Screen shares ride their own UDP lanes (share-lane-runtime.js): same punching and authenticated framing as the file lane, separate
+// peers and limits. The shape is what share-session.js expects of `lanes`: open/register/establish/release/close/closePeer/send/credit,
+// and onOpen/onFrame/onClose hooks.
+const validPeerId = value => typeof value === 'string' && /^[a-f0-9]{24}$/.test(value);
+const shareLaneHook = (channel, valid) => cb => {
+  if (typeof cb !== 'function') return () => {};
+  const listener = (_event, documentId, id, extra) => { if (documentId === bridgeDocumentId && validPeerId(id) && valid(extra)) cb(id, extra); };
+  ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener);
+};
+contextBridge.exposeInMainWorld('pairShareLane', {
+  open: () => ipcRenderer.invoke('pair:shareLaneOpen', bridgeDocumentId),
+  register: (token, key) => validDirectToken(token) && validDirectKey(key) ? ipcRenderer.invoke('pair:shareLaneRegister', bridgeDocumentId, token, key) : Promise.resolve(false),
+  establish: options => {
+    const remote = udxRemote(options?.remote), role = options?.role;
+    if (!options || !validLaneId(options.id) || (role !== 'accept' && role !== 'connect') || !validDirectToken(options.token) || !remote || (role === 'connect' && !validDirectKey(options.key))) return Promise.reject(new Error('Invalid share lane request'));
+    return ipcRenderer.invoke('pair:shareLaneEstablish', bridgeDocumentId, options.id, role, options.token, role === 'connect' ? options.key : null, remote,
+      Number.isFinite(options.timeout) ? options.timeout : undefined, Number.isFinite(options.hold) ? options.hold : undefined);
+  },
+  release: id => validLaneId(id) ? ipcRenderer.invoke('pair:shareLaneRelease', bridgeDocumentId, id) : Promise.resolve(false),
+  close: id => validLaneId(id) ? (ipcRenderer.send('pair:shareLaneClose', bridgeDocumentId, id), true) : false,
+  closePeer: id => validPeerId(id) ? (ipcRenderer.send('pair:shareLaneClosePeer', bridgeDocumentId, id), true) : false,
+  send: (id, bytes) => validPeerId(id) && validBinaryChunk(bytes) ? ipcRenderer.invoke('pair:shareLaneSend', bridgeDocumentId, id, bytes) : Promise.reject(new Error('Invalid share frame')),
+  // Bytes the renderer has finished with: lets the receive side keep reading.
+  credit: (id, count) => validPeerId(id) && Number.isSafeInteger(count) && count > 0 && count <= MAX_FILE_IPC_CHUNK ? (ipcRenderer.send('pair:shareLaneCredit', bridgeDocumentId, id, count), true) : false,
+  onOpen: shareLaneHook('pair:shareLaneOpen', token => validDirectToken(token) || token === ''),
+  onFrame: shareLaneHook('pair:shareLaneFrame', validBinaryChunk),
+  onClose: shareLaneHook('pair:shareLaneClose', value => value === undefined),
+});
+
+// The Linux recorder (GPU Screen Recorder) as the renderer sees it: start it, and it reports the stream's description once and then
+// every encoded picture as plain { key, pts, data }. Nothing here is a container or a process.
+const shareCaptureHook = (channel, valid) => cb => {
+  if (typeof cb !== 'function') return () => {};
+  const listener = (_event, documentId, value) => { if (documentId === bridgeDocumentId && valid(value)) cb(value); };
+  ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener);
+};
+const validShareConfig = value => value && typeof value === 'object' && typeof value.codec === 'string' && value.codec.length <= 64 && Number.isInteger(value.width) && Number.isInteger(value.height);
+const validSharePicture = value => value && typeof value === 'object' && typeof value.key === 'boolean' && Number.isFinite(value.pts) && ArrayBuffer.isView(value.data) && value.data.byteLength > 0;
+contextBridge.exposeInMainWorld('pairShareCapture', {
+  info: () => ipcRenderer.invoke('pair:shareCaptureInfo', bridgeDocumentId),
+  start: options => ipcRenderer.invoke('pair:shareCaptureStart', bridgeDocumentId, options && typeof options === 'object' ? options : {}),
+  stop: () => ipcRenderer.invoke('pair:shareCaptureStop', bridgeDocumentId),
+  onConfig: shareCaptureHook('pair:shareCaptureConfig', validShareConfig),
+  onFrame: shareCaptureHook('pair:shareCaptureFrame', validSharePicture),
+  onError: shareCaptureHook('pair:shareCaptureError', value => typeof value === 'string'),
+  onEnd: shareCaptureHook('pair:shareCaptureEnd', value => value === undefined),
+});
+
 // Settings persistence bridge for the sandboxed renderer. Falls through to
 // localStorage automatically when running in a browser (no IPC available).
 contextBridge.exposeInMainWorld('pairSettings', {
@@ -142,6 +215,8 @@ contextBridge.exposeInMainWorld('pairEnv', {
   // constructing the sandboxed renderer. Requiring package.json from a
   // sandboxed preload is not supported by Electron.
   version: String(process.env.KNOT_APP_VERSION || ''),
+  // Only set for the development test rig (see main.js); empty in every real run.
+  signalServer: String(process.env.KNOT_SIGNAL_SERVER || ''),
   primaryGpuVendor: process.env.KNOT_PRIMARY_GPU_VENDOR || '',
   // Set when NVIDIA VA-API decode is enabled for this launch and must be verified.
   nvidiaVaapiDriver: process.env.KNOT_NVIDIA_VAAPI_DRIVER || '',
@@ -251,22 +326,6 @@ contextBridge.exposeInMainWorld('pairHistory',{
   append:(owner,conversation,entry)=>validHistoryOwner(owner)&&validHistoryConversation(conversation)&&entry&&typeof entry==='object'?ipcRenderer.invoke('pair:historyAppend',owner,conversation,entry):Promise.resolve({added:0}),
   list:(owner,conversation,options={})=>validHistoryOwner(owner)&&validHistoryConversation(conversation)?ipcRenderer.invoke('pair:historyList',owner,conversation,{before:Number.isSafeInteger(Number(options.before))&&Number(options.before)>0?Number(options.before):null,limit:Math.max(1,Math.min(200,Number(options.limit)||80))}):Promise.resolve({items:[],nextBefore:null,hasOlder:false}),
   importLegacy:(owner,histories)=>validHistoryOwner(owner)&&histories&&typeof histories==='object'?ipcRenderer.invoke('pair:historyImport',owner,histories):Promise.resolve(false),
-});
-
-// Pull-based GPU AV1 bridge: renderer and data-channel backpressure naturally
-// pause reads instead of allowing encoded video to accumulate without bounds.
-contextBridge.exposeInMainWorld('pairNativeScreen', {
-  info: () => ipcRenderer.invoke('pair:nativeScreenInfo', bridgeDocumentId),
-  start: options => ipcRenderer.invoke('pair:startNativeScreen', bridgeDocumentId, options),
-  read: id => ipcRenderer.invoke('pair:readNativeScreen', bridgeDocumentId, id),
-  readMany: (id, options) => ipcRenderer.invoke('pair:readNativeScreenMany', bridgeDocumentId, id, options || {}),
-  stop: id => ipcRenderer.send('pair:stopNativeScreen', bridgeDocumentId, id),
-  onError: cb => {
-    if (typeof cb !== 'function') return () => {};
-    const listener = (_event, message) => cb(String(message || 'Native screen capture failed'));
-    ipcRenderer.on('pair:nativeScreenError', listener);
-    return () => ipcRenderer.removeListener('pair:nativeScreenError', listener);
-  }
 });
 
 const validLanFp = value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value);

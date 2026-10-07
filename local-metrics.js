@@ -13,6 +13,7 @@ const METRIC_NAMES=new Set([
   'screen.rtt_ms','screen.encode_ms','screen.available_mbps','screen.sent_fps','screen.playout_ms',
   'screen.send_queue_ms','screen.discarded_fps','screen.qp','screen.nack_rate',
   'file.throughput_mbps','file.stall_ms','file.retry_count',
+  'call.link_connect_ms','call.join_to_live_ms',
 ]);
 const TAG_KEYS=new Set(['route','codec','scope','condition','direction','lane']);
 const TAG_VALUE=/^[a-z0-9][a-z0-9_.:-]{0,31}$/i;

@@ -1,4 +1,5 @@
-// Authenticated, encrypted TCP framing for Pair's optional fast file lane.
+// Authenticated, encrypted framing for Pair's optional fast file lane (a UDX stream
+// since 1.1.127; it was a TCP socket before, and the framing is transport-agnostic).
 // A listener only accepts one-time tokens registered by the renderer over an
 // already-established Pair session; it is never a public unauthenticated file
 // server. Payload frames use AES-256-GCM with a fresh nonce per frame.
@@ -399,6 +400,8 @@ class DirectFileHost {
     if (!Number.isInteger(numericPort) || numericPort < 0 || numericPort > 65535) throw new Error('invalid direct-file port');
     this.port = numericPort;
     this.peerOptions = options || {};
+    this.maxActive = Number.isInteger(options?.maxActive) && options.maxActive > 0 ? Math.min(64, options.maxActive) : MAX_ACTIVE_SOCKETS;
+    this.maxActivePerAddress = Number.isInteger(options?.maxActivePerAddress) && options.maxActivePerAddress > 0 ? Math.min(64, options.maxActivePerAddress) : MAX_ACTIVE_SOCKETS_PER_ADDRESS;
     this.server = null;
     this.tokens = new Map();
     this.pendingSockets = new Set();
@@ -496,7 +499,7 @@ class DirectFileHost {
   }
   _canPromote(socket) {
     const address = socket._pairRemoteAddress;
-    return this.activeSockets.size < MAX_ACTIVE_SOCKETS && (this.activeByAddress.get(address) || 0) < MAX_ACTIVE_SOCKETS_PER_ADDRESS;
+    return this.activeSockets.size < this.maxActive && (this.activeByAddress.get(address) || 0) < this.maxActivePerAddress;
   }
   _promote(socket) {
     this._untrackPending(socket);
@@ -565,6 +568,9 @@ class DirectFileHost {
     };
     socket.on('data', read);
   }
+  // An already-established stream (the UDP lane) takes exactly the path an accepted
+  // TCP socket takes: one-time token, mutual proofs, then AEAD frames.
+  acceptStream(socket) { this._accept(socket); }
   close() {
     this._generation++;
     if (this.server) { try { this.server.close(); } catch {} this.server = null; }
@@ -581,14 +587,17 @@ class DirectFileHost {
 }
 
 function connect(host, port, token, key, options = {}) {
+  // options.socket is an already-connected stream (the UDP lane); the handshake
+  // is the same, only the transport differs.
+  const provided = options.socket || null;
   const numericPort = Number(port);
-  if (typeof host !== 'string' || !host || host.length > 255 || !Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535 || !TOKEN_PATTERN.test(token || '')) {
+  if ((!provided && (typeof host !== 'string' || !host || host.length > 255 || !Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535)) || !TOKEN_PATTERN.test(token || '')) {
     return Promise.reject(new Error('invalid direct-file connection'));
   }
   let baseKey;
   try { baseKey = credentialKey(key); } catch (error) { return Promise.reject(error); }
   return new Promise((resolve, reject) => {
-    const socket = net.createConnection({ host, port: numericPort }); socket.setNoDelay(true); socket.setKeepAlive(true, KEEPALIVE_DELAY);
+    const socket = provided || net.createConnection({ host, port: numericPort }); socket.setNoDelay(true); socket.setKeepAlive(true, KEEPALIVE_DELAY);
     let settled = false;
     const clientNonce = crypto.randomBytes(AUTH_NONCE_BYTES);
     const clientProof = authProof(baseKey, 'client', token, clientNonce);
@@ -637,11 +646,12 @@ function connect(host, port, token, key, options = {}) {
       resolve(peer);
     };
     let response = Buffer.alloc(0);
-    socket.once('connect', () => {
+    const hello = () => {
       try { socket.write(JSON.stringify({ v: PROTOCOL_VERSION, token, nonce: encodeFixed(clientNonce), proof: encodeFixed(clientProof) }) + '\n'); }
       catch (error) { fail(error); }
-    });
+    };
     socket.on('data', read);
+    if (provided) queueMicrotask(hello); else socket.once('connect', hello);
   });
 }
 

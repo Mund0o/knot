@@ -4,9 +4,11 @@ const { app, BrowserWindow, Menu, session, dialog, ipcMain, desktopCapturer, she
 const { installLinuxLauncher } = require('./linux-launcher');
 const { linuxMainGpu, applyLinuxMainGpuEnvironment, nvidiaVaapiDrivers, nvidiaDecodeVerdicts, recordNvidiaDecodeVerdict, selectNvidiaVaapiDriver } = require('./linux-gpu');
 const { applyGpuAccelerationPolicy, applyWebRtcIcePolicy } = require('./gpu-acceleration');
-const { NativeScreenService } = require('./native-screen');
 const { measureCapacity, abortCapacityProbe } = require('./network-capacity');
 const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
+const { UdxLanes } = require('./udx-lane');
+const { ShareLaneRuntime } = require('./share-lane-runtime');
+const { GsrCapture } = require('./share-capture-gsr');
 const { LanHouse, localIpv4, privateIpv4 } = require('./lan-house');
 const { SettingsStore, migrateSettingsCompanions, mergeMissingAccountIdentity, restoreMissingProfileAvatarSidecar, decodeProfileAvatarSidecar } = require('./settings-store');
 const { FORMAT: LOCAL_SETTINGS_FORMAT, LocalSettingsCipher } = require('./settings-crypto');
@@ -22,6 +24,15 @@ const PAIR_RENDERER_URL = pathToFileURL(path.join(__dirname, 'index.html')).href
 const emojiCatalog = require('./emoji-catalog');
 
 app.setName('Knot');
+// tests/e2e runs real instances of this app against a local Worker. The rig is development-only:
+// it needs KNOT_TEST_RIG=1 and is ignored by every packaged build, so no environment variable can
+// redirect a released Knot to another data folder or signaling server.
+const TEST_RIG = !app.isPackaged && process.env.KNOT_TEST_RIG === '1';
+// A rig window is normally never shown. A test that needs real visibility (animation frames, page visibility) shows it fully transparent.
+const TEST_RIG_SHOW = TEST_RIG && process.env.KNOT_TEST_RIG_SHOW === '1';
+// Settings, history and metrics live in <appData>/Knot whatever userData says (see settingsPath below), so
+// the rig has to move appData itself or its apps would read and write the real profile.
+if (TEST_RIG && process.env.KNOT_USER_DATA) { try { app.setPath('appData', path.resolve(process.env.KNOT_USER_DATA)); } catch {} }
 try { app.setPath('userData', path.join(app.getPath('appData'), 'Knot')); } catch {}
 // Voice and the reserved silent AudioContext start from signaling, after the
 // click that opened the call has expired. Without this, Linux PipeWire leaves
@@ -54,7 +65,6 @@ const LINUX_AUDIO_PACKET_BYTES = 48000 * .02 * 2 * 4;
 // (4K encode) delaying its acks does not make the main process discard audio.
 const LINUX_AUDIO_MAX_INFLIGHT = 10;
 const LINUX_AUDIO_MAX_BUFFER_BYTES = LINUX_AUDIO_PACKET_BYTES * 15;
-let nativeScreenService = null;
 let selectedPrimaryGpu = null;
 let emojiWorker = null, emojiWorkerSequence = 0, emojiRefreshPromise = null;
 const emojiWorkerPending = new Map();
@@ -694,21 +704,6 @@ ipcMain.on('pair:linuxShareAudioAck', (event, sequenceValue) => {
   state.pcmOldestInflightAt = state.pcmInflight.size ? Date.now() : 0;
   flushLinuxShareAudio(state);
 });
-ipcMain.handle('pair:nativeScreenInfo', (event, documentId) => bridgeRequestOwner(event,documentId) ? nativeScreenService?.infoAsync() || { supported: false } : { supported: false });
-ipcMain.handle('pair:startNativeScreen', (event, documentId, options) => {
-  const owner=bridgeRequestOwner(event,documentId);
-  if (!owner || !options || typeof options !== 'object') return null;
-  const started=nativeScreenService?.startAsync(options,()=>currentBridgeOwner(owner)).then(result=>{
-    // Native capture never consumes picker NativeImages. Drop them so a live
-    // share does not keep 64 window thumbnails pinned in the main process.
-    if(result&&!result.error)pendingSources=[];
-    return result;
-  }).catch(error=>({error:error?.message||String(error)}));
-  return started || { error: 'Native screen capture is unavailable' };
-});
-ipcMain.handle('pair:readNativeScreen', (event, documentId, id) => bridgeRequestOwner(event,documentId) && Number.isInteger(id) ? nativeScreenService?.read(id) || { active: false } : { active: false });
-ipcMain.handle('pair:readNativeScreenMany', (event, documentId, id, options) => bridgeRequestOwner(event,documentId) && Number.isInteger(id) ? nativeScreenService?.readMany(id, options) || { active: false, items: [] } : { active: false, items: [] });
-ipcMain.on('pair:stopNativeScreen', (event, documentId, id) => { if (bridgeRequestOwner(event,documentId)) nativeScreenService?.stop(Number.isInteger(id) ? id : 0); });
 
 const fs = require('fs');
 // Electron only accepts this before its ready event. Read the tightly scoped
@@ -739,7 +734,7 @@ if (hardwareAccelerationEnabled) {
     const nvidiaGpu = primaryGpu?.vendor === '0x10de';
     const bundledDirs = [process.resourcesPath && path.join(process.resourcesPath, 'nvidia-vaapi'), path.join(__dirname, 'vendor', 'nvidia-vaapi')];
     // Settings → Screen sharing can turn NVIDIA GPU decoding off.
-    const { driver: nvidiaDriver, state: nvidiaState } = nvidiaGpu && !nvidiaGpuDecodeEnabled ? { driver: null, state: 'off' } : selectNvidiaVaapiDriver(nvidiaGpu ? nvidiaVaapiDrivers(process.env, fs, { bundledDirs }) : [], nvidiaDecodeVerdict);
+    const { driver: nvidiaDriver, state: nvidiaState } = nvidiaGpu && (TEST_RIG || !nvidiaGpuDecodeEnabled) ? { driver: null, state: 'off' }   /* the rig never runs the NVIDIA decode check: on a fresh profile it relaunches the app */ : selectNvidiaVaapiDriver(nvidiaGpu ? nvidiaVaapiDrivers(process.env, fs, { bundledDirs }) : [], nvidiaDecodeVerdict);
     const nvidiaVaapi = !!nvidiaDriver;
     if (nvidiaVaapi) process.env.KNOT_NVIDIA_VAAPI_DRIVER = nvidiaDriver.fingerprint;
     else delete process.env.KNOT_NVIDIA_VAAPI_DRIVER;
@@ -763,13 +758,6 @@ if (hardwareAccelerationEnabled) {
 } else {
   applyWebRtcIcePolicy(app);
 }
-nativeScreenService = new NativeScreenService({
-  // gpu-screen-recorder's encode-once path remains discrete-only. Integrated
-  // GPUs still accelerate Chromium's standard WebRTC screen path above.
-  primaryGpuVendor: selectedPrimaryGpu?.integrated ? '' : process.env.KNOT_PRIMARY_GPU_VENDOR || '',
-  primaryGpuCard: selectedPrimaryGpu?.card || '',
-  onError: message => {if(mainWin&&!mainWin.isDestroyed())try{mainWin.webContents.send('pair:nativeScreenError', String(message || 'Native screen capture failed'))}catch{}}
-});
 // Knot is serverless by default. `server.js` remains available through
 // `npm run signal` for people who deliberately operate their own signaling
 // service, but the desktop app must not silently start a localhost server.
@@ -798,10 +786,10 @@ ipcMain.on('pair:bridgeReady',(event,documentId)=>{
   // replacement that did not emit a usable navigation event.
   if(replaced){
     pendingSource=null;pendingSources=[];
-    void nativeScreenService?.stopAsync?.().catch(error=>console.error('[runtime] bridge screen cleanup failed:',error?.message||error));
     void stopLinuxShareAudio().catch(error=>console.error('[runtime] bridge share-audio cleanup failed:',error?.message||error));
     stopNativeCapture();
     void closeDirectFileRuntime().catch(()=>{});void closeAllSaveStreams().catch(()=>{});
+    void closeShareRuntime().catch(()=>{});
     void closeLanHouse().catch(()=>{});
   }
 });
@@ -909,6 +897,7 @@ async function ensureDirectFileHost(port) {
 async function closeDirectFileRuntime() {
   directFileHostEpoch++;
   for (const id of [...directFilePeers.keys()]) closeDirectPeer(id);
+  closeUdxRuntime();
   directFileRuntimeOwner=null;
   const operation=directFileHostTask.then(()=>{directFileHost?.close();directFileHost=null;directFilePort=0});
   directFileHostTask=operation.catch(()=>{});return operation;
@@ -957,6 +946,142 @@ ipcMain.on('pair:directFileAck', (event, documentId, id, bytes) => {
   const owner=directRequestOwner(event,documentId),record=directFilePeers.get(id),count=Number(bytes);if(!owner||!sameDirectOwner(owner,record?.owner)||!Number.isSafeInteger(count)||count<1||count>MAX_IPC_CHUNK)return;
   record.peer.credit(count);
 });
+
+// Fast direct lane over UDP (see udx-lane.js). The renderer can open, punch and release only
+// lanes it owns. The bytes then take the same authenticated path as every direct lane: a
+// one-time token, mutual proofs, and AEAD frames, so nothing here is trusted on its own.
+const udxLanes = new UdxLanes();
+const udxLaneOwners = new Map();
+let udxHost = null;                       // takes streams and tokens only; it never listens on a port
+function udxFileHost() { if (!udxHost) udxHost = new DirectFileHost(0); return udxHost; }
+function udxLaneOwned(owner, id) { const record = typeof id === 'string' ? udxLaneOwners.get(id) : null; return !!owner && !!record && sameDirectOwner(owner, record); }
+function closeUdxLane(id) { udxLaneOwners.delete(id); return udxLanes.close(id); }
+function closeUdxRuntime() {
+  for (const id of [...udxLaneOwners.keys()]) closeUdxLane(id);
+  udxLanes.closeAll(); udxLaneOwners.clear();
+  try { udxHost?.close(); } catch {}
+  udxHost = null;
+}
+ipcMain.handle('pair:udxOpen', async (event, documentId) => {
+  const owner=directRequestOwner(event,documentId);if (!owner) return { ok: false, error: 'unauthorized' };
+  try {
+    for (const id of [...udxLaneOwners.keys()]) if (!udxLanes.lanes.has(id)) udxLaneOwners.delete(id);
+    if(directFileRuntimeOwner&&!sameDirectOwner(owner,directFileRuntimeOwner))await closeDirectFileRuntime();
+    if(!currentBridgeOwner(owner))throw new Error('direct-file document changed');
+    directFileRuntimeOwner=owner;
+    const lane = await udxLanes.open();
+    if(!currentBridgeOwner(owner)){udxLanes.close(lane.id);throw new Error('direct-file document changed')}
+    udxLaneOwners.set(lane.id, owner);
+    return { ok: true, id: lane.id, streamId: lane.streamId, endpoints: lane.endpoints };
+  } catch (error) { return { ok: false, error: error?.message || 'Could not open a UDP lane.' }; }
+});
+ipcMain.handle('pair:udxRegister', async (event, documentId, token, keyValue) => {
+  const owner=directRequestOwner(event,documentId);if (!owner||!sameDirectOwner(owner,directFileRuntimeOwner)||typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) return false;
+  const key = directKey(keyValue); if (!key) return false;
+  try{udxFileHost().register(token,key,(peer,hello)=>{if(!currentBridgeOwner(owner)||!sameDirectOwner(owner,directFileRuntimeOwner)){peer.close();return}attachDirectPeer(event.sender,owner,peer,hello)});return true}catch{return false}finally{key.fill(0)}
+});
+ipcMain.handle('pair:udxEstablish', async (event, documentId, laneId, role, token, keyValue, remote, timeoutValue, holdValue) => {
+  const owner=directRequestOwner(event,documentId);
+  if (!udxLaneOwned(owner,laneId)||(role !== 'accept' && role !== 'connect')||typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw new Error('invalid UDP lane request');
+  let key=null;if(role==='connect'){key=directKey(keyValue);if(!key)throw new Error('invalid direct-file credentials')}
+  if(directFilePeers.size+pendingDirectFileConnects>=MAX_DIRECT_FILE_PEERS||pendingDirectFileConnects>=MAX_PENDING_DIRECT_FILE_CONNECTS){key?.fill(0);throw new Error('too many direct-file connections')}
+  const timeout=Number(timeoutValue),hold=Number(holdValue);
+  const options={ token, remote: { streamId: Number(remote?.streamId), endpoints: Array.isArray(remote?.endpoints) ? remote.endpoints.slice(0, 16) : [] },
+    timeoutMs: Number.isFinite(timeout) ? Math.max(1000, Math.min(15000, Math.floor(timeout))) : undefined,
+    holdMs: Number.isFinite(hold) ? Math.max(0, Math.min(30000, Math.floor(hold))) : undefined };
+  const epoch=directFileHostEpoch;pendingDirectFileConnects++;
+  try {
+    const socket=await udxLanes.establish(laneId,options);
+    if(epoch!==directFileHostEpoch||!currentBridgeOwner(owner)||!udxLaneOwned(owner,laneId)){socket.destroy();throw new Error('direct-file document changed')}
+    if(role==='accept'){udxFileHost().acceptStream(socket);return true}
+    const peer=await connectDirectFile(null,null,token,key,{socket,timeout:5000});
+    if(epoch!==directFileHostEpoch||!currentBridgeOwner(owner)){peer.close();throw new Error('direct-file document changed')}
+    return attachDirectPeer(event.sender,owner,peer,{token});
+  } catch (error) { closeUdxLane(laneId); throw error; }
+  finally { pendingDirectFileConnects--; key?.fill(0); }
+});
+ipcMain.handle('pair:udxRelease', (event, documentId, id) => { const owner=directRequestOwner(event,documentId);return udxLaneOwned(owner,id)?udxLanes.release(id):false; });
+ipcMain.on('pair:udxClose', (event, documentId, id) => { const owner=directRequestOwner(event,documentId);if(udxLaneOwned(owner,id))closeUdxLane(id); });
+
+// Screen shares (share-session.js). The UDP lanes and the Linux recorder each belong to the document that asked for them and end
+// with it; the renderer never sees a socket or a process, only authenticated frames and plain encoded pictures.
+const SHARE_LANE_ID = /^[a-f0-9]{24}$/;
+let shareLanes = null, shareCapture = null;
+function shareEmit(owner, channel, ...args) {
+  if (!mainWin || mainWin.isDestroyed() || !currentBridgeOwner(owner) || mainWin.webContents.id !== owner.senderId) return false;
+  try { mainWin.webContents.send(channel, owner.document, ...args); return true; } catch { return false; }
+}
+function shareLaneRuntime() {
+  if (!shareLanes) shareLanes = new ShareLaneRuntime({
+    sameOwner: sameBridgeOwner,
+    onOpen: ({ owner, peerId, token }) => { if (!shareEmit(owner, 'pair:shareLaneOpen', peerId, token)) throw new Error('share document changed'); },
+    onFrame: ({ owner, peerId, frame }) => { shareEmit(owner, 'pair:shareLaneFrame', peerId, frame); },
+    onClose: ({ owner, peerId }) => { shareEmit(owner, 'pair:shareLaneClose', peerId); },
+  });
+  return shareLanes;
+}
+function makeShareCapture() {
+  return new GsrCapture({ primaryGpuVendor: selectedPrimaryGpu?.integrated ? '' : process.env.KNOT_PRIMARY_GPU_VENDOR || '', primaryGpuCard: selectedPrimaryGpu?.card || '' });
+}
+async function stopShareCapture() {
+  const capture = shareCapture; shareCapture = null;
+  if (capture) await capture.stop();
+}
+async function closeShareRuntime() {
+  const lanes = shareLanes; shareLanes = null;
+  try { lanes?.close(); } catch {}
+  await stopShareCapture();
+}
+ipcMain.handle('pair:shareLaneOpen', async (event, documentId) => {
+  const owner = bridgeRequestOwner(event, documentId); if (!owner) return { ok: false, error: 'unauthorized' };
+  if (TEST_RIG && process.env.KNOT_TEST_NO_UDX === '1') return { ok: false, error: 'UDP lanes are switched off for this test' };
+  try { return { ok: true, ...(await shareLaneRuntime().open(owner)) }; } catch (error) { return { ok: false, error: error?.message || 'Could not open a UDP lane.' }; }
+});
+ipcMain.handle('pair:shareLaneRegister', (event, documentId, token, keyValue) => {
+  const owner = bridgeRequestOwner(event, documentId), key = owner ? directKey(keyValue) : null;
+  if (!owner || !key) return false;
+  try { return shareLaneRuntime().register(owner, token, key); } finally { key.fill(0); }
+});
+ipcMain.handle('pair:shareLaneEstablish', async (event, documentId, laneId, role, token, keyValue, remote, timeoutValue, holdValue) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (!owner || (role !== 'accept' && role !== 'connect')) throw new Error('invalid share lane request');
+  const key = role === 'connect' ? directKey(keyValue) : null;
+  if (role === 'connect' && !key) throw new Error('invalid share lane credentials');
+  try { return await shareLaneRuntime().establish(owner, { laneId, role, token, key, remote, timeoutMs: Number(timeoutValue), holdMs: Number(holdValue) }); }
+  finally { key?.fill(0); }
+});
+ipcMain.handle('pair:shareLaneRelease', (event, documentId, id) => { const owner = bridgeRequestOwner(event, documentId); return owner && shareLanes ? shareLanes.release(owner, id) : false; });
+ipcMain.on('pair:shareLaneClose', (event, documentId, id) => { const owner = bridgeRequestOwner(event, documentId); if (owner) shareLanes?.closeLane(owner, id); });
+ipcMain.on('pair:shareLaneClosePeer', (event, documentId, id) => { const owner = bridgeRequestOwner(event, documentId); if (owner) shareLanes?.closePeer(owner, id); });
+ipcMain.handle('pair:shareLaneSend', (event, documentId, peerId, bytes) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (!owner || !shareLanes) return Promise.reject(new Error('share lanes are not available'));
+  return shareLanes.send(owner, peerId, bytes);
+});
+ipcMain.on('pair:shareLaneCredit', (event, documentId, peerId, count) => {
+  const owner = bridgeRequestOwner(event, documentId), bytes = Number(count);
+  if (owner && Number.isSafeInteger(bytes) && bytes > 0 && bytes <= MAX_IPC_CHUNK) shareLanes?.credit(owner, peerId, bytes);
+});
+ipcMain.handle('pair:shareCaptureInfo', async (event, documentId) => bridgeRequestOwner(event, documentId) ? makeShareCapture().info() : { supported: false });
+ipcMain.handle('pair:shareCaptureStart', async (event, documentId, options) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (!owner || !options || typeof options !== 'object') return { error: 'unauthorized' };
+  await stopShareCapture();
+  const capture = makeShareCapture();
+  capture.on('config', config => shareEmit(owner, 'pair:shareCaptureConfig', config));
+  capture.on('frame', frame => shareEmit(owner, 'pair:shareCaptureFrame', frame));
+  capture.on('error', error => shareEmit(owner, 'pair:shareCaptureError', String(error?.message || error || 'Screen capture failed')));
+  capture.on('end', () => { if (shareCapture === capture) shareCapture = null; shareEmit(owner, 'pair:shareCaptureEnd'); });
+  try {
+    const started = await capture.start(options);
+    if (!currentBridgeOwner(owner)) { await capture.stop(); return { error: 'document changed' }; }
+    shareCapture = capture;
+    // Capture never consumes the picker's NativeImages. Drop them so a live share does not keep 64 window thumbnails pinned.
+    pendingSources = [];
+    return started;
+  } catch (error) { await capture.stop(); return { error: error?.message || String(error) }; }
+});
+ipcMain.handle('pair:shareCaptureStop', async (event, documentId) => { if (bridgeRequestOwner(event, documentId)) await stopShareCapture(); return true; });
 
 let lanHouse = null, lanOwner = null;
 function lanFrameOk(value) {
@@ -1171,7 +1296,7 @@ ipcMain.handle('pair:acceptUpdate', event => isPairRenderer(event) ? installAvai
 let runtimeCleanupPromise=null,relaunching=false;
 async function cleanupRuntime(){
   if(runtimeCleanupPromise)return runtimeCleanupPromise;
-  runtimeCleanupPromise=(async()=>{await nativeScreenService?.stopAsync?.();await stopLinuxShareAudio();await closeDirectFileRuntime();await closeLanHouse();await closeAllSaveStreams();await settingsStore.flush();historyStore.close();metricsStore.close();await stopEmojiWorker();emojiCatalog.close();stopNativeCapture()})().finally(()=>{runtimeCleanupPromise=null});
+  runtimeCleanupPromise=(async()=>{await stopLinuxShareAudio();await closeDirectFileRuntime();await closeShareRuntime();await closeLanHouse();await closeAllSaveStreams();await settingsStore.flush();historyStore.close();metricsStore.close();await stopEmojiWorker();emojiCatalog.close();stopNativeCapture()})().finally(()=>{runtimeCleanupPromise=null});
   return runtimeCleanupPromise;
 }
 // An AppImage runs from a mount that goes away when this process exits, so
@@ -1213,6 +1338,7 @@ function createWindow() {
   // A sandboxed preload cannot require package.json. Supply the trusted app
   // version through the renderer's inherited environment before it starts.
   process.env.KNOT_APP_VERSION = app.getVersion();
+  if (!TEST_RIG) delete process.env.KNOT_SIGNAL_SERVER;
   mainWin = new BrowserWindow({
     width: 1180,
     height: 820,
@@ -1221,6 +1347,8 @@ function createWindow() {
     backgroundColor: '#111318',
     title: windowTitle,
     icon: APP_ICON,
+    show: !TEST_RIG || TEST_RIG_SHOW,
+    ...(TEST_RIG_SHOW ? { opacity: 0, skipTaskbar: true, focusable: false } : {}),
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -1246,10 +1374,9 @@ function createWindow() {
       // the renderer process. Tear down every capture owned by that document so
       // the replacement page cannot inherit an orphaned recorder/audio route or
       // receive "already active" when it starts a new share.
-      void nativeScreenService?.stopAsync?.().catch(error=>console.error('[runtime] navigation screen cleanup failed:',error?.message||error));
       void stopLinuxShareAudio().catch(error=>console.error('[runtime] navigation share-audio cleanup failed:',error?.message||error));
       stopNativeCapture();
-      void closeDirectFileRuntime().catch(()=>{});void closeLanHouse().catch(()=>{});void closeAllSaveStreams().catch(()=>{});
+      void closeDirectFileRuntime().catch(()=>{});void closeShareRuntime().catch(()=>{});void closeLanHouse().catch(()=>{});void closeAllSaveStreams().catch(()=>{});
     }
   });
   mainWin.webContents.on('render-process-gone', (_event, details) => {

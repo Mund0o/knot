@@ -11,7 +11,6 @@
   const MAX_NATIVE_SHARE_MBPS = 200;
   const MAX_HARDWARE_WEBRTC_SHARE_MBPS = 80;
   const MAX_SLIDER_MBPS = 200;
-  const MAX_SHARE_LATENCY_MS = 260;
   const PROBE_WINDOW_MS = 800;
   const PROBE_MIN_BYTES = 2 * 1024 * 1024;
   const PROBE_MAX_BYTES = 96 * 1024 * 1024;
@@ -78,40 +77,6 @@
     return Math.max(2, Math.min(MAX_SLIDER_MBPS, Math.round(path)));
   }
 
-  // Viewer buffering: path (loss/gaps/under-run) vs decode (queue/software).
-  // Path pressure wins when both are present so the sender can skip stale
-  // pictures instead of presenting late. Native encode bitrate stays put.
-  function classifyShareBuffering({
-    freezeDelta = 0, packetsLostDelta = 0, framesDroppedDelta = 0, decodeQueue = 0,
-    receiveMbps, expectedMbps, softwareFallback = false, gapRecoveries = 0, jitter = 0,
-  } = {}) {
-    const decodePressure = softwareFallback === true || Number(decodeQueue) >= 8;
-    const expected = Number(expectedMbps), received = Number(receiveMbps);
-    const underRun = Number.isFinite(expected) && expected > 2 && Number.isFinite(received) && received < expected * 0.72;
-    const pathPressure = Number(freezeDelta) > 0 || Number(packetsLostDelta) > 0 || Number(gapRecoveries) > 0
-      || Number(jitter) > 0.03 || underRun;
-    if (pathPressure) return 'path';
-    if (decodePressure || Number(framesDroppedDelta) > 8) return 'decode';
-    return '';
-  }
-
-  // How long SCTP may need to accept a 4K key. This is socket backpressure, not
-  // viewer latency — presenting a frame older than MAX_SHARE_LATENCY_MS is
-  // enforced separately so a fat key does not hitch every GOP.
-  function nativeKeyWaitMs(segmentBytes, pathMbps) {
-    const bytes = Math.max(0, Number(segmentBytes) || 0);
-    const path = Number(pathMbps);
-    const mbps = Number.isFinite(path) && path > 0 ? path : 16;
-    const sendMs = (bytes * 8) / (mbps * 1e6) * 1000;
-    return Math.max(100, Math.min(800, Math.ceil(sendMs) + 40));
-  }
-
-  function nativeShareRemainingMs(capturedAt, now = Date.now()) {
-    const captured = Number(capturedAt), at = Number(now);
-    if (!Number.isFinite(captured) || captured <= 0) return MAX_SHARE_LATENCY_MS;
-    return Math.max(0, MAX_SHARE_LATENCY_MS - Math.max(0, at - captured));
-  }
-
   function encoderShareCapMbps({ native = false, hardware = false, width = 1920, height = 1080, fps = 60 } = {}) {
     const w = Number(width) > 0 ? Number(width) : 1920;
     const h = Number(height) > 0 ? Number(height) : 1080;
@@ -124,9 +89,6 @@
 
   // Same derate as upload: a 50 Mbps advertised path is treated as ~37 Mbps so
   // voice, ACKs, and TCP burst stay out of the way. Missing numbers stay open.
-  const SHARE_BUDGET_LOWER_RATIO = 0.88;
-  const SHARE_BUDGET_RAISE_RATIO = 1.12;
-  const SHARE_BUDGET_RAISE_HOLD_MS = 15000;
   const SHARE_BUDGET_INTERVAL_MS = 20000;
 
   function viewerReceiveCapMbps(downloadMbps, liveMbps) {
@@ -182,38 +144,6 @@
     budget.congested = value.congested === true;
     budget.at = Number.isFinite(at) && at > 0 ? at : 0;
     return budget;
-  }
-
-  function nextShareBudgetMbps(currentMbps, { senderMbps, viewerMbps, congested = false } = {}) {
-    const sender = Number(senderMbps);
-    const senderCap = Number.isFinite(sender) && sender > 0 ? sender : Infinity;
-    const viewer = Number(viewerMbps);
-    const viewerCap = Number.isFinite(viewer) && viewer > 0 ? viewer : Infinity;
-    const probed = Math.min(senderCap, viewerCap);
-    const current = Number(currentMbps);
-    const floor = 0.35;
-    if (congested) {
-      const drop = Number.isFinite(current) && current > 0 ? current * SHARE_BUDGET_LOWER_RATIO : probed;
-      const cap = Number.isFinite(probed) ? Math.min(probed, drop) : drop;
-      return Math.max(floor, Number.isFinite(cap) ? cap : floor);
-    }
-    // Stay on the advertised min path. Climbing past a 50 Mbps friend because
-    // the sender is healthy would flood them before loss shows up.
-    if (Number.isFinite(probed)) return Math.max(floor, probed);
-    if (Number.isFinite(senderCap)) return Math.max(floor, senderCap);
-    if (Number.isFinite(current) && current > 0) return Math.max(floor, current);
-    return floor;
-  }
-
-  function shouldAdoptShareBudget(currentMbps, nextMbps, { lastChangeAt = 0, now = Date.now(), raisingHoldMs = SHARE_BUDGET_RAISE_HOLD_MS } = {}) {
-    const next = Number(nextMbps);
-    if (!Number.isFinite(next) || next <= 0) return false;
-    const current = Number(currentMbps);
-    if (!Number.isFinite(current) || current <= 0) return true;
-    if (next <= current * SHARE_BUDGET_LOWER_RATIO) return true;
-    if (next < current) return false;
-    if (next >= current * SHARE_BUDGET_RAISE_RATIO && now - Number(lastChangeAt || 0) >= raisingHoldMs) return true;
-    return false;
   }
 
   function cachedCapacityFresh(value, now = Date.now()) {
@@ -407,7 +337,6 @@
     MAX_NATIVE_SHARE_MBPS,
     MAX_HARDWARE_WEBRTC_SHARE_MBPS,
     MAX_SLIDER_MBPS,
-    MAX_SHARE_LATENCY_MS,
     clamp,
     mbpsFrom,
     effectiveUploadCapMbps,
@@ -416,19 +345,11 @@
     recommendShareBudgetMbps,
     autoShareCeilingMbps,
     sliderBitrateMaxMbps,
-    classifyShareBuffering,
-    nativeKeyWaitMs,
-    nativeShareRemainingMs,
     encoderShareCapMbps,
     viewerReceiveCapMbps,
     minViewerReceiveCapMbps,
     normalizeNetBudget,
     viewerDecodesInSoftware,
-    nextShareBudgetMbps,
-    shouldAdoptShareBudget,
-    SHARE_BUDGET_LOWER_RATIO,
-    SHARE_BUDGET_RAISE_RATIO,
-    SHARE_BUDGET_RAISE_HOLD_MS,
     SHARE_BUDGET_INTERVAL_MS,
     cachedCapacityFresh,
     shouldStopProbe,

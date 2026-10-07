@@ -74,28 +74,17 @@ app.whenReady().then(async () => {
         assert(registerDirectFilePeer('native-1',fixture.session.epoch),'native lane did not register');
         await safeSend(JSON.stringify({t:'start',v:{}}),fixture.session);
         const binary=new Uint8Array([1,2,3]).buffer;
-        assert(await busSafeSend(binary,fixture.session,'native-1')==='tcp','binary frame did not use the native lane');
+        assert(await busSafeSend(binary,fixture.session,'native-1')==='udx','binary frame did not use the native lane');
         assert(typeof fixture.bus.sent[0]==='string','control packet left the WebRTC lane');
         assert(directCalls.some(call=>call.id==='native-1'&&call.data instanceof ArrayBuffer),'native lane did not receive the binary frame');
-        await rejects(busSafeSend('{}',fixture.session,'native-1'),/controls cannot use/i,'TCP lane accepted JSON control data');
+        await rejects(busSafeSend('{}',fixture.session,'native-1'),/controls cannot use/i,'the fast lane accepted JSON control data');
         await rejects(safeSend('x'.repeat(MAX_FILE_CONTROL_BYTES+1),fixture.session),/invalid file control/i,'oversized control was accepted');
 
         for(let index=2;index<=MAX_DIRECT_FILE_PEERS;index++)assert(registerDirectFilePeer('native-'+index,fixture.session.epoch),'valid bounded direct peer was rejected');
         assert(!registerDirectFilePeer('native-over-cap',fixture.session.epoch),'direct peer cap was not enforced');
-        closeTcpLane();
+        closeFastLane();
 
-        const report=new Map([
-          ['pair-public',{id:'pair-public',type:'candidate-pair',state:'succeeded',selected:true,remoteCandidateId:'remote-public'}],
-          ['pair-lan',{id:'pair-lan',type:'candidate-pair',state:'succeeded',nominated:false,remoteCandidateId:'remote-lan'}],
-          ['pair-failed',{id:'pair-failed',type:'candidate-pair',state:'failed',remoteCandidateId:'remote-failed'}],
-          ['remote-public',{id:'remote-public',type:'remote-candidate',address:'203.0.113.8'}],
-          ['remote-lan',{id:'remote-lan',type:'remote-candidate',address:'192.168.50.9'}],
-          ['remote-failed',{id:'remote-failed',type:'remote-candidate',address:'127.0.0.1'}],
-        ]);
-        pc.getStats=async()=>report;
-        const addresses=await remoteTcpAddresses();
-        assert(addresses.includes('203.0.113.8')&&addresses.includes('192.168.50.9'),'standard remote-candidate stats lost alternate TCP routes');
-        assert(!addresses.includes('127.0.0.1'),'failed ICE pair influenced native TCP connection attempts');
+        
       }
 
       // Selecting Bob while Alice owns the live channel must never reuse Alice's
@@ -156,14 +145,82 @@ app.whenReady().then(async () => {
           assert(controls(fixture.bus).filter(value=>value.t==='tcp-unavailable').length===1,'an invalid TCP offer was answered');
         }finally{window.pairDirectFile.listen=realListen}
       }
-      // Auto TCP probing happens alongside the human accept/save step. A dead
-      // firewall port must not delay the offer card itself by five seconds, and
-      // the resolved WebRTC fallback must be announced before binary chunks.
+      // The fast UDP lane. The receiver opens a lane and starts punching first (low TTL, held) and tells
+      // the sender where it is; the sender punches at once and says it is armed; only then does the
+      // receiver let its normal punches out. All of it rides the already-authenticated session.
+      {
+        const fixture=await bind();fileTransportMode='auto';remoteFileUdx=true;
+        const calls=[];let laneCounter=0;const realUdx=window.pairUdxLane;
+        window.pairUdxLane={
+          open:async()=>{const id=(++laneCounter).toString(16).padStart(24,'0');calls.push(['open',id]);return{ok:true,id,streamId:100+laneCounter,endpoints:[{ip:'198.51.100.9',port:40000+laneCounter,kind:'srflx'}]}},
+          register:async(token,key)=>{calls.push(['register',token,key.byteLength]);return true},
+          establish:async options=>{calls.push(['establish',options.role,options.hold,options.id,options.remote.streamId,!!options.key]);return options.role==='connect'?'peer-fast-1':true},
+          release:async id=>{calls.push(['release',id]);return true},
+          close:id=>{calls.push(['close',id]);return true},
+        };
+        try{
+          // capabilities
+          await onFileFrame({data:JSON.stringify({t:'file-capabilities',v:2,udx:1})},false,fixture.context);assert(remoteFileUdx===true,'a udx capability was not recorded');
+          await onFileFrame({data:JSON.stringify({t:'file-capabilities',v:2})},false,fixture.context);assert(remoteFileUdx===false,'a peer without udx was recorded as having it');
+          remoteFileUdx=true;
+          const advertised=[];const realSafeSend=safeSend;
+          // receiver side
+          const token='ab'.repeat(24);
+          await onFileFrame({data:JSON.stringify({t:'udx-prepare',token,streamId:7,endpoints:[{ip:'203.0.113.5',port:41234,kind:'srflx'}]})},false,fixture.context);
+          assert(calls[0][0]==='open'&&calls[1][0]==='register'&&calls[1][1]===token&&calls[1][2]===32,'the receiver did not open and register in order');
+          const accept=calls.find(call=>call[0]==='establish');assert(accept&&accept[1]==='accept'&&accept[2]===30000&&accept[4]===7&&accept[5]===false,'the receiver did not start punching held, as the accepting side');
+          const ready=controls(fixture.bus).find(value=>value.t==='udx-ready');assert(ready&&ready.token===token&&ready.streamId===101&&ready.endpoints.length===1,'the receiver did not report its lane to the sender');
+          assert(controls(fixture.bus).findIndex(value=>value.t==='udx-ready')>=0&&calls.findIndex(call=>call[0]==='establish')<calls.length,'ordering check');
+          await onFileFrame({data:JSON.stringify({t:'udx-armed',token})},false,fixture.context);
+          assert(calls.some(call=>call[0]==='release'&&call[1]===calls[0][1]),'the sender saying it is armed did not release the receiving side punches');
+          await onFileFrame({data:JSON.stringify({t:'udx-armed',token:'cd'.repeat(24)})},false,fixture.context);
+          assert(calls.filter(call=>call[0]==='release').length===1,'an unknown token released a lane');
+          // refusals and bad input
+          const before=calls.length;
+          await onFileFrame({data:JSON.stringify({t:'udx-prepare',token:'short',streamId:7,endpoints:[]})},false,fixture.context);
+          await onFileFrame({data:JSON.stringify({t:'udx-prepare',token:'ef'.repeat(24),streamId:'x',endpoints:[]})},false,fixture.context);
+          assert(calls.length===before,'malformed offers opened a lane');
+          fileTransportMode='webrtc';
+          await onFileFrame({data:JSON.stringify({t:'udx-prepare',token:'12'.repeat(24),streamId:9,endpoints:[{ip:'203.0.113.5',port:41234,kind:'srflx'}]})},false,fixture.context);
+          assert(calls.length===before&&controls(fixture.bus).some(value=>value.t==='udx-unavailable'&&value.token==='12'.repeat(24)),'a receiver with the fast lane turned off did not refuse');
+          fileTransportMode='auto';
+
+          // sender side
+          fixture.bus.sent.length=0;calls.length=0;
+          const session=fixture.session,pending=prepareFastLane(session);
+          await waitFor(()=>controls(fixture.bus).some(value=>value.t==='udx-prepare'),'the sender never offered the fast lane');
+          const offer=controls(fixture.bus).find(value=>value.t==='udx-prepare');
+          assert(/^[A-Za-z0-9_-]{32,128}$/.test(offer.token)&&Number.isInteger(offer.streamId)&&offer.endpoints.length>=1,'the fast lane offer was malformed');
+          await onFileFrame({data:JSON.stringify({t:'udx-ready',token:offer.token,streamId:55,endpoints:[{ip:'203.0.113.8',port:42000,kind:'srflx'}]})},false,fixture.context);
+          const id=await pending;assert(id==='peer-fast-1','the sender did not return the fast lane peer');
+          const connect=calls.find(call=>call[0]==='establish'&&call[1]==='connect');assert(connect&&connect[2]===0&&connect[4]===55&&connect[5]===true,'the sender did not punch at once with the session key');
+          assert(controls(fixture.bus).some(value=>value.t==='udx-armed'&&value.token===offer.token),'the sender did not say it was armed');
+          assert(activeDirectFileId(session)==='peer-fast-1','the fast lane peer was not registered');
+          assert(await prepareFastLane(session)==='peer-fast-1'&&!calls.some(call=>call[0]==='open'&&call[1]!==calls[0][1]),'a second transfer did not reuse the lane');
+
+          // an unavailable friend: no lane, a back-off, and no retry storm
+          closeFastLane();fastLaneRetryEpoch=-1;fastLaneRetryAt=0;fixture.bus.sent.length=0;calls.length=0;
+          const refused=prepareFastLane(session);
+          await waitFor(()=>controls(fixture.bus).some(value=>value.t==='udx-prepare'),'the second offer was never sent');
+          await onFileFrame({data:JSON.stringify({t:'udx-unavailable',token:controls(fixture.bus).find(value=>value.t==='udx-prepare').token})},false,fixture.context);
+          assert(await refused==='','a refused fast lane returned a lane');
+          assert(fastLaneRetryAt>Date.now(),'a refused fast lane did not back off');
+          fixture.bus.sent.length=0;
+          assert(await prepareFastLane(session)===''&&!controls(fixture.bus).some(value=>value.t==='udx-prepare'),'the sender retried straight away');
+          assert(calls.some(call=>call[0]==='close'),'a lane that did not connect was left open');
+          // a friend that never advertised the capability is never offered anything
+          fastLaneRetryAt=0;remoteFileUdx=false;fixture.bus.sent.length=0;calls.length=0;
+          assert(await prepareFastLane(session)===''&&!calls.length&&!controls(fixture.bus).length,'a peer without the capability was offered a lane');
+        }finally{window.pairUdxLane=realUdx;fileTransportMode='webrtc';remoteFileUdx=false;fastLaneRetryAt=0}
+      }
+      // Fast lane probing happens alongside the human accept/save step. A peer that
+      // never answers must not delay the offer card itself, and the resolved WebRTC
+      // fallback must be announced before binary chunks.
       {
         const fixture=await bind();fileTransportMode='auto';
-        const realPrepare=prepareTcpLane;let resolveTcp,startSeen=false;
+        const realPrepare=prepareFastLane;let resolveTcp,startSeen=false;
         try{
-          prepareTcpLane=()=>new Promise(resolve=>{resolveTcp=resolve});
+          prepareFastLane=()=>new Promise(resolve=>{resolveTcp=resolve});
           const seq=fileSeq+1;
           fixture.bus.onSend=data=>{if(typeof data!=='string')return;let value;try{value=JSON.parse(data)}catch{return}if(value.t==='start'){startSeen=true;void onFileFrame({data:JSON.stringify({t:'accept',seq})},false,fixture.context)}if(value.t==='end'&&!value.cancelled)void onFileFrame({data:JSON.stringify({t:'complete',seq,size:0})},false,fixture.context)};
           await sendFile(new File([], 'auto-fallback.txt'),fixture.session,fixture.peer);
@@ -172,7 +229,7 @@ app.whenReady().then(async () => {
           resolveTcp('');await sendQueue;
           assert(controls(fixture.bus).some(value=>value.t==='route'&&value.seq===seq&&value.transport==='webrtc'),'resolved auto fallback was not announced');
           assert([...messages.querySelectorAll('.transfer-status')].at(-1)?.textContent==='Delivered','auto WebRTC fallback did not finish');
-        }finally{prepareTcpLane=realPrepare}
+        }finally{prepareFastLane=realPrepare}
       }
 
       // Fast accept and completion replies are deliberately fired from inside

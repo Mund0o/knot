@@ -13,7 +13,7 @@ does not require R2, Realtime SFU, a hosted database, or any new service account
 | Directory V2 and image references | Sharded public records; small referenced images fall back to the directory Durable Object | Enabled |
 | Chat history and diagnostics | Encrypted local SQLite; allowlisted local metrics | Never uploaded |
 | Voice, video, and screen sharing | Direct WebRTC mesh | No media sent through the Worker |
-| Files | Authenticated direct TCP, then direct WebRTC | No file bytes sent through the Worker |
+| Files | Fast UDP lane (UDX), then direct encrypted WebRTC | No file bytes sent through the Worker |
 | Group-call SFU pilot | Explicit feature flag, audio only, P2P fallback | Disabled |
 | Encrypted object relay | Explicit feature flag, direct presigned requests | Disabled; no R2 binding |
 
@@ -39,6 +39,27 @@ Durable Object request equivalents before normal directory traffic. Real usage
 is lower because media flows P2P and inactive sockets hibernate. This is a
 capacity estimate, not an SLA: on Free, operations fail after a daily limit is
 exceeded, so check Cloudflare usage if the community or heartbeat rate grows.
+
+### What a DM call costs
+
+Measured with two real apps against a local copy of the Worker
+(`tests/e2e/calls.js`, 100 ms ± 60 ms of simulated latency): pressing Call and
+having the friend join sends **10–14 messages in total** from both apps — two
+presence lines, one or two offers, one answer and 4–9 network candidates. While
+a call lasts, each person repeats one presence line every 8 seconds, about 450
+messages an hour per person. Network trouble mid-call costs roughly ten more
+messages per ICE restart, and a connection nobody is using is let go instead of
+being retried.
+
+Nothing about a call is stored. Presence lives only on the open socket of the
+person who is in the call, signalling passes straight through, and voice,
+screens and files go directly between the two computers (or through the TURN
+relay when that is the only way, and only after a direct attempt failed).
+
+At the 20:1 rate for incoming WebSocket messages, a call setup is under one
+billed Durable Object request and an hour-long call is about 45 for both people
+together. Ten one-hour calls a day come to roughly 450 request equivalents,
+under half a percent of the free 100,000.
 
 Official references:
 

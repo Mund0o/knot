@@ -4,28 +4,7 @@ const { webmAv1FrameMeta } = require('./native-video');
 
 const FLATPAK_APP = 'com.dec05eba.gpu_screen_recorder';
 const CLUSTER = Buffer.from([0x1f, 0x43, 0xb6, 0x75]);
-// Always drain the recorder and discard stale GOP data instead of pausing its
-// stdout. Pausing back-pressures the capture/encoder pipeline and makes the
-// desktop and Knot compositor visibly stutter when a WAN peer cannot keep up.
-const MAX_QUEUE_BYTES = 8 * 1024 * 1024;
-// One IPC drain should empty a live 4K GOP: a key is routinely >1 MiB, and
-// 0.15s keyint at 60 fps is ~9–16 clusters plus init. Cap at the capture
-// queue so a 4K key is not split from its deltas.
-const READ_MANY_MAX_ITEMS = 32;
-const READ_MANY_MAX_BYTES = MAX_QUEUE_BYTES;
-// Encoder keyint is 0.15s. Trim at the 260 ms live-latency cap so a queued
-// GOP cannot be older than the viewer will present. A pump that is one key
-// behind (150 ms) still sends a complete picture. 8 MiB overflow still
-// force-trims.
-const GOP_STALE_MS = 260;
-// Hold a second GOP so a 4K key that took ~300 ms to encode is not discarded
-// before the renderer drains it. GOP_STALE_MS stays 260 for the live-latency
-// contract; trim uses this looser bound so the picture does not freeze.
-const GOP_HOLD_MS = 520;
 const MAX_SEGMENT_BUFFER_BYTES = 64 * 1024 * 1024;
-const MAX_READ_WAITERS = 4;
-const STOP_TERM_DELAY_MS = 1500;
-const STOP_KILL_DELAY_MS = 4500;
 let recorderRunnerResolved = false;
 let recorderRunner = null;
 let recorderRunnerPending = null;
@@ -83,38 +62,6 @@ async function gpuScreenRecorderCommandAsync() {
       });
   }
   return recorderRunnerPending;
-}
-
-function trimNativeCaptureQueue(session, now = Date.now()) {
-  if (!session?.queue?.length) return;
-  const original = session.queue;
-  const latestInit = original.findLast(value => value.kind === 'init');
-  const latestKey = original.findLastIndex(value => value.kind === 'cluster' && value.key);
-  const oldestCluster = original.find(value => value.kind === 'cluster');
-  const stale = oldestCluster && now - Number(oldestCluster.capturedAt || 0) > GOP_HOLD_MS;
-  const overflow = session.queueBytes > MAX_QUEUE_BYTES && original.length > 1;
-  if (!stale && !overflow) return;
-  let keep = [];
-  if (latestInit) keep.push(latestInit);
-  if (latestKey >= 0) {
-    const keyItem = original[latestKey];
-    if (now - Number(keyItem.capturedAt || 0) > GOP_HOLD_MS) keep = latestInit ? [latestInit] : [];
-    else for (const value of original.slice(latestKey)) if (value !== latestInit) keep.push(value);
-  }
-  let keepBytes = keep.reduce((total, value) => total + value.data.length, 0);
-  if (overflow && keepBytes > MAX_QUEUE_BYTES) {
-    const keyItem = latestKey >= 0 ? original[latestKey] : null;
-    keep = [...new Set([latestInit, keyItem].filter(Boolean))];
-    keepBytes = keep.reduce((total, value) => total + value.data.length, 0);
-  }
-  const retained = new Set(keep);
-  let dropped = 0;
-  for (const item of original) if (!retained.has(item)) dropped++;
-  if (!dropped) return;
-  session.droppedSegments += dropped;
-  session.queue = keep;
-  session.queueBytes = keepBytes;
-  session.discontinuity = true;
 }
 
 function parseInfo(output) {
@@ -185,24 +132,6 @@ async function nativeScreenInfoAsync(primaryGpuVendor = '', primaryGpuCard = '')
   })();
   nativeInfoPending.set(cacheKey, pending);
   return pending;
-}
-
-function spawnRecorder(runner, args) {
-  // gpu-screen-recorder reopens /dev/stdout. Node implements child stdout with
-  // a socketpair, which cannot be reopened on Linux (ENXIO), so place a real
-  // kernel pipe between the recorder and a byte-for-byte bridge to Electron.
-  // Encoding is fully GPU-backed. Keep the capture/mux process at normal
-  // priority: lowering it made portal frame acquisition starve behind games and
-  // produced a visibly low-cadence stream even while NVENC/VA-API was healthy.
-  return spawn('/bin/bash', ['-o', 'pipefail', '-c', '"$@" | /bin/cat', 'knot-native-screen', runner.command, ...args], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true
-  });
-}
-
-function signalRecorder(child, signal) {
-  try { process.kill(-child.pid, signal);return; } catch {}
-  try { child.kill(signal); } catch {}
 }
 
 // Recorder stdout commonly splits a WebM cluster across many pipe reads. A
@@ -285,155 +214,4 @@ class WebmClusterSegmenter {
     return output;
   }
 }
-
-class NativeScreenService {
-  constructor({ primaryGpuVendor = '', primaryGpuCard = '', onError = () => {}, _spawnRecorder = spawnRecorder, _recorderRunner = gpuScreenRecorderCommand, _stopDelays = null } = {}) {
-    this.primaryGpuVendor = primaryGpuVendor;this.primaryGpuCard = primaryGpuCard;this.onError = onError;this.spawnRecorder = _spawnRecorder;this.recorderRunner = _recorderRunner;this.stopDelays = _stopDelays || { term: STOP_TERM_DELAY_MS, kill: STOP_KILL_DELAY_MS };this.session = null;this.retiring = null;this.nextId = 1;
-  }
-
-  info() { return nativeScreenInfo(this.primaryGpuVendor, this.primaryGpuCard); }
-
-  infoAsync() { return nativeScreenInfoAsync(this.primaryGpuVendor, this.primaryGpuCard); }
-
-  async startAsync(options = {}, isCurrent = () => true) {
-    // stop() remains synchronous for IPC/API compatibility, but a replacement
-    // capture must not overlap the detached recorder process being reaped.
-    if(this.retiring)await this.retiring;
-    if(!isCurrent())throw new Error('The screen-share document changed before capture started');
-    const info=await this.infoAsync();
-    if(this.retiring)await this.retiring;
-    // The capability probe may take several seconds on a cold Flatpak start.
-    // Re-check ownership afterwards so a reload cannot resurrect capture for
-    // the document whose request began the probe.
-    if(!isCurrent())throw new Error('The screen-share document changed before capture started');
-    return this.start(options,info);
-  }
-
-  start(options = {},knownInfo=null) {
-    if (this.retiring) throw new Error('The previous native screen capture is still stopping');
-    if (this.session) throw new Error('A native screen capture is already active');
-    const info = knownInfo||this.info();if (!info.supported) throw new Error(info.reason);
-    const runner = this.recorderRunner();if (!runner) throw new Error('GPU Screen Recorder is unavailable');
-    const codec = options.codec === 'h264' ? 'h264' : 'av1';
-    const fps = Number(options.fps) === 30 ? 30 : 60;
-    const requestedWidth = Number(options.width),requestedHeight = Number(options.height),sourceSize = requestedWidth === 0 && requestedHeight === 0;
-    const width = sourceSize ? 0 : [1280, 1920, 2560, 3840].includes(requestedWidth) ? requestedWidth : 3840;
-    const height = sourceSize ? 0 : [720, 1080, 1440, 2160].includes(requestedHeight) ? requestedHeight : 2160;
-    // A native group share encodes once but fans the same stream to every peer.
-    // Allow the renderer's total-upload budget to fall below 2 Mbps per viewer;
-    // the old floor multiplied into an 18+ Mbps minimum for a full group.
-    const maxKbps = info.vendor === 'amd' ? 150000 : 200000;
-    const bitrateKbps = Math.max(350, Math.min(maxKbps, Math.round(Number(options.bitrateKbps) || 6000)));
-    const bitrateMode = 'cbr';
-    const cursor = options.cursor === 'never' ? 'no' : 'yes';
-    const testCapture = process.env.KNOT_NATIVE_SCREEN_TEST === '1' && /^[A-Za-z0-9_.-]{1,64}$/.test(options.captureSource || '') ? options.captureSource : '';
-    // FFmpeg's streaming WebM default may retain several encoded frames in one
-    // Cluster. At 4K60 that created repeatable 8-frame / ~133 ms bursts before
-    // bytes even reached Knot. One frame per Cluster keeps capture delivery at
-    // display cadence; the lossy SCTP lane can then discard an individual stale
-    // frame instead of an entire burst. The 150 ms key interval remains the
-    // recovery bound after packet loss.
-    // Spatial AQ improves perceptual allocation in flat regions where block
-    // boundaries are easiest to see. Keep lookahead disabled so that quality
-    // work does not add frames of latency. These are NVENC-specific options;
-    // AMD VA-API keeps its proven low-latency defaults.
-    const videoOptions=info.vendor==='nvidia'?['-ffmpeg-video-opts','spatial-aq=1;aq-strength=8;rc-lookahead=0;strict_gop=1']:[];
-    const args = [...runner.prefix, '-w', testCapture || 'portal', '-s', `${width}x${height}`, '-k', codec, '-encoder', 'gpu', '-f', String(fps), '-fm', 'content', '-bm', bitrateMode, '-q', String(bitrateKbps), '-tune', 'performance', '-keyint', '0.15', '-cursor', cursor, '-fallback-cpu-encoding', 'no', '-c', 'webm', ...videoOptions, '-ffmpeg-opts', 'cluster_time_limit=0'];
-    const child = this.spawnRecorder(runner, args);
-    const session = { id: this.nextId++, child, codec, fps, width, height, queue: [], queueBytes: 0, waiters: [], error: '', errorReported: false, active: true, stopping: false, stderr: '', seq: 0, discontinuity: false, droppedSegments: 0, segmenter: new WebmClusterSegmenter(), pending: [], haveInit: false, haveKey: false };
-    this.session = session;
-    const reportSessionError=()=>{if(session.error&&!session.errorReported){session.errorReported=true;this.onError(session.error)}};
-    const deliver = item => {
-      const waiter = session.waiters.shift();if (waiter) waiter(item);else { session.queue.push(item);session.queueBytes += item.data.length; }
-      trimNativeCaptureQueue(session);
-    };
-    const enqueue = segment => {
-      const data = Buffer.isBuffer(segment.data) ? segment.data : Buffer.from(segment.data);
-      const meta = segment.kind === 'cluster' ? webmAv1FrameMeta(data, fps) : { key: false, frameCount: 0 };
-      const item = { kind: segment.kind, key: !!meta.key, frameCount: meta.frameCount || 0, seq: session.seq++, capturedAt: Date.now(), data };
-      // Recorders emit WebM init as soon as the first Cluster ID appears, before a key picture exists.
-      if (!session.haveInit || !session.haveKey) {
-        if (item.kind === 'init' && item.data.length) session.haveInit = true;
-        if (item.kind === 'cluster' && item.key) session.haveKey = true;
-        session.pending.push(item);
-        if (!session.haveInit || !session.haveKey) return;
-        const pending = session.pending.splice(0);let seenKey = false;
-        for (const held of pending) {
-          if (held.kind === 'init') deliver(held);
-          else if (held.key) { seenKey = true;deliver(held); }
-          else if (seenKey) deliver(held);
-        }
-        return;
-      }
-      deliver(item);
-    };
-    child.stdout.on('data', chunk => {
-      if(!session.active||session.stopping)return;
-      try { for (const segment of session.segmenter.push(chunk)) enqueue(segment); }
-      catch(error){if(!session.error)session.error=error?.message||String(error);reportSessionError();this.stop(session.id)}
-    });
-    child.stderr.on('data', chunk => { session.stderr = (session.stderr + chunk.toString()).slice(-8192); });
-    const finishSession=()=>{if(session.finished)return;session.finished=true;while (session.waiters.length) session.waiters.shift()(null);if(this.session===session)this.session=null;session.resolveStopped?.();session.resolveStopped=null};
-    child.on('error', error => {
-      session.error = error?.message || String(error);
-      reportSessionError();
-      if (!session.stopping && this.session === session) this.stop(session.id);
-      else { session.active = false;finishSession(); }
-    });
-    child.on('close', code => {
-      for(const timer of session.stopTimers||[])clearTimeout(timer);
-      if(!session.stopping)try{for (const segment of session.segmenter.push(null, true)) enqueue(segment)}catch(error){if(!session.error)session.error=error?.message||String(error)}
-      session.active = false;if (code && !session.stopping && !session.error) session.error = session.stderr.trim().split('\n').at(-1) || `GPU Screen Recorder exited with code ${code}`;
-      finishSession();
-      reportSessionError();
-    });
-    return { id: session.id, codec, fps, width, height, source: info.source, vendor: info.vendor, encoder: info.encoder, latencyTargetMs: info.latencyTargetMs };
-  }
-
-  packQueueItem(session, item) {
-    if (item && session.discontinuity) { item.discontinuity = true;session.discontinuity = false; }
-    return item ? { active: true, kind: item.kind, key: item.key, frameCount: item.frameCount, seq: item.seq, capturedAt: item.capturedAt, discontinuity: !!item.discontinuity, droppedSegments: session.droppedSegments, data: item.data } : { active: session.active, error: session.error };
-  }
-  async read(id, timeoutMs = 1500) {
-    const session = this.session;if (!session || session.id !== id) return { active: false, error: 'Native screen session ended' };
-    trimNativeCaptureQueue(session);
-    let item = session.queue.shift();
-    if (item) {
-      session.queueBytes -= item.data.length;
-    } else if (session.active) {
-      if(session.waiters.length>=MAX_READ_WAITERS)return{active:true,error:'Too many pending native screen reads'};
-      item = await new Promise(resolve => { const timer = setTimeout(() => { const index = session.waiters.indexOf(done);if (index >= 0) session.waiters.splice(index, 1);resolve(null); }, timeoutMs);const done = value => { clearTimeout(timer);resolve(value); };session.waiters.push(done); });
-    }
-    return this.packQueueItem(session, item);
-  }
-  readMany(id, options={}) {
-    const session = this.session;if (!session || session.id !== id) return { active: false, items: [] };
-    trimNativeCaptureQueue(session);
-    const maxItems=Math.max(1,Math.min(READ_MANY_MAX_ITEMS,Number(options.maxItems)||READ_MANY_MAX_ITEMS)),maxBytes=Math.max(1,Math.min(READ_MANY_MAX_BYTES,Number(options.maxBytes)||READ_MANY_MAX_BYTES));
-    const items=[];let bytes=0;
-    while (session.queue.length && items.length<maxItems && bytes<maxBytes) {
-      const item=session.queue.shift();session.queueBytes-=item.data.length;bytes+=item.data.length;items.push(this.packQueueItem(session, item));
-    }
-    return { active: session.active, error: session.error, items };
-  }
-
-  stop(id) {
-    const session = this.session;if (!session || (id && session.id !== id) || session.stopping) return false;session.active = false;session.stopping = true;
-    while (session.waiters.length) session.waiters.shift()(null);session.queue.length=0;session.queueBytes=0;session.pending.length=0;session.segmenter.queue.clear();
-    const stopped=new Promise(resolve=>{session.resolveStopped=resolve});
-    const retiring=stopped.finally(()=>{if(this.retiring===retiring)this.retiring=null});
-    this.retiring=retiring;
-    signalRecorder(session.child, 'SIGINT');
-    const child = session.child,term=setTimeout(() => { if (child.exitCode === null && child.signalCode === null) signalRecorder(child, 'SIGTERM'); }, this.stopDelays.term),kill=setTimeout(() => { if (child.exitCode === null && child.signalCode === null) signalRecorder(child, 'SIGKILL'); }, this.stopDelays.kill);term.unref?.();kill.unref?.();session.stopTimers=[term,kill];return true;
-  }
-
-  async stopAsync(id) {
-    const initiated=this.stop(id),retiring=this.retiring;
-    if(!retiring)return initiated;
-    let timer;await Promise.race([retiring,new Promise(resolve=>{timer=setTimeout(resolve,4000);timer.unref?.()})]);clearTimeout(timer);
-    const session=this.session;if(session?.child&&session.stopping)try{session.child.unref?.()}catch{};
-    return initiated;
-  }
-}
-
-module.exports = { gpuScreenRecorderCommand, gpuScreenRecorderCommandAsync, parseInfo, validateNativeScreenInfo, nativeScreenInfo, nativeScreenInfoAsync, ByteQueue, WebmClusterSegmenter, NativeScreenService, GOP_STALE_MS, GOP_HOLD_MS, MAX_QUEUE_BYTES, READ_MANY_MAX_ITEMS, READ_MANY_MAX_BYTES, trimNativeCaptureQueue };
+module.exports = { gpuScreenRecorderCommand, gpuScreenRecorderCommandAsync, parseInfo, validateNativeScreenInfo, nativeScreenInfo, nativeScreenInfoAsync, WebmClusterSegmenter };
