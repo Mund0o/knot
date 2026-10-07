@@ -1,11 +1,11 @@
 {
-  "version": "1.1.126",
-  "notes": "YouTube links play in Watch Together, clean mic and share icons, no more hearing a share you aren't watching, and file transfers now use the encrypted direct connection only (TCP removed).",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.126/pair-p2p-1.1.126.tar.gz",
-  "linuxSha256": "9b293710161d5330a2af153be30b0bcd34169ab0ddff13347b1b38483719974b",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.126/Knot-1.1.126.AppImage",
-  "linuxAppImageSha256": "00b371a0d185b01365d52532dd92d7dbf1fad2674d97e53ff757eee6f159c387",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.126/Knot.Setup.1.1.126.exe",
-  "winSha256": "bd08a8e4688e2a16fdf21e586e315238f36fb9da1c0d965003d9040b9bec7e43",
-  "signature": "XckSEsF9mnjOHqKv8LhB9K90VlmJB6HTK8TN2k/SGY/pF3EouZFRbUZBW49NDhaHGUViJd5xjP6LhuK3dF6nDQ=="
+  "version": "1.1.127",
+  "notes": "Screen sharing rebuilt: nothing is lowered for a weak connection, shares start faster, and a GPU that shows black falls back to the CPU. Calls connect faster, and files can use a fast UDP connection. Everyone needs 1.1.127 to call or watch shares together.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.127/pair-p2p-1.1.127.tar.gz",
+  "linuxSha256": "fe6a3299207a4aa06dccd9328a9763e34b2ac1d6edaaf567e6a9b06773678e6c",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.127/Knot-1.1.127.AppImage",
+  "linuxAppImageSha256": "0f6741081ad91b2f521c154674ab4bc3e1feb21ba22d38653e09c488b1bb4c07",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.127/Knot.Setup.1.1.127.exe",
+  "winSha256": "e2420f6f1b279417d24955203c9766df7d384a4ac23b08c454e04b29143b9ac4",
+  "signature": "gBm4AJY8XpK+EHrfRJxEbpCyhMfDVbHVHQ//4pLVx90GugP+PdXbZUh36MnM9dXuTBa6+5YFQM+edPUUj+Q9BA=="
 }
