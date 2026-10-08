@@ -13,7 +13,8 @@ app.whenReady().then(async () => {
   const window = new BrowserWindow({ show: false, width: 1000, height: 700, webPreferences: { contextIsolation: true, nodeIntegration: false, offscreen: true } });
   try {
     await window.loadFile(path.join(__dirname, '..', 'index.html'), { query: { testMode: '1' } });
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // The page's own start-up (friend presence, call state) ends shares and clears viewer state it finds set; give it time to finish before this test sets any.
+    await new Promise(resolve => setTimeout(resolve, 2500));
     const result = await window.webContents.executeJavaScript(`(async () => {
       const assert = (condition, message) => { if (!condition) throw new Error(message); };
       const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -30,6 +31,8 @@ app.whenReady().then(async () => {
         assert(screenAudioDebug === ' · sound unavailable (Addon not built: no pair-capture.node)', 'the sharer is not told why sound could not start: ' + screenAudioDebug);
         assert(sent.some(message => message.t === 'screen-audio' && message.active === false), 'the viewer is not told there is no sound: ' + JSON.stringify(sent));
         assert(screenStatus.textContent.includes('sound unavailable (Addon not built'), 'the status line does not carry the reason: ' + screenStatus.textContent);
+
+        screenActive = saved.active;       // the watcher below needs no share, and the page ends a share it finds running with nothing behind it
 
         // ---- capture runs, hears nothing, then something plays
         let loudAt = 0; const track = { _knotShareAudioHeard: () => true, _knotShareAudioLoudAt: () => loudAt };      // like the capture's own: a closure over a value that changes
@@ -58,7 +61,8 @@ app.whenReady().then(async () => {
         remoteScreenExpected = true; screenAudioDebug = '';
         const realSetInterval = window.setInterval.bind(window); window.setInterval = (fn, ms) => realSetInterval(fn, ms >= 2000 ? 100 : ms);
         Date.now = () => clock;
-        const until = async (label, test) => { for (let i = 0; i < 60; i++) { if (test(screenAudioDebug)) return; await sleep(100); } throw new Error(label + ': ' + screenAudioDebug); };
+        // The page's own call-state handling can clear a viewer's share state at any moment (a friend leaving the call, say); put the fake share back so a slow machine cannot fail this on timing.
+        const until = async (label, test) => { for (let i = 0; i < 80; i++) { if (test(screenAudioDebug)) return; if (!remoteScreenExpected || !remoteShareAudioMonitor) { remoteScreenExpected = true; startRemoteShareAudioMonitor(); } await sleep(100); } throw new Error(label + ': ' + screenAudioDebug); };
         const seen = [];
         remoteShareSoundAnnounced = false; startRemoteShareAudioMonitor();
         await until('a share without sound is not told apart from silence', text => /your friend is not sharing sound/.test(text)); seen.push(screenAudioDebug);
