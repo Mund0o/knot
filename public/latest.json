@@ -1,11 +1,11 @@
 {
-  "version": "1.1.127",
-  "notes": "Screen sharing rebuilt: nothing is lowered for a weak connection, shares start faster, and a GPU that shows black falls back to the CPU. Calls connect faster, and files can use a fast UDP connection. Everyone needs 1.1.127 to call or watch shares together.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.127/pair-p2p-1.1.127.tar.gz",
-  "linuxSha256": "fe6a3299207a4aa06dccd9328a9763e34b2ac1d6edaaf567e6a9b06773678e6c",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.127/Knot-1.1.127.AppImage",
-  "linuxAppImageSha256": "0f6741081ad91b2f521c154674ab4bc3e1feb21ba22d38653e09c488b1bb4c07",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.127/Knot.Setup.1.1.127.exe",
-  "winSha256": "e2420f6f1b279417d24955203c9766df7d384a4ac23b08c454e04b29143b9ac4",
-  "signature": "gBm4AJY8XpK+EHrfRJxEbpCyhMfDVbHVHQ//4pLVx90GugP+PdXbZUh36MnM9dXuTBa6+5YFQM+edPUUj+Q9BA=="
+  "version": "1.1.128",
+  "notes": "Less screenshare lag: 4K shares keep up on the CPU, the picture plays 160 ms behind, and the fast UDP connection starts sooner. AV1 decodes on your NVIDIA GPU (Linux). 4K60 shares start at 30 Mbps. Linux: you hear your own shared sound at low delay.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.128/pair-p2p-1.1.128.tar.gz",
+  "linuxSha256": "b29fb36365e58cfb6a58dfa9560280b1a818e8d7641874d7accde1986da66bd0",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.128/Knot-1.1.128.AppImage",
+  "linuxAppImageSha256": "51ab085358bc9a5c1164e80a196b59f61760c749ff0905217fb0df69ada1845c",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.128/Knot.Setup.1.1.128.exe",
+  "winSha256": "e910bf61e9f3071cc8a80f54c1b1864b358e55c9064797c9a29c39118cd5faa6",
+  "signature": "wx4aaow2+RWjyOgktD7BuAlExoTLZU8M/M0gOOaMgSXY9PMenkMybBx7VEezvzcnQrGFrsRWiJuHB23VWFIoBg=="
 }
