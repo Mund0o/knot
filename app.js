@@ -768,7 +768,7 @@ function clearRemoteScreenShare(status='Not sharing'){
   if(networkReceiveCongested||Number.isFinite(networkLiveReceiveMbps)){networkReceiveCongested=false;networkLiveReceiveMbps=NaN;announceNetBudget()}
   setRemoteScreenWatching(false);
   cleanupRemoteNativeScreen({keepAudio:true});dmShareOffer=null;
-  remoteScreenExpected=false;remoteNativeScreenExpected=false;remoteScreenSuppressed=false;clearRemoteShareAudioBind();
+  remoteScreenExpected=false;remoteNativeScreenExpected=false;remoteScreenSuppressed=false;remoteShareSoundAnnounced=false;clearRemoteShareAudioBind();
   // Never disable a receive track. Screen senders use replaceTrack on the same
   // negotiated transceiver, and a disabled receiver can stay silent after the
   // remote peer starts a new share. Playback is suppressed at the media element.
@@ -821,8 +821,8 @@ function wire(){
         if(value.t==='call-ring')return;
         if(typeof value.t==='string'&&value.t.startsWith('share-')){receiveShareControl(value);return}
         if(value.t==='screen-start'){screenStatus.textContent='Friend is sharing from an older Knot · ask them to update to watch';logCallEvent('Friend started a screen share this version cannot show; they need to update Knot');return}
-        if(value.t==='screen-audio'){if(value.active){screenAudioDebug=' · audio received';scheduleRemoteShareAudioBind();if(remoteScreenExpected)screenStatus.textContent='Friend sharing'+screenAudioDebug}else if(remoteScreenExpected){screenAudioDebug=' · sound unavailable';screenStatus.textContent='Friend sharing'+screenAudioDebug}return}
-        if(value.t==='screen-watch'&&screenActive){const watching=value.active===true;if(watching===friendWatchingScreen)return;friendWatchingScreen=watching;const status=watching?'Sharing · friend is watching':'Sharing · waiting for friend';screenStatus.textContent=status+screenAudioDebug;screenBtn.title=status;if(watching){playSound('screen-watch');logCallEvent('Friend started watching your screen')}else logCallEvent('Friend stopped watching your screen');return}
+        if(value.t==='screen-audio'){remoteShareSoundAnnounced=value.active===true;if(value.active){screenAudioDebug=' · audio received';scheduleRemoteShareAudioBind();if(remoteScreenExpected)screenStatus.textContent='Friend sharing'+screenAudioDebug}else if(remoteScreenExpected){screenAudioDebug=' · sound unavailable';screenStatus.textContent='Friend sharing'+screenAudioDebug}return}
+        if(value.t==='screen-watch'&&screenActive){const watching=value.active===true;if(watching===friendWatchingScreen)return;friendWatchingScreen=watching;const status=watching?'Sharing · friend is watching':'Sharing · waiting for friend';screenStatus.textContent=status+screenAudioDebug;screenBtn.title=status;if(watching){playSound('screen-watch');logCallEvent('Friend started watching your screen');if(nativeScreenAudioStream&&screenAudioOn)try{send({t:'screen-audio',active:true})}catch{}}else logCallEvent('Friend stopped watching your screen');return}
         if(value.t==='screen-end'){logCallEvent('Friend stopped screen sharing');clearRemoteScreenShare();return}
         if(value.t==='watch'){receiveWatchMessage(value);return}
         if(value.t==='net-budget'){rememberPeerNetBudget(directBudgetKey(),value,{aliasDirect:true});return}
@@ -3602,13 +3602,17 @@ async function ensureCaptureAudioContextRunning(ctx){
   if(ctx.state!=='running')await attemptAudioContextResume(ctx);
   if(ctx.state!=='running')throw new Error('screen audio is waiting for an audio-output gesture');
 }
+// Why the last sound capture could not start, in words for the person sharing (empty when it did).
+let shareAudioFailureReason='';
 async function setupNativeScreenCapture(){
+  shareAudioFailureReason='';
   if(!window.pairCapture){
     console.warn('[AUDIO] isolated desktop capture unavailable; refusing full-mix loopback');
+    shareAudioFailureReason='this build has no sound capture';
     return null;
   }
 
-  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubClean,unsubError,unsubFormat,addonData=false,formatReady=false,systemMix=false,captureClosed=false,captureFailure='',outputTrack=null,captureRate=48000;let shareResample=()=>new Float32Array(0);const captureOwner={};
+  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubClean,unsubError,unsubFormat,addonData=false,loudAt=0,formatReady=false,systemMix=false,captureClosed=false,captureFailure='',outputTrack=null,captureRate=48000;let shareResample=()=>new Float32Array(0);const captureOwner={};
   const dispose=(stopCapture=isCurrent())=>{captureClosed=true;if(unsubClean)unsubClean();if(unsubError)unsubError();if(unsubFormat)unsubFormat();if(stopCapture)try{window.pairCapture.stop()}catch{}try{op?.port.close()}catch{}try{op?.disconnect()}catch{}};
   try{
     ctx=takeScreenAudioContext();
@@ -3624,6 +3628,7 @@ async function setupNativeScreenCapture(){
       const samples=new Float32Array(count*2);
       if(arr.length>=count*2)samples.set(arr.subarray(0,count*2));
       else for(let i=0;i<count;i++){const sample=arr[i]||0;samples[i*2]=sample;samples[i*2+1]=sample}
+      for(let i=0;i<samples.length;i+=7)if(Math.abs(samples[i])>1e-4){loudAt=Date.now();break}     // silence is all zeros; this is whether anything is playing on the computer
       const played=softenSharePcm(shareResample(samples,captureRate));
       try{op.port.postMessage(played,[played.buffer]);addonData=true}catch(error){captureFailure='audio worklet input failed: '+(error?.message||error)}
     });
@@ -3670,18 +3675,20 @@ async function setupNativeScreenCapture(){
     }
     if(!isCurrent()||captureFailure||!formatReady){
       console.warn('[AUDIO] isolated desktop capture did not initialize; sharing video only',captureFailure);
+      shareAudioFailureReason=captureFailure||'Windows did not start sound capture';
       dispose(isCurrent());
       if(ctx)try{ctx.close()}catch{}
       return null;
     }
     screenOutCtx=ctx;screenOutDest=dest;screenCaptureOwner=captureOwner;
     screenNative=true;
-    outputTrack=dest.stream.getAudioTracks()[0];if(outputTrack){outputTrack._knotCaptureOwner=captureOwner;outputTrack._knotShareAudioHeard=()=>addonData===true;outputTrack._knotSystemMix=systemMix}
+    outputTrack=dest.stream.getAudioTracks()[0];if(outputTrack){outputTrack._knotCaptureOwner=captureOwner;outputTrack._knotShareAudioHeard=()=>addonData===true;outputTrack._knotShareAudioLoudAt=()=>loudAt;outputTrack._knotSystemMix=systemMix}
     try{if(outputTrack)outputTrack.contentHint='music'}catch{}
     shareAudioFadeIn=()=>{try{op.port.postMessage({type:'fade'})}catch{}};
     screenCaptureCleanup=()=>dispose(true);if(!outputTrack){cleanupNativeScreenCapture(captureOwner);return null}return outputTrack;
   }catch(e){
     console.warn('[AUDIO] isolated desktop capture failed:',e?.message||e);
+    shareAudioFailureReason=String(e?.message||e);
     dispose(isCurrent());
     if(ctx)try{ctx.close()}catch{}
     return null;
@@ -4314,11 +4321,11 @@ function clearRemoteShareAudioBind(){remoteShareAudioBindTimers.forEach(clearTim
 // actually happens every few seconds: sound packets arriving, and the player
 // running. Sound that arrives but is not playing is rebound, then routed
 // through Web Audio instead; the status says which of these is true.
-let remoteShareAudioMonitor=null;
+let remoteShareAudioMonitor=null,remoteShareSoundAnnounced=false;       // announced: the sharer said it attached sound (silent packets arrive from a share without any)
 function stopRemoteShareAudioMonitor(){clearInterval(remoteShareAudioMonitor);remoteShareAudioMonitor=null}
 function startRemoteShareAudioMonitor(){
   if(remoteShareAudioMonitor)return;
-  let previousPackets=-1,previousEnergy=0,repairs=0,busy=false;
+  let previousPackets=-1,previousEnergy=0,repairs=0,busy=false,silentSince=0;
   remoteShareAudioMonitor=setInterval(async()=>{
     if(!remoteScreenExpected){stopRemoteShareAudioMonitor();return}
     if(busy)return;busy=true;
@@ -4328,6 +4335,7 @@ function startRemoteShareAudioMonitor(){
       const packets=Number(inbound.packetsReceived)||0,energy=Number(inbound.totalAudioEnergy)||0;
       if(previousPackets<0){previousPackets=packets;previousEnergy=energy;return}
       const arriving=packets-previousPackets>20,loud=energy-previousEnergy>1e-7;previousPackets=packets;previousEnergy=energy;
+      if(loud||!arriving)silentSince=0;else if(!silentSince)silentSince=Date.now();
       const audio=nativeRemoteAudio,wanted=!remoteScreenSuppressed&&(Number(remoteScreen.volume)||0)>0;
       const viaGraph=!!(shareAudioStream&&shareAudioGain&&audio?.srcObject===shareAudioStream);
       const playing=!!audio&&(viaGraph||(!audio.paused&&!audio.muted&&(audio.volume>.01||!!audio._knotShareFade)));
@@ -4341,7 +4349,7 @@ function startRemoteShareAudioMonitor(){
         logShareAudio('watchdog repair '+repairs+' paused='+audio?.paused+' muted='+audio?.muted+' vol='+Number(audio?.volume||0).toFixed(2));
       }
       else if(!wanted)state=' · sound muted';
-      else state=loud?' · sound playing':' · sound arriving but silent';
+      else state=ShareKit.describeShareSound({announced:remoteShareSoundAnnounced,loud,silentMs:silentSince?Date.now()-silentSince:0});
       if(state!==screenAudioDebug){screenAudioDebug=state;if(remoteNativeScreenExpected&&!screenActive&&!screenStarting)screenStatus.textContent='Friend sharing'+screenAudioDebug}
     }catch{}finally{busy=false}
   },2500);
@@ -4388,8 +4396,25 @@ function targetNativeAv1BitrateKbps(width,height,fps,viewers=1){
   // GPU, which made the rate depend on who was watching and left the user no say in how fast it goes up.
   return Math.round((screenBitrateExplicit?pathBudget:Math.min(pathBudget,formulaMbps))*1000);
 }
+// Capture that runs and hears nothing looks like sound that is live. Say so to the person sharing while nothing has played for a while (a game
+// with its sound off, a muted player, or a capture that does not hear what is playing); it says live again as soon as something does.
+function watchShareAudioLevel(track,stillWanted){
+  const loudAt=track?._knotShareAudioLoudAt;if(typeof loudAt!=='function')return;
+  const started=Date.now(),QUIET=' · sound on, but nothing is playing on this computer',LIVE=' · sound live',WAITING=' · waiting for computer sound';
+  const timer=setInterval(()=>{
+    if(!stillWanted()){clearInterval(timer);return}
+    const quiet=Date.now()-Math.max(loudAt(),started)>8000,before=screenAudioDebug;
+    if(screenAudioDebug.startsWith(WAITING)&&track._knotShareAudioHeard?.()===true)screenAudioDebug=LIVE+screenAudioDebug.slice(WAITING.length);       // sound capture that began after the share did
+    if(quiet&&screenAudioDebug.startsWith(LIVE))screenAudioDebug=QUIET+screenAudioDebug.slice(LIVE.length);
+    else if(!quiet&&screenAudioDebug.startsWith(QUIET))screenAudioDebug=LIVE+screenAudioDebug.slice(QUIET.length);
+    if(screenAudioDebug!==before)screenStatus.textContent=shareSenderStatus();
+  },1000);
+}
 async function attachNativeShareAudio(gen){
-  if(!screenAudioOn||!screenActive||gen!==screenGen)return;const track=await acquireIsolatedShareAudioTrack(()=>screenAudioOn&&screenActive&&gen===screenGen);if(!track||!screenActive||gen!==screenGen){try{track?.stop()}catch{}if(track)cleanupNativeScreenCapture(track._knotCaptureOwner);return}const audioStream=new MediaStream([track]);nativeScreenAudioStream=audioStream;try{track.contentHint='music'}catch{};try{await setReservedScreenAudioTrack(track);if(nativeScreenAudioStream!==audioStream||!screenActive||gen!==screenGen)throw new Error('screen share ended while attaching audio');screenAudioDebug=await confirmShareAudioHeard(track,()=>nativeScreenAudioStream===audioStream&&screenActive&&gen===screenGen);if(nativeScreenAudioStream!==audioStream||!screenActive||gen!==screenGen)throw new Error('screen share ended while attaching audio');screenStatus.textContent=shareSenderStatus()}catch(error){console.warn('[AUDIO] native share audio failed:',error?.message||error);try{send({t:'screen-audio',active:false})}catch{}try{await setReservedScreenAudioTrack(null)}catch{}try{track.stop()}catch{}if(nativeScreenAudioStream===audioStream)nativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);if(screenActive&&gen===screenGen){screenAudioDebug=' · sound unavailable';screenStatus.textContent=shareSenderStatus()}}
+  if(!screenAudioOn||!screenActive||gen!==screenGen)return;const track=await acquireIsolatedShareAudioTrack(()=>screenAudioOn&&screenActive&&gen===screenGen);if(!track||!screenActive||gen!==screenGen){try{track?.stop()}catch{}if(track)cleanupNativeScreenCapture(track._knotCaptureOwner);
+    // Sound that could not start used to leave "starting sound capture" on the screen for good, and the viewer a silent track that looked like sound.
+    if(!track&&screenActive&&gen===screenGen&&screenAudioOn){if(screenAudioDebug===' · starting sound capture')screenAudioDebug=' · sound unavailable'+(shareAudioFailureReason?' ('+shareAudioFailureReason+')':'');try{send({t:'screen-audio',active:false})}catch{}screenStatus.textContent=shareSenderStatus()}
+    return}const audioStream=new MediaStream([track]);nativeScreenAudioStream=audioStream;try{track.contentHint='music'}catch{};try{await setReservedScreenAudioTrack(track);if(nativeScreenAudioStream!==audioStream||!screenActive||gen!==screenGen)throw new Error('screen share ended while attaching audio');screenAudioDebug=await confirmShareAudioHeard(track,()=>nativeScreenAudioStream===audioStream&&screenActive&&gen===screenGen);if(nativeScreenAudioStream!==audioStream||!screenActive||gen!==screenGen)throw new Error('screen share ended while attaching audio');screenStatus.textContent=shareSenderStatus();watchShareAudioLevel(track,()=>nativeScreenAudioStream===audioStream&&screenActive&&gen===screenGen)}catch(error){console.warn('[AUDIO] native share audio failed:',error?.message||error);try{send({t:'screen-audio',active:false})}catch{}try{await setReservedScreenAudioTrack(null)}catch{}try{track.stop()}catch{}if(nativeScreenAudioStream===audioStream)nativeScreenAudioStream=null;cleanupNativeScreenCapture(track._knotCaptureOwner);if(screenActive&&gen===screenGen){screenAudioDebug=' · sound unavailable';screenStatus.textContent=shareSenderStatus()}}
 }
 function recoverFromGpuProcessLoss(details={}){
   const reason=String(details.reason||'GPU process restarted');

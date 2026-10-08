@@ -74,8 +74,9 @@
     let gpuOn = false, gpuFailed = false, gpuReason = '', gpuSize = null, backendWantedSince = 0, lastBackendReviewAt = 0, lastBackendSwitchAt = -Infinity;
     const arrivals = new Map();            // picture time -> when it arrived, for latency
     const latencies = [];
-    const stats = { received: 0, decoded: 0, painted: 0, decodeSkips: 0, restarts: 0, modeSwitches: 0, backendSwitches: 0, errors: 0, width: 0, height: 0, firstPaintAt: 0, lastPaintAt: 0, lastPacketAt: 0, lastLiveAt: 0, lastState: '' };
+    const stats = { received: 0, decoded: 0, painted: 0, ticks: 0, decodeSkips: 0, restarts: 0, modeSwitches: 0, backendSwitches: 0, errors: 0, width: 0, height: 0, firstPaintAt: 0, lastPaintAt: 0, lastPacketAt: 0, lastLiveAt: 0, lastState: '' };
     const renderIntervals = [];
+    const drawTimes = [];                  // how long each picture took to draw (ms): a graphics card that is busy elsewhere makes this grow
 
     const fps = () => Number(config?.fps) || DEFAULT_FPS;
     const aheadUs = () => Math.max(DECODE_AHEAD_MIN_US, 6e6 / fps());
@@ -319,7 +320,9 @@
       if (canvas && context) {
         const { w, h } = size();
         if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+        const drawStart = now();
         try { context.drawImage(frame, 0, 0, w, h); } catch (error) { closeFrame(frame); stats.errors++; destroyedWith(error); return; }
+        drawTimes.push(now() - drawStart); if (drawTimes.length > 120) drawTimes.shift();
         if (!stats.firstPaintAt) { stats.firstPaintAt = t; surface?.reveal?.(); }
       }
       closeFrame(frame);
@@ -332,6 +335,7 @@
     function tick(t) {
       loopOn = false;
       if (destroyed) return;
+      stats.ticks++;
       pump();
       if (active) {
         const result = playout.tick(t, { pending });
@@ -368,7 +372,7 @@
         const intervals = renderIntervals.slice(-120), mean = intervals.reduce((a, b) => a + b, 0) / Math.max(1, intervals.length);
         return {
           ...stats, ...status(), decoder: gpuOn ? 'nvdec' : software ? 'software' : 'hardware-preferred', decodeMode: gpuOn ? 'gpu' : software && !lowLatency ? 'throughput' : 'low-latency', softwareReason: gpuReason && !gpuOn ? gpuReason : softwareReason, gpuSize, pending, verification, queued: encoded.length, decodedWaiting: playout.frames.length, skippedShown: playout.skipped, skippedAtStart: playout.skippedAtStart,
-          renderFps: mean ? 1000 / mean : 0, renderCadenceP95Ms: percentile(intervals, .95), latencyP50Ms: percentile(latencies, .5), latencyP95Ms: percentile(latencies, .95), rate: playout.rate,
+          renderFps: mean ? 1000 / mean : 0, renderCadenceP95Ms: percentile(intervals, .95), drawMsP95: percentile(drawTimes, .95), latencyP50Ms: percentile(latencies, .5), latencyP95Ms: percentile(latencies, .95), rate: playout.rate,
         };
       },
       destroy() { if (destroyed) return; destroyed = true; stopDecoder(); encoded = []; replay = []; arrivals.clear(); },

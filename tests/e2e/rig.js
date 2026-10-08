@@ -140,8 +140,8 @@ class App {
     if (!keepData) fs.rmSync(this.dataDir, { recursive: true, force: true }); fs.mkdirSync(this.dataDir, { recursive: true });
     this.console = []; this.stderr = []; this.pending = new Map(); this.nextId = 1;
     // --headless: the app runs with no display at all, so no window ever appears on the screen of the person running the tests (Linux ignores a
-    // window's opacity, so a "transparent" window is an ordinary one). KNOT_TEST_VISIBLE=1 shows real windows, for the few checks that need a GPU.
-    const flags = ['.', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--mute-audio', ...(process.env.KNOT_TEST_VISIBLE === '1' ? ['--ozone-platform=x11'] : ['--headless']), `--remote-debugging-port=${this.cdpPort}`, '--disable-gpu', ...this.extraArgs];
+    // window's opacity, so a "transparent" window is an ordinary one). KNOT_TEST_VISIBLE=1 shows real windows, for the few checks that need a GPU; E2E_GPU=1 keeps the app's own GPU settings (the rig turns the GPU off otherwise).
+    const flags = ['.', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--mute-audio', ...(process.env.KNOT_TEST_VISIBLE === '1' ? ['--ozone-platform=x11'] : ['--headless']), `--remote-debugging-port=${this.cdpPort}`, ...(process.env.E2E_GPU === '1' ? [] : ['--disable-gpu']), ...this.extraArgs];
     this.child = spawn(ELECTRON, flags, { cwd: APP_ROOT, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ? process.env.NODE_OPTIONS + ' ' : ''}--require ${JSON.stringify(path.join(__dirname, '..', 'quiet-windows.js'))}`, ELECTRON_RUN_AS_NODE: '', KNOT_TEST_RIG: '1', KNOT_USER_DATA: this.dataDir, KNOT_SIGNAL_SERVER: `ws://127.0.0.1:${this.signalPort}`, ...this.env } });
     delete this.child.env;

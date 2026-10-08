@@ -115,7 +115,7 @@
   // ------------------------------------------------------------------------------------------------------------ watching
   function createShareWatcher({ shareId, surface, getDisplaySize, lanes = null, sendControl, onState = () => {}, onEnded = () => {}, onError = () => {}, onGap = () => {}, log = () => {}, preferSoftware = false, gpuDecode = null, playoutOptions = {}, now = () => performance.now(), endQuietMs = END_QUIET_MS, endPlayoutMs = END_PLAYOUT_MS, Session, Player } = {}) {
     const engine = { ...defaults(), ...(Session ? { Session } : {}), ...(Player ? { Player } : {}) };
-    let sample = null, rates = { receivedFps: 0, shownFps: 0, mbps: 0 };
+    let sample = null, rates = { receivedFps: 0, shownFps: 0, mbps: 0, tickFps: null, decodedFps: null };
     let finished = false, recordEnded = false, playerEnded = false, endTimer = null, hostEnded = false, hostEndedAt = 0, recordEndedAt = 0, stopped = false;
     const finish = () => { if (finished) return; finished = true; clearInterval(endTimer); endTimer = null; try { onEnded(); } catch {} };
     // Over when the end record has arrived and the player has shown everything before it, in whichever order those two happen.
@@ -153,8 +153,9 @@
       readout({ label = 'Friend sharing', config = null, hardware = null } = {}) {
         const t = now(), p = player.stats(), v = viewer.stats(), seen = player.read();
         if (!sample || t - sample.t >= 1000) {
-          if (sample) { const seconds = (t - sample.t) / 1000; rates = { receivedFps: (p.received - sample.received) / seconds, shownFps: (p.painted - sample.painted) / seconds, mbps: (v.bytes - sample.bytes) * 8 / seconds / 1e6 }; }
-          sample = { t, received: p.received, painted: p.painted, bytes: v.bytes };
+          if (sample) { const seconds = (t - sample.t) / 1000; rates = { receivedFps: (p.received - sample.received) / seconds, shownFps: (p.painted - sample.painted) / seconds, mbps: (v.bytes - sample.bytes) * 8 / seconds / 1e6,
+            tickFps: Number.isFinite(p.ticks) && Number.isFinite(sample.ticks) ? (p.ticks - sample.ticks) / seconds : null, decodedFps: Number.isFinite(p.decoded) && Number.isFinite(sample.decoded) ? (p.decoded - sample.decoded) / seconds : null }; }
+          sample = { t, received: p.received, painted: p.painted, ticks: p.ticks, decoded: p.decoded, bytes: v.bytes };
         }
         const lastHeard = Math.max(seen.lastPacketAt || 0, seen.lastLiveAt || 0), quietMs = lastHeard ? t - lastHeard : 0;
         const key = hardwareKey(config?.codec), onCpu = p.decoder === 'software' || (p.decoder === 'hardware-preferred' && Array.isArray(hardware) && !!key && !hardware.includes(key));
@@ -173,9 +174,17 @@
   // ------------------------------------------------------------------------------------------------------------ what the viewer is told
   const hardwareKey = codec => { const text = String(codec || '').toLowerCase(); return text.startsWith('av01') ? 'AV1' : text.startsWith('avc1') ? 'H264' : text.startsWith('vp09') ? 'VP9' : text === 'vp8' ? 'VP8' : ''; };
   const codecName = codec => { const text = String(codec || '').toLowerCase(); return text.startsWith('av01') ? 'AV1' : text.startsWith('avc1') ? 'H.264' : text.startsWith('vp09') ? 'VP9' : text.startsWith('hvc1') || text.startsWith('hev1') ? 'HEVC' : String(codec || 'video'); };
+  // Why fewer pictures are shown than arrive, from what was measured. A picture is shown on a window redraw, one at a time, so a window that is
+  // only redrawn 20 times a second shows 20 pictures a second however fast they arrive and decode: that is the window (another program using the
+  // graphics card, or the window covered), not this program's decoder. Without the measurements the old, general wording stays.
+  function slowReason({ receivedFps = 0, tickFps = null, decodedFps = null } = {}) {
+    if (decodedFps !== null && decodedFps < receivedFps * 0.75) return 'this computer decodes only ' + Math.round(decodedFps) + ' pictures a second';
+    if (tickFps !== null && tickFps < receivedFps * 0.75) return tickFps < 1 ? 'this window is not being redrawn (hidden or covered)' : 'this window is redrawn only ' + Math.round(tickFps) + ' times a second (something else is using the graphics card, or the window is covered)';
+    return 'this computer is falling behind';
+  }
   // The line under a friend's share: what arrives, what is shown, what decodes it, and, when something is wrong, whose end it is on. A still
   // screen sends no pictures, so "0 fps" with heartbeats arriving is a quiet screen, not a problem.
-  function describeShare({ label = 'Friend sharing', config = null, receivedFps = 0, shownFps = 0, mbps = 0, software = false, buffering = false, quietMs = 0, stillScreen = false } = {}) {
+  function describeShare({ label = 'Friend sharing', config = null, receivedFps = 0, shownFps = 0, mbps = 0, software = false, buffering = false, quietMs = 0, stillScreen = false, tickFps = null, decodedFps = null } = {}) {
     const parts = [label], height = Number(config?.height) || 0;
     if (height) parts.push(height + 'p');
     parts.push(stillScreen && receivedFps < 1 ? 'still screen' : Math.round(receivedFps) + ' fps');
@@ -183,11 +192,22 @@
     parts.push(codecName(config?.codec) + ' on ' + (software ? 'CPU' : 'GPU'));
     if (quietMs > 1500) parts.push('nothing arriving from your friend’s connection');
     else if (buffering) parts.push('buffering');
-    else if (receivedFps >= 5 && shownFps < receivedFps * 0.6) parts.push('only ' + Math.round(shownFps) + ' fps shown · this computer is falling behind');
+    else if (receivedFps >= 5 && shownFps < receivedFps * 0.6) parts.push('only ' + Math.round(shownFps) + ' fps shown · ' + slowReason({ receivedFps, tickFps, decodedFps }));
     return parts.join(' · ');
   }
 
   // ------------------------------------------------------------------------------------------------------------ sound
+  // What the sound line says when sound packets arrive and the viewer's player is running. Silent packets arrive from a share that carries no sound
+  // at all too (the sender keeps an empty track on the line), so packets alone prove nothing: the sharer says whether it attached sound
+  // (`announced`), and how long the received sound has had no energy decides the rest.
+  const SILENT_SETTLE_MS = 6000;
+  function describeShareSound({ announced = false, loud = false, silentMs = 0 } = {}) {
+    if (loud) return ' · sound playing';
+    if (!announced) return ' · your friend is not sharing sound (their sound is off, or it could not start)';
+    if (silentMs < SILENT_SETTLE_MS) return ' · sound arriving';
+    return ' · your friend’s sound is silent (nothing is playing on their computer, or its sound capture hears nothing)';
+  }
+
   // The picture is shown a little behind the newest picture that arrived; the sound travels another way and would run ahead of it.
   // Holding it back by the same amount keeps lips and clicks together. Applied to the audio receivers' jitter buffer (the browser
   // time-stretches to reach it), never below the floor that stops screen sound choking, never above what the browser allows.
@@ -208,5 +228,5 @@
     return { apply, start() { if (!timer) { apply(); timer = setTimer(apply, everyMs); } }, stop() { if (timer) clearTimer(timer); timer = null; }, get targetMs() { return last; } };
   }
 
-  return { createShareSender, createShareWatcher, createAudioAlign, recorderSource, pageSource, audioTargetMs, describeShare, codecName, newShareId, REANNOUNCE_MS, END_DRAIN_MS, END_QUIET_MS, END_PLAYOUT_MS, AUDIO_MIN_MS, AUDIO_MAX_MS };
+  return { createShareSender, createShareWatcher, createAudioAlign, recorderSource, pageSource, audioTargetMs, describeShare, describeShareSound, codecName, newShareId, REANNOUNCE_MS, END_DRAIN_MS, END_QUIET_MS, END_PLAYOUT_MS, AUDIO_MIN_MS, AUDIO_MAX_MS };
 });

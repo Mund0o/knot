@@ -17,7 +17,7 @@
     "test:ui": "node tests/run-electron-smoke.js tests/ui-navigation-smoke.js && node tests/run-electron-smoke.js tests/group-dm-call-ui.js && node tests/run-electron-smoke.js tests/dm-call-join.js && node tests/run-electron-smoke.js tests/dm-outbox.js && node tests/run-electron-smoke.js tests/microphone-recovery.js && node tests/run-electron-smoke.js tests/watch-lan-ui.js",
     "test:direct-file": "node tests/file-transfer-protocol.js && node tests/direct-file-lane.js && node tests/file-transfer-preload-ipc.js && node tests/file-transfer-main-ipc.js && node tests/run-electron-smoke.js tests/file-transfer-renderer.js",
     "test:deepfilter": "node tests/run-electron-smoke.js tests/deepfilter-local-smoke.js",
-    "test:windows-audio": "node tests/windows-audio-addon-guard.js && node tests/run-electron-smoke.js tests/windows-audio-renderer-smoke.js",
+    "test:windows-audio": "node tests/windows-audio-addon-guard.js && node tests/run-electron-smoke.js tests/windows-audio-renderer-smoke.js && node tests/run-electron-smoke.js tests/share-sound-status.js",
     "test:worker": "node tests/worker-offline-mailbox.js && node tests/presence-heartbeat.js && wrangler deploy --dry-run",
     "test:sfu": "node tests/realtime-sfu.js",
     "test:network": "node tests/network-conditioned-benchmarks.js",
@@ -32,7 +32,7 @@
     "rebuild:addon": "node rebuild-addon.js",
     "verify:addon": "node scripts/windows-audio-addon-guard.js",
     "publish": "node publish-update.js",
-    "test:share": "node tests/share-core.js && node tests/share-playout.js && node tests/share-player-clock.js && node tests/share-decode-nvdec.js && node tests/share-session.js && node tests/share-lane.js && node tests/share-controller.js && node tests/share-bridge-ipc.js && node tests/share-browser-load.js && node tests/share-capture-gsr.js && node tests/native-screen-info.js && node tests/linux-share-audio-retry.js && node tests/linux-share-audio-loopback.js && node tests/linux-share-audio-route.js && node tests/run-electron-smoke.js tests/share-player.js && node tests/run-electron-smoke.js tests/share-player-4k.js && node tests/run-electron-smoke.js tests/share-player-sparse.js && node tests/run-electron-smoke.js tests/share-player-nvdec.js && node tests/run-electron-smoke.js tests/share-player-gpu.js && node tests/run-electron-smoke.js tests/share-encoder.js",
+    "test:share": "node tests/share-core.js && node tests/share-playout.js && node tests/share-player-clock.js && node tests/share-decode-nvdec.js && node tests/share-session.js && node tests/share-lane.js && node tests/share-controller.js && node tests/share-bridge-ipc.js && node tests/share-browser-load.js && node tests/share-capture-gsr.js && node tests/native-screen-info.js && node tests/linux-share-audio-retry.js && node tests/linux-share-audio-loopback.js && node tests/linux-share-audio-route.js && node tests/run-electron-smoke.js tests/share-player.js && node tests/run-electron-smoke.js tests/share-player-4k.js && node tests/run-electron-smoke.js tests/share-player-sparse.js && node tests/run-electron-smoke.js tests/share-player-h264.js && node tests/run-electron-smoke.js tests/share-player-nvdec.js && node tests/run-electron-smoke.js tests/share-player-gpu.js && node tests/run-electron-smoke.js tests/share-encoder.js",
     "test:share:e2e": "node tests/e2e/shares.js"
   },
   "devDependencies": {

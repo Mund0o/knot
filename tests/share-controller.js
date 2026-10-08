@@ -239,6 +239,30 @@ function world({ playerOptions = {}, watcherOptions = {} } = {}) {
       assert(watcher.readout({ config: { codec, width: 1920, height: 1080 }, hardware }).includes(' on ' + expected), `${decoder} with hardware ${JSON.stringify(hardware)} for ${codec} should say ${expected}`);
       watcher.stop({ notify: false });
     }
+    // fewer pictures shown than arrive: the line says what was measured, not only that this computer is "falling behind"
+    {
+      const slow = o => Controller.describeShare({ config: { codec: 'avc1.64002a', width: 1920, height: 1080 }, receivedFps: 58, shownFps: 19, mbps: 19, software: true, ...o });
+      assert(/only 19 fps shown · this window is redrawn only 20 times a second \(something else is using the graphics card, or the window is covered\)$/.test(slow({ tickFps: 20, decodedFps: 57 })), 'a window that is redrawn slowly is not said to be redrawn slowly: ' + slow({ tickFps: 20, decodedFps: 57 }));
+      assert(/this computer decodes only 20 pictures a second$/.test(slow({ tickFps: 60, decodedFps: 20 })), 'a slow decoder is not said to be slow');
+      assert(/this window is not being redrawn \(hidden or covered\)$/.test(slow({ tickFps: 0, decodedFps: 57 })), 'a window that is not redrawn at all is not said to be hidden');
+      assert(/this computer decodes only/.test(slow({ tickFps: 20, decodedFps: 20 })), 'when both are slow the decoder is named first (the window is redrawn slowly because it waits for pictures)');
+      assert(/this computer is falling behind$/.test(slow({ tickFps: 60, decodedFps: 57 })) && /this computer is falling behind$/.test(slow({})), 'with nothing measured, or nothing wrong, the general wording stays');
+      // the watcher measures the redraw and decode rates itself
+      let at = 50000; const c = { received: 0, painted: 0, ticks: 0, decoded: 0 };
+      const measuring = { configure() {}, push() {}, skip() {}, setActive() {}, destroy() {}, read: () => ({ lastPacketAt: at - 20, lastLiveAt: at - 20 }), stats: () => ({ delayMs: 160, ...c, decoder: 'software', buffering: false }) };
+      const watcher = Controller.createShareWatcher({ shareId: 'abcdef12345a', Player: { createSharePlayer: () => measuring }, Session, now: () => at, sendControl() {} });
+      watcher.readout({ config: { codec: 'avc1.64002a', width: 1920, height: 1080 } });
+      at += 2000; Object.assign(c, { received: 116, painted: 38, ticks: 40, decoded: 114 });
+      const shown = watcher.readout({ config: { codec: 'avc1.64002a', width: 1920, height: 1080 } });
+      assert(/only 19 fps shown · this window is redrawn only 20 times a second/.test(shown), 'the watcher did not measure the redraw rate: ' + shown);
+      watcher.stop({ notify: false });
+    }
+    // the sound line: packets alone do not prove sound (a share without sound sends silent ones), so it follows what the sharer said and what was heard
+    assert.strictEqual(Controller.describeShareSound({ announced: true, loud: true }), ' · sound playing');
+    assert.strictEqual(Controller.describeShareSound({ announced: false, loud: true }), ' · sound playing', 'sound that is heard is playing, announced or not');
+    assert(/your friend is not sharing sound/.test(Controller.describeShareSound({ announced: false, loud: false, silentMs: 20000 })), 'a share without sound is called silent sound');
+    assert.strictEqual(Controller.describeShareSound({ announced: true, loud: false, silentMs: 2000 }), ' · sound arriving', 'a quiet moment right after the start is called a fault');
+    assert(/your friend’s sound is silent \(nothing is playing on their computer/.test(Controller.describeShareSound({ announced: true, loud: false, silentMs: 7000 })));
     console.log('PASS the status line under a share says what arrives, what is shown, what decodes it, and whose end a problem is on');
   }
 
