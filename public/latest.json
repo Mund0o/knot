@@ -1,11 +1,11 @@
 {
-  "version": "1.1.128",
-  "notes": "Less screenshare lag: 4K shares keep up on the CPU, the picture plays 160 ms behind, and the fast UDP connection starts sooner. AV1 decodes on your NVIDIA GPU (Linux). 4K60 shares start at 30 Mbps. Linux: you hear your own shared sound at low delay.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.128/pair-p2p-1.1.128.tar.gz",
-  "linuxSha256": "b29fb36365e58cfb6a58dfa9560280b1a818e8d7641874d7accde1986da66bd0",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.128/Knot-1.1.128.AppImage",
-  "linuxAppImageSha256": "51ab085358bc9a5c1164e80a196b59f61760c749ff0905217fb0df69ada1845c",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.128/Knot.Setup.1.1.128.exe",
-  "winSha256": "e910bf61e9f3071cc8a80f54c1b1864b358e55c9064797c9a29c39118cd5faa6",
-  "signature": "wx4aaow2+RWjyOgktD7BuAlExoTLZU8M/M0gOOaMgSXY9PMenkMybBx7VEezvzcnQrGFrsRWiJuHB23VWFIoBg=="
+  "version": "1.1.129",
+  "notes": "The line under a friend's share now says why fewer pictures are shown, and shares without sound are no longer reported as sound that is silent. The person sharing is told why sound could not start and when nothing is playing.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.129/pair-p2p-1.1.129.tar.gz",
+  "linuxSha256": "9987b6198cd62e75412253eaa295d57bbc9d5d1ae662c8f700b8cea986b732d8",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.129/Knot-1.1.129.AppImage",
+  "linuxAppImageSha256": "f34ded1198a40578b8be1598c735d9b2072fe362510b227b360584267af9012a",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.129/Knot.Setup.1.1.129.exe",
+  "winSha256": "b4fc8ce07f8d941602283b7c86fce764a2b364c4ae2b21ff9b96bd46a4dffddf",
+  "signature": "agwIDKSmJVC5Bs4fcmo2l3/CIHC9Php0JBUTAy0lXQpVuU323le6f3De7uXNPHTmXNzsbosV9jfsWnKOqWRUAA=="
 }
