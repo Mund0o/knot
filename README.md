@@ -120,13 +120,22 @@ it missed, and the jump is counted. A still screen sends no pictures, so the
 sharer says "still here" ten times a second and the viewer can tell a quiet
 screen from a dead link.
 
-**Viewing** decodes with WebCodecs (the hardware decoder first; the software
-decoder only if the hardware one rejects the stream or produces nothing) and
-draws on a canvas at the display's refresh. The picture plays 250 ms behind the
-newest one, a little longer after the link has stalled, runs at most 1.15× to
-catch up, and jumps to live only when it is more than four seconds behind. A
-group share has one host and one viewer per friend who chooses to watch; nobody
-who is not watching is sent anything.
+**Hearing your own sound while sharing (Linux).** Sharing computer sound moves the chosen programs onto a private PipeWire sink that Knot records. The
+sharer's speakers get PipeWire's own loopback of that sink (about 40 ms behind), faded up from silence once Knot has checked it is on the speakers; the
+page plays no second copy while it is live and takes over again if it ever disappears (Settings → Screen sharing turns this off). Each session's return
+stream has a name nothing has remembered, because PipeWire restores a stream's old volume and target by name. `tests/linux-share-audio-loopback.js` and
+`tests/linux-share-audio-route.js` check all of it against real PipeWire on private sinks.
+
+**Viewing** decodes with WebCodecs and draws on a canvas at the display's refresh. Where Chromium can use the GPU it does; where it cannot,
+it does not pretend to: on Linux with an NVIDIA card Chromium's hardware decoder produces pictures that cannot be shown (they arrive black),
+so AV1 is decoded by Knot's own small program, `knot-nvdec` (`native/nvdec/`, built by `scripts/build-nvdec-helper.sh`), which runs NVIDIA's
+NVDEC directly, scales each picture on the GPU to the size it is shown at (never above 2560x1440; full screen on a 4K display decodes on the CPU
+instead) and hands it back the moment it is decoded. Every hardware decoder's first picture is checked against a software decode, and a
+decoder that fails, goes quiet or shows a different picture is replaced by the software one for the rest of the share. The software decoder runs
+in low-latency mode, and changes to a faster mode that holds a few pictures back only while the decoder is what the viewer is waiting for on a
+steady high-rate stream. The picture plays 160 ms behind the newest one, a little longer after the link has stalled, runs at most 1.15× to
+catch up, and jumps to live only when it is more than four seconds behind. A group share has one host and one viewer per friend who chooses to
+watch; nobody who is not watching is sent anything.
 
 The **Optimize for** choice (Game or Desktop) is only a hint to the encoder about what it is looking at, and never changes the size or rate. Desktop turns on AV1's screen-content tools when the share is AV1 (measured: about half the bits and better quality on text); other codecs are left alone because the hint made them worse.
 
@@ -379,7 +388,9 @@ Measured through two emulated NAT routers at 80 ms round trip: 385 Mbit/s clean,
 punches carry a TTL of 2 or 3 so they open each side's own router without reaching the
 other, and normal punches are released only once both sides have said they are armed;
 without that, a punch that arrives early makes a Linux NAT remap the sender's port and
-neither side reaches the other. The whole file is never loaded into memory during a normal direct send or desktop
+neither side reaches the other. The STUN servers' addresses are looked up with a resolver that retries a lost packet after 0.6 s (the system lookup
+waits 5 s), in parallel, capped, cached and refreshed in the background shortly after Knot starts, so a lost DNS packet can no longer hold a
+lane up for seconds; the lane also asks for 8 MiB UDP socket buffers (the kernel grants what `net.core.rmem_max` / `wmem_max` allow). The whole file is never loaded into memory during a normal direct send or desktop
 receive. Receiving very large files requires a Chromium browser with the File
 System Access API or the Knot app's durable temporary-file/atomic-rename path;
 the in-memory browser fallback is limited to 64 MiB. The 200 GiB direct-transfer

@@ -100,8 +100,13 @@ const scenarios = {
     const [a, b] = await startCall(rig, ids);
     await a.eval(LIVE_VIEW); await b.eval(LIVE_VIEW);
     await a.eval(`shareFrameRate=30;shareResolution='source';screenCodec='auto';screenAudioOn=false;syncScreenAudioToggle();${INSTALL_SCREEN(1280, 720, 30).replace(/\s+/g, ' ')}`);
+    // Long tasks: stretches where the page's main thread was busy for 50 ms or more. Each one is a late picture and a late hand-off of sound.
+    const WATCH_LONG_TASKS = "window.__longTasks=[];try{new PerformanceObserver(list=>{for(const e of list.getEntries())window.__longTasks.push(Math.round(e.duration))}).observe({entryTypes:['longtask']})}catch{}";
+    await a.eval(WATCH_LONG_TASKS); await b.eval(WATCH_LONG_TASKS);
     const started = Date.now();
     await a.eval('startScreenShare()');
+    // E2E_TRACE_UDX=1 prints how the fast lane's setup unfolds, to see where its seconds go.
+    if (process.env.E2E_TRACE_UDX === '1') (async () => { let last = ''; for (let t = Date.now(); Date.now() - t < 9000; await sleep(50)) { const now = await a.eval("JSON.stringify((dmShare&&dmShare.stats().viewers[0])||null)").catch(() => 'null'); const text = now.replace(/"(bytes|records|behind|resent|ackSeq|acked|sentSeq|nextSeq|lastAck\w*)":[-\d.]+,?/g, ''); if (text !== last) { console.log('   ' + String(Date.now() - started).padStart(5) + ' ms ' + text.slice(0, 240)); last = text; } } })();
     await a.waitFor('screenActive&&!!dmShare', 'the share to start', 20000);
     await b.waitFor('!!dmWatch&&dmWatch.stats().player.painted>5', 'the first pictures', 20000);
     const firstPicture = Date.now() - started;
@@ -114,10 +119,14 @@ const scenarios = {
     const behind = shown.map(s => (s.live - s.shown) / 30 * 1000).sort((x, y) => x - y), median = behind[Math.floor(behind.length / 2)];
     expect(shown.at(-1).w > 0 && shown.at(-1).h > 0, 'the view has no size');
     // And what the window really displays (not just what the canvas holds): the same frame counter, read from a screenshot of the viewer.
-    const onScreen = await frameOnScreen(b, "remoteScreen.parentElement?.querySelector('.native-screen-canvas')");
-    const liveNow = await a.eval('__screen.frame');
-    expect(onScreen.box && !onScreen.box.hidden && onScreen.box.opacity === 1 && onScreen.box.live, 'the picture is not revealed on screen: ' + JSON.stringify(onScreen.box));
-    expect(onScreen.frame > 0 && Math.abs(onScreen.frame - liveNow) < 60, `the window shows frame ${onScreen.frame} while the sharer is at ${liveNow}`);
+    // E2E_NO_SCREENSHOT=1 skips the compositor read: on a desktop that does not present the test windows (a locked or covered session) a screenshot
+    // comes back stale whatever the app does, and the checks after it would never run.
+    if (process.env.E2E_NO_SCREENSHOT !== '1') {
+      const onScreen = await frameOnScreen(b, "remoteScreen.parentElement?.querySelector('.native-screen-canvas')");
+      const liveNow = await a.eval('__screen.frame');
+      expect(onScreen.box && !onScreen.box.hidden && onScreen.box.opacity === 1 && onScreen.box.live, 'the picture is not revealed on screen: ' + JSON.stringify(onScreen.box));
+      expect(onScreen.frame > 0 && Math.abs(onScreen.frame - liveNow) < 60, `the window shows frame ${onScreen.frame} while the sharer is at ${liveNow}`);
+    }
     const line = await b.eval('screenStatus.textContent');
     expect(/^Friend sharing · \d+p · \d+ fps · [\d.]+ Mbps · \w[\w.]* on (CPU|GPU)/.test(line), 'the line under the share does not say what arrives and what decodes it: ' + line);
     const player = await b.eval('JSON.stringify(dmWatch.stats().player)'), host = await a.eval('JSON.stringify(dmShare.stats())');
@@ -125,7 +134,14 @@ const scenarios = {
     expect(p.stalls <= 1, 'the viewer stalled ' + p.stalls + ' times on a healthy link');
     expect(p.decodeSkips === 0 && p.errors === 0, `decoder skips ${p.decodeSkips} errors ${p.errors}`);
     expect(h.viewers.length === 1, 'the sharer has ' + h.viewers.length + ' viewers');
-    return { firstPictureMs: firstPicture, medianBehindLiveMs: Math.round(median), lane: h.viewers[0].lane, sharerSource: h.source, viewerStalls: p.stalls, painted: p.painted, delayMs: p.delayMs, decoder: p.decoder, size: shown.at(-1).w + 'x' + shown.at(-1).h };
+    const longTasks = async app => { const list = JSON.parse(await app.eval('JSON.stringify(window.__longTasks||[])')); return { count: list.length, maxMs: Math.max(0, ...list) }; };
+    const sharerBusy = await longTasks(a), viewerBusy = await longTasks(b);
+    expect(viewerBusy.maxMs < 400 && sharerBusy.maxMs < 400, `the page was blocked for too long: sharer ${JSON.stringify(sharerBusy)}, viewer ${JSON.stringify(viewerBusy)}`);
+    if (process.env.E2E_TRACE_UDX === '1') for (const [who, app] of [['sharer', a], ['viewer', b]]) for (const entry of app.laneLog || []) console.log('   ' + who + ' +' + (entry.at - started) + ' ms ' + entry.line.replace('[udx] ', '').slice(0, 190));
+    if (process.env.E2E_TRACE_UDX === '1') for (const [who, app] of [['sharer', a], ['viewer', b]]) for (const line of (app.console || []).filter(entry => /\[share\]|UDP|udx/i.test(String(entry.text || entry)))) console.log('   ' + who + ' +' + String((line.at || 0) - started) + ' ms: ' + String(line.text || line).slice(0, 200));
+    // How long the fast UDP lane takes to come up: until then the share rides the slower data channel.
+    let udxAfterMs = -1; for (const t0 = Date.now(); Date.now() - started < 30000;) { const lane = await a.eval('dmShare.stats().viewers[0]?.lane'); if (lane === 'udx') { udxAfterMs = Date.now() - started; break; } await sleep(250); }
+    return { udxAfterMs, sharerLongTasks: sharerBusy, viewerLongTasks: viewerBusy, firstPictureMs: firstPicture, medianBehindLiveMs: Math.round(median), lane: h.viewers[0].lane, sharerSource: h.source, viewerStalls: p.stalls, painted: p.painted, delayMs: p.delayMs, decoder: p.decoder, size: shown.at(-1).w + 'x' + shown.at(-1).h };
   },
 
   async 'the sound is held back with the picture'(rig, ids) {

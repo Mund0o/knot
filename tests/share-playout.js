@@ -45,7 +45,8 @@ function run({ fps = 60, hz = 60, seconds = 10, arrival = i => i * (1000 / fps) 
   assert.strictEqual(r.playout.stalls, 0);
   assert(r.playout.skippedAtStart > 90, 'the past is not shown, skipped ' + r.playout.skippedAtStart);
   const first = r.shown[0];
-  assert(first.frame.i >= 105 && first.frame.i <= 115, 'it should start about one delay behind the newest, at picture ' + first.frame.i);
+  const expectedStart = 125 - new Playout().delayMs / (1000 / 60);
+  assert(Math.abs(first.frame.i - expectedStart) <= 6, 'it should start about one delay behind the newest, at picture ' + Math.round(expectedStart) + ', started at ' + first.frame.i);
   assert(r.shown.every((s, i, all) => i === 0 || s.frame.i === all[i - 1].frame.i + 1), 'from there on every picture is shown, consecutively');
   assert.strictEqual(r.playout.skipped, 0);
   assert.strictEqual(r.playout.jumps, 0);

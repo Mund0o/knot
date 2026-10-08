@@ -53,6 +53,7 @@ function difference(bitmap, size, reference) {
 app.whenReady().then(async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'knot-player-gpu-'));
   try {
+    if (process.env.KNOT_TEST_VISIBLE !== '1') { console.log('SKIP share player GPU test: it needs a real window on the real GPU, which would appear on screen (KNOT_TEST_VISIBLE=1 to run it)'); return app.exit(0); }
     if (!gpu) { console.log('SKIP share player GPU test: no Linux GPU selection'); return app.exit(0); }
     const made = makeClip(dir);
     if (!made) { console.log('SKIP share player GPU test: ffmpeg with libsvtav1 is not available'); return app.exit(0); }

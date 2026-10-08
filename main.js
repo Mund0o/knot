@@ -9,6 +9,9 @@ const { DirectFileHost, connect: connectDirectFile } = require('./direct-file');
 const { UdxLanes } = require('./udx-lane');
 const { ShareLaneRuntime } = require('./share-lane-runtime');
 const { GsrCapture } = require('./share-capture-gsr');
+const { ShareDecodeRuntime } = require('./share-decode-nvdec');
+const { warmStunAddresses } = require('./udx-lane');
+const { returnMediaName, ensureReturnOnSink, fadeUpReturn, returnStillThere } = require('./linux-share-return');
 const { LanHouse, localIpv4, privateIpv4 } = require('./lan-house');
 const { SettingsStore, migrateSettingsCompanions, mergeMissingAccountIdentity, restoreMissingProfileAvatarSidecar, decodeProfileAvatarSidecar } = require('./settings-store');
 const { FORMAT: LOCAL_SETTINGS_FORMAT, LocalSettingsCipher } = require('./settings-crypto');
@@ -135,6 +138,7 @@ function pairProcessTree(output) {
   return ids;
 }
 async function routeLinuxDesktopAudio(state) {
+  if (TEST_RIG && process.env.KNOT_TEST_NO_STREAM_MOVES === '1') return;      // a test of the route must never move a real program's sound
   const [processes, sinks, details, inputs] = await Promise.all([
     pipewireAsync('ps', ['-eo', 'pid=,ppid=']),
     pipewireAsync('pactl', ['list', 'short', 'sinks']),
@@ -268,16 +272,57 @@ async function muteLinuxLoopbackReturn(state) {
   }
   return false;
 }
-async function unmuteLinuxLoopbackReturn(state) {
-  if (!state.loopInputs?.length) return;
-  // Local hearing is the capture AudioWorklet, not this PipeWire loopback.
-  // Fading the loopback onto real speakers was the ear-blast; keep it parked
-  // at 0% so the friend still gets isolated capture without a speaker return.
-  debugLinuxShareAudio(state, 'loopback held at 0% · local monitor is the capture worklet · ids='+(state.loopInputs||[]).join(','));
-  for (const id of state.loopInputs) {
+// Is the sharer's own hearing to come back through PipeWire's loopback (about 31-40 ms) rather than the capture path (about 150 ms, compressed)?
+// On unless the user turned it off in Settings or KNOT_LOCAL_RETURN=worklet is set. See linux-share-return.js.
+async function linuxLocalReturnWanted() {
+  if (process.env.KNOT_LOCAL_RETURN === 'worklet') return false;
+  try { return (await settingsStore.get('shareLocalReturn')) !== 'off'; } catch { return true; }
+}
+async function parkLinuxLoopbackReturn(state) {
+  for (const id of state.loopInputs || []) {
     await pipewireOkAsync('pactl', ['set-sink-input-volume', id, '0%']);
     await pipewireOkAsync('pactl', ['set-sink-input-mute', id, '1']);
   }
+}
+async function unmuteLinuxLoopbackReturn(state) {
+  if (!state.loopInputs?.length) return;
+  if (state.localReturn && !state.returnFailed) {
+    const list = args => pipewireAsync('pactl', args), run = args => pipewireOkAsync('pactl', args), sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+    if (state.returnLive) {
+      // Already carrying the sharer's sound. Only check that it still exists; its volume is the sharer's business from here on.
+      if (!await returnStillThere({ ids: state.loopInputs, list }) && linuxShareAudio === state) { state.returnLive = false; state.returnFailed = true; debugLinuxShareAudio(state, 'low-delay return is gone · the page plays the sound again'); }
+      return;
+    }
+    if (state.returnFading) return;
+    state.returnFading = true;
+    try {
+      // Only from silence, only once the stream is verified to be on the speakers.
+      const there = await ensureReturnOnSink({ ids: state.loopInputs, sinkName: state.original, run, list, sleep });
+      if (linuxShareAudio !== state) return;
+      const faded = there && await fadeUpReturn({ ids: state.loopInputs, run, sleep, stillWanted: () => linuxShareAudio === state });
+      if (linuxShareAudio !== state) return;
+      if (faded) { state.returnLive = true; debugLinuxShareAudio(state, 'low-delay return live · ids=' + state.loopInputs.join(',')); return; }
+      state.returnFailed = true;
+      await parkLinuxLoopbackReturn(state);
+      debugLinuxShareAudio(state, 'low-delay return could not be started · the page plays the sound');
+    } finally { state.returnFading = false; }
+    return;
+  }
+  // Local hearing is the capture AudioWorklet in the page (slower, compressed). The loopback is parked at 0% so the friend still gets isolated
+  // capture without a second copy on the speakers.
+  debugLinuxShareAudio(state, 'loopback held at 0% · local monitor is the capture worklet · ids='+(state.loopInputs||[]).join(','));
+  await parkLinuxLoopbackReturn(state);
+}
+// A setup that throws after it created its private sinks would leave them behind for good. Remove this process's share sinks that no live route owns.
+async function sweepLeakedLinuxShareSinks() {
+  try {
+    const keep = new Set([linuxShareAudio?.module, linuxShareAudio?.holdModule, linuxShareAudio?.loop].filter(Boolean).map(String));
+    const mine = [`sink_name=pair_share_${process.pid}`, `sink_name=pair_share_hold_${process.pid}`];
+    for (const line of String(await pipewireAsync('pactl', ['list', 'short', 'modules']) || '').split('\n')) {
+      const [id, name, args = ''] = line.trim().split('\t');
+      if (id && name === 'module-null-sink' && mine.some(part => args.includes(part)) && !keep.has(id)) await pipewireAsync('pactl', ['unload-module', id]);
+    }
+  } catch {}
 }
 function startLinuxShareAudio(webContents) {
   if (process.platform !== 'linux') return Promise.resolve(null);
@@ -297,7 +342,7 @@ async function startLinuxShareAudioWithRetry(webContents) {
   for (let attempt=1; attempt<=3; attempt++) {
     const generation=linuxShareAudioGeneration;
     let result=null;
-    try { result=await startLinuxShareAudioInner(webContents,generation); } catch { result=null; }
+    try { result=await startLinuxShareAudioInner(webContents,generation); } catch { result=null; await sweepLeakedLinuxShareSinks(); }
     if (result) return result;
     if (generation!==linuxShareAudioGeneration) return null;
     if (linuxShareAudio) return { label: linuxShareAudio.label, source: linuxShareAudio.source, routeReadyAt: linuxShareAudio.routeReadyAt, localMonitor: !linuxShareAudio.loopbackUnavailable };
@@ -348,7 +393,9 @@ function flushLinuxShareAudio(state) {
     const capturedAt = Number(state.pcmReadAt) > 0 ? state.pcmReadAt : now;
     const samples = packet.buffer.slice(packet.byteOffset, packet.byteOffset + packet.byteLength);
     try {
-      state.webContents.send('pair:linuxShareAudio', samples, { sequence, capturedAt });
+      // `monitor` says which copy of the sound the sharer hears: 'return' = PipeWire's loopback (live, or on its way; the page stays silent so it
+      // is never doubled), 'page' = the page's own delayed copy (the return is off, failed or gone).
+      state.webContents.send('pair:linuxShareAudio', samples, { sequence, capturedAt, monitor: state.localReturn && !state.returnFailed ? 'return' : 'page' });
       state.pcmInflight.add(sequence);
       if (!state.pcmOldestInflightAt) state.pcmOldestInflightAt = now;
     } catch { break; }
@@ -356,8 +403,10 @@ function flushLinuxShareAudio(state) {
 }
 async function startLinuxShareAudioInner(webContents,generation) {
   if (!/PipeWire/i.test(await pipewireAsync('pactl', ['info']))||generation!==linuxShareAudioGeneration) return null;
-  const original = await pipewireAsync('pactl', ['get-default-sink']);
+  // (The test rig can name a private stand-in for the speakers, so a test of this route never goes near the real ones.)
+  const original = (TEST_RIG && process.env.KNOT_TEST_RETURN_SINK) || await pipewireAsync('pactl', ['get-default-sink']);
   if (!original) return null;
+  const localReturn = await linuxLocalReturnWanted();
   const sink = `pair_share_${process.pid}`;
   const module = await pipewireAsync('pactl', ['load-module', 'module-null-sink', `sink_name=${sink}`, 'sink_properties=device.description=Knot_Share_Audio']);
   if (!module) return null;
@@ -386,7 +435,7 @@ async function startLinuxShareAudioInner(webContents,generation) {
   // Do not redirect real desktop audio until the new monitor and loopback have
   // settled. This costs only a fraction of a second of initial share audio and
   // prevents the full-volume startup burst reported on PipeWire systems.
-  const state = { original, sink, module, loop: '', hold: '', holdModule: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, routePulse: null, loopTimer: null, routeRunning: false, routeAgain: false, routeEnabled: false, routeReadyAt: Date.now() + 1200, discardUntil: Date.now() + 250, pcmReleaseAt: Date.now() + 30000, pcmRemainder: Buffer.alloc(0), pcmReadAt: 0, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1 };
+  const state = { original, sink, module, loop: '', hold: '', holdModule: '', capture, moved, label: 'Knot Share Audio', source: `${sink}.monitor`, webContents, watch: null, audits: [], routeTimer: null, routePulse: null, loopTimer: null, routeRunning: false, routeAgain: false, routeEnabled: false, routeReadyAt: Date.now() + 1200, discardUntil: Date.now() + 250, pcmReleaseAt: Date.now() + 30000, pcmRemainder: Buffer.alloc(0), pcmReadAt: 0, pcmChunks: [], pcmBytes: 0, pcmInflight: new Set(), pcmOldestInflightAt: 0, pcmNextSequence: 1, localReturn, returnMedia: returnMediaName(), returnLive: false, returnFailed: false, returnFading: false };
 linuxShareAudio = state;
 // pcmReleaseAt is a 30 s failsafe for a loopback setup that never completes.
 // It must never outlast a route that is already live, or a slow pactl round
@@ -434,7 +483,7 @@ if(generation!==linuxShareAudioGeneration){
     state.holdModule = holdModule || '';
     const loopSink = holdModule || original;
     debugLinuxShareAudio(state, 'loopback load source='+sink+'.monitor sink='+loopSink+' hold='+(holdModule||'none'));
-    const loop = await pipewireAsync('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${loopSink}`, 'latency_msec=40', 'source_dont_move=true', 'sink_input_properties=media.name=KnotShareReturn']);
+    const loop = await pipewireAsync('pactl', ['load-module', 'module-loopback', `source=${sink}.monitor`, `sink=${loopSink}`, 'latency_msec=40', 'source_dont_move=true', `sink_input_properties=media.name=${state.returnMedia}`]);
     if (linuxShareAudio !== state) {
       if (loop) await pipewireAsync('pactl', ['unload-module', loop]);
       if (holdModule) await pipewireAsync('pactl', ['unload-module', holdModule]);
@@ -580,6 +629,8 @@ if(state?.pcmWatchdog){clearInterval(state.pcmWatchdog);state.pcmWatchdog=null;}
     for (const audit of state.audits || []) clearTimeout(audit);
     if (state.capture) try { state.capture.kill('SIGKILL'); } catch {}
     state.pcmChunks.length = 0;state.pcmBytes = 0;state.pcmInflight.clear();state.pcmOldestInflightAt = 0;
+    // The return goes quiet first, so the programs moving back to the speakers are never heard twice for the instant the return is still up.
+    if (state.returnLive) await Promise.all((state.loopInputs || []).map(id => pipewireOkAsync('pactl', ['set-sink-input-mute', id, '1'])));
     await Promise.all((state.moved || []).map(input=>pipewireOkAsync('pactl', ['move-sink-input', input.id, input.sink])));
     if (state.loop) await pipewireAsync('pactl', ['unload-module', state.loop]);
     if (state.holdModule) await pipewireAsync('pactl', ['unload-module', state.holdModule]);
@@ -591,7 +642,7 @@ if(state?.pcmWatchdog){clearInterval(state.pcmWatchdog);state.pcmWatchdog=null;}
 function isPairRenderer(event) {
   return event.sender === mainWin?.webContents && event.senderFrame === event.sender?.mainFrame && event.senderFrame?.url === PAIR_RENDERER_URL;
 }
-const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'shareSystemMixFallback', 'networkCapacity', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'directoryRosterCache', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents', 'dmOutbox', 'nvidiaGpuDecode']);
+const SETTING_KEYS = new Set(['signalServer', 'roomCode', 'volume', 'screenVol', 'profileAvatar', 'profileFrame', 'profileIdentity', 'profileName', 'profilePhotoMode', 'theme', 'fontFamily', 'savedInviteCode', 'inputDevice', 'outputDevice', 'voiceProcessing', 'noiseReduction', 'noiseHardware', 'voiceInputMode', 'pushToTalkKey', 'pushToTalkDelay', 'soundEffects', 'shareProfile', 'shareLocalReturn', 'rememberInvite', 'rememberAccount', 'reduceMotion', 'hardwareAcceleration', 'fileTransport', 'tcpListenPort', 'encryptedFileRelay', 'groupSfuPilot', 'screenBitrate', 'screenBitrateExplicit', 'screenCursor', 'screenContentHint', 'screenCodec', 'shareResolution', 'shareResolutionExplicit', 'shareFrameRate', 'shareSystemAudio', 'shareSystemMixFallback', 'networkCapacity', 'directoryUserId', 'directoryToken', 'directoryAccountName', 'accountOnboardingDismissed', 'closedDmIds', 'unreadDmCounts', 'directoryRosterCache', 'socialSidebarCollapsed', 'socialSidebarWidth', 'dmCallPanelHeight', 'messageHistory', 'serverMembersCollapsed', 'deviceIdentityPrivate', 'serverTextKeys', 'serverTextMembership', 'emojiRecents', 'dmOutbox', 'nvidiaGpuDecode']);
 const ENCRYPTED_SETTING_KEYS = new Set(['directoryToken', 'savedInviteCode', 'messageHistory', 'deviceIdentityPrivate', 'serverTextKeys']);
 const MAX_SETTING_VALUE = 7 * 1024 * 1024;
 const MAX_IPC_CHUNK = 8 * 1024 * 1024;
@@ -1006,19 +1057,36 @@ ipcMain.on('pair:udxClose', (event, documentId, id) => { const owner=directReque
 // Screen shares (share-session.js). The UDP lanes and the Linux recorder each belong to the document that asked for them and end
 // with it; the renderer never sees a socket or a process, only authenticated frames and plain encoded pictures.
 const SHARE_LANE_ID = /^[a-f0-9]{24}$/;
-let shareLanes = null, shareCapture = null;
+let shareLanes = null, shareCapture = null, shareDecode = null;
 function shareEmit(owner, channel, ...args) {
   if (!mainWin || mainWin.isDestroyed() || !currentBridgeOwner(owner) || mainWin.webContents.id !== owner.senderId) return false;
   try { mainWin.webContents.send(channel, owner.document, ...args); return true; } catch { return false; }
 }
+// Test rig only (KNOT_UDX_DEBUG=1): note every time the main process was too busy to answer for a while, to explain slow lane setups.
+function startMainStallLog() {
+  let lastBeat = Date.now();
+  setInterval(() => { const now = Date.now(), lag = now - lastBeat - 100; lastBeat = now; if (lag > 150) { try { require('fs').appendFileSync(process.env.KNOT_UDX_DEBUG_FILE || '/tmp/knot-udx-debug.log', `${process.pid} ${now % 100000} MAIN PROCESS BLOCKED ${lag} ms\n`); } catch {} } }, 100).unref();
+}
 function shareLaneRuntime() {
+  if (!shareLanes && TEST_RIG && process.env.KNOT_UDX_DEBUG === '1') startMainStallLog();
   if (!shareLanes) shareLanes = new ShareLaneRuntime({
     sameOwner: sameBridgeOwner,
+    ...(TEST_RIG && process.env.KNOT_UDX_DEBUG === '1' ? { udxOptions: { debug: line => { try { require('fs').appendFileSync(process.env.KNOT_UDX_DEBUG_FILE || '/tmp/knot-udx-debug.log', `${process.pid} ${line}\n`); } catch {} } } } : {}),
     onOpen: ({ owner, peerId, token }) => { if (!shareEmit(owner, 'pair:shareLaneOpen', peerId, token)) throw new Error('share document changed'); },
     onFrame: ({ owner, peerId, frame }) => { shareEmit(owner, 'pair:shareLaneFrame', peerId, frame); },
     onClose: ({ owner, peerId }) => { shareEmit(owner, 'pair:shareLaneClose', peerId); },
   });
   return shareLanes;
+}
+// AV1 decoding on the NVIDIA GPU (share-decode-nvdec.js): a helper program per open decoder, owned by the document that opened it.
+function shareDecodeRuntime() {
+  if (!shareDecode) shareDecode = new ShareDecodeRuntime({
+    sameOwner: sameBridgeOwner,
+    onFrame: ({ owner, id, picture }) => { shareEmit(owner, 'pair:shareDecodeFrame', id, { pts: picture.pts, width: picture.width, height: picture.height }, picture.data); },
+    onError: ({ owner, id, error }) => { shareEmit(owner, 'pair:shareDecodeError', id, String(error?.message || error || 'The GPU decoder failed').slice(0, 300)); },
+    onEnd: ({ owner, id }) => { shareEmit(owner, 'pair:shareDecodeEnd', id); },
+  });
+  return shareDecode;
 }
 function makeShareCapture() {
   return new GsrCapture({ primaryGpuVendor: selectedPrimaryGpu?.integrated ? '' : process.env.KNOT_PRIMARY_GPU_VENDOR || '', primaryGpuCard: selectedPrimaryGpu?.card || '' });
@@ -1030,6 +1098,8 @@ async function stopShareCapture() {
 async function closeShareRuntime() {
   const lanes = shareLanes; shareLanes = null;
   try { lanes?.close(); } catch {}
+  const decoders = shareDecode; shareDecode = null;
+  try { await decoders?.closeAll(); } catch {}
   await stopShareCapture();
 }
 ipcMain.handle('pair:shareLaneOpen', async (event, documentId) => {
@@ -1061,6 +1131,28 @@ ipcMain.handle('pair:shareLaneSend', (event, documentId, peerId, bytes) => {
 ipcMain.on('pair:shareLaneCredit', (event, documentId, peerId, count) => {
   const owner = bridgeRequestOwner(event, documentId), bytes = Number(count);
   if (owner && Number.isSafeInteger(bytes) && bytes > 0 && bytes <= MAX_IPC_CHUNK) shareLanes?.credit(owner, peerId, bytes);
+});
+ipcMain.handle('pair:shareDecodeInfo', async (event, documentId) => {
+  if (!bridgeRequestOwner(event, documentId)) return { available: false, reason: 'unauthorized' };
+  if (TEST_RIG && process.env.KNOT_TEST_NO_NVDEC === '1') return { available: false, reason: 'GPU decoding is switched off for this test' };
+  try { const { available, reason, gpu } = await shareDecodeRuntime().availability(); return { available: !!available, reason: String(reason || ''), gpu: String(gpu || '') }; }
+  catch (error) { return { available: false, reason: error?.message || 'the GPU decoder could not be checked' }; }
+});
+ipcMain.handle('pair:shareDecodeOpen', async (event, documentId, options) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (!owner || !options || typeof options !== 'object') return { ok: false, error: 'unauthorized' };
+  if (TEST_RIG && process.env.KNOT_TEST_NO_NVDEC === '1') return { ok: false, error: 'GPU decoding is switched off for this test' };
+  try { return { ok: true, ...(await shareDecodeRuntime().open(owner, { width: options.width, height: options.height, outWidth: options.outWidth, outHeight: options.outHeight })) }; }
+  catch (error) { return { ok: false, error: String(error?.message || error || 'The GPU decoder could not start').slice(0, 300) }; }
+});
+ipcMain.on('pair:shareDecodePush', (event, documentId, id, pts, bytes) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (!owner || !shareDecode || !Number.isSafeInteger(id) || !Number.isFinite(pts) || !ArrayBuffer.isView(bytes) || bytes.byteLength > MAX_IPC_CHUNK) return;
+  shareDecode.push(owner, id, pts, bytes);
+});
+ipcMain.on('pair:shareDecodeClose', (event, documentId, id) => {
+  const owner = bridgeRequestOwner(event, documentId);
+  if (owner && shareDecode && Number.isSafeInteger(id)) void shareDecode.close(owner, id).catch(() => {});
 });
 ipcMain.handle('pair:shareCaptureInfo', async (event, documentId) => bridgeRequestOwner(event, documentId) ? makeShareCapture().info() : { supported: false });
 ipcMain.handle('pair:shareCaptureStart', async (event, documentId, options) => {
@@ -1520,6 +1612,9 @@ session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['https://www.yout
     }
   }, { useSystemPicker: false });
   createWindow();
+  // Look up the STUN servers' addresses now, in the background, so the first share or fast transfer of the session never waits on DNS
+  // (one lost DNS packet costs the system resolver 5 s). Only names are looked up; nothing is sent to the servers until a lane is opened.
+  if (!(TEST_RIG && process.env.KNOT_TEST_NO_UDX === '1')) setTimeout(() => { warmStunAddresses().catch(() => {}); }, 3000).unref();
   startAutoUpdater({beforeExit:cleanupRuntime});
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -181,6 +181,30 @@ contextBridge.exposeInMainWorld('pairShareCapture', {
   onEnd: shareCaptureHook('pair:shareCaptureEnd', value => value === undefined),
 });
 
+// AV1 decoding on the NVIDIA GPU, done by a helper program the main process runs (share-decode-nvdec.js). The renderer hands it encoded
+// pictures and gets raw NV12 pictures back, tagged with the time they were given; it never sees the process.
+const validDecodeId = value => Number.isSafeInteger(value) && value > 0 && value < 2 ** 31;
+const validDecodeSide = value => Number.isInteger(value) && value >= 128 && value <= 8192;
+const MAX_DECODED_PICTURE = 16 * 1024 * 1024;
+const validDecodedPicture = (meta, bytes) => meta && typeof meta === 'object' && validDecodeSide(meta.width) && validDecodeSide(meta.height) && Number.isFinite(meta.pts)
+  && ArrayBuffer.isView(bytes) && bytes.byteLength === meta.width * meta.height * 3 / 2 && bytes.byteLength <= MAX_DECODED_PICTURE;
+const shareDecodeHook = (channel, valid) => cb => {
+  if (typeof cb !== 'function') return () => {};
+  const listener = (_event, documentId, id, ...rest) => { if (documentId === bridgeDocumentId && validDecodeId(id) && valid(...rest)) cb(id, ...rest); };
+  ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener);
+};
+contextBridge.exposeInMainWorld('pairShareDecode', {
+  info: () => ipcRenderer.invoke('pair:shareDecodeInfo', bridgeDocumentId),
+  open: options => options && typeof options === 'object' && [options.width, options.height, options.outWidth, options.outHeight].every(validDecodeSide)
+    ? ipcRenderer.invoke('pair:shareDecodeOpen', bridgeDocumentId, { width: options.width, height: options.height, outWidth: options.outWidth, outHeight: options.outHeight })
+    : Promise.resolve({ ok: false, error: 'invalid decoder request' }),
+  push: (id, pts, bytes) => validDecodeId(id) && Number.isFinite(pts) && pts >= 0 && validBinaryChunk(bytes) ? (ipcRenderer.send('pair:shareDecodePush', bridgeDocumentId, id, pts, bytes), true) : false,
+  close: id => validDecodeId(id) ? (ipcRenderer.send('pair:shareDecodeClose', bridgeDocumentId, id), true) : false,
+  onFrame: shareDecodeHook('pair:shareDecodeFrame', validDecodedPicture),
+  onError: shareDecodeHook('pair:shareDecodeError', message => typeof message === 'string'),
+  onEnd: shareDecodeHook('pair:shareDecodeEnd', () => true),
+});
+
 // Settings persistence bridge for the sandboxed renderer. Falls through to
 // localStorage automatically when running in a browser (no IPC available).
 contextBridge.exposeInMainWorld('pairSettings', {

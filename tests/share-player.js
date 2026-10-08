@@ -26,10 +26,11 @@ app.whenReady().then(async () => {
     const made = makeClip(dir);
     if (!made) { console.log('SKIP share player test: ffmpeg with libsvtav1 is not available'); return app.exit(0); }
     fs.writeFileSync(path.join(dir, 'blank.html'), '<!doctype html><html><body></body></html>');
-    const window = new BrowserWindow({
-      show: process.env.KNOT_ELECTRON_SMOKE_X11 === '1', opacity: process.env.KNOT_ELECTRON_SMOKE_X11 === '1' ? 0 : 1, skipTaskbar: process.env.KNOT_ELECTRON_SMOKE_X11 === '1', width: 1000, height: 600,
-      webPreferences: { contextIsolation: false, nodeIntegration: true, sandbox: false, backgroundThrottling: false, offscreen: process.env.KNOT_ELECTRON_SMOKE_X11 !== '1' },
-    });
+    // Offscreen always: a real window that something else covers has its frames throttled by the window system (a buffer swap of a full second
+    // each), which makes the player look slow and says nothing about it. Pixels are compared from the decoder's own output, not the screen.
+    const window = new BrowserWindow({ show: false, width: 1000, height: 600,
+      webPreferences: { contextIsolation: false, nodeIntegration: true, sandbox: false, backgroundThrottling: false, offscreen: true } });
+    window.webContents.setFrameRate(60);
     const pageErrors = []; window.webContents.on('console-message', event => { if (/Uncaught/.test(event.message || '')) pageErrors.push(event.message); });
     await window.loadFile(path.join(dir, 'blank.html'));
 

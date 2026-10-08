@@ -12,8 +12,8 @@ const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const scripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map(match => match[1]);
 const shareScripts = scripts.filter(name => /^share-/.test(name));
-assert(shareScripts.length >= 7, 'index.html does not load the share modules: ' + shareScripts.join(', '));
-const order = ['share-wire.js', 'share-core.js', 'share-playout.js', 'share-player.js', 'share-encoder.js', 'share-session.js', 'share-controller.js'];
+assert(shareScripts.length >= 8, 'index.html does not load the share modules: ' + shareScripts.join(', '));
+const order = ['share-wire.js', 'share-core.js', 'share-playout.js', 'share-gpu-decoder.js', 'share-player.js', 'share-encoder.js', 'share-session.js', 'share-controller.js'];
 assert.deepStrictEqual(shareScripts, order, 'share modules are loaded in an order that cannot work');
 assert(scripts.indexOf('share-controller.js') < scripts.indexOf('app.js'), 'the controller must load before app.js');
 
@@ -22,7 +22,7 @@ const window = { crypto: require('crypto').webcrypto, setTimeout, clearTimeout, 
 window.window = window;
 const context = vm.createContext(window);
 for (const name of order) vm.runInContext(fs.readFileSync(path.join(root, name), 'utf8'), context, { filename: name });
-for (const key of ['KnotShareWire', 'KnotShareCore', 'KnotSharePlayout', 'KnotSharePlayer', 'KnotShareEncoder', 'KnotShareSession', 'KnotShareController']) assert(window[key] && typeof window[key] === 'object', key + ' was not installed by its script');
+for (const key of ['KnotShareWire', 'KnotShareCore', 'KnotSharePlayout', 'KnotShareGpuDecoder', 'KnotSharePlayer', 'KnotShareEncoder', 'KnotShareSession', 'KnotShareController']) assert(window[key] && typeof window[key] === 'object', key + ' was not installed by its script');
 
 // The checks below use the loaded copies only.
 const C = window.KnotShareController;

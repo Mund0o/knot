@@ -14,6 +14,35 @@ const { EventEmitter } = require('events');
 const STUN_SERVERS = [['stun.l.google.com', 19302], ['stun1.l.google.com', 19302]];
 const STUN_COOKIE = 0x2112a442;
 const STUN_TIMEOUT_MS = 2000;
+// Looking the STUN servers up must never be what a lane waits for. One lost DNS packet costs the system resolver its whole retry timer (5 s),
+// and in two-app tests that happened in about one setup in three: the fast lane started 5 s late and the share rode the slow data channel
+// meanwhile. So the names are looked up in parallel and given this long; a name that is slower is used from an earlier answer or skipped,
+// and its lookup still finishes in the background to fill the cache for the next time.
+const STUN_DNS_WAIT_MS = 1500;
+// The system lookup (getaddrinfo) retries a lost packet only after 5 s. Node's own resolver takes the retry time, so a lost packet costs 0.6 s
+// and the lookup is tried four times; the system lookup is the fallback for a machine whose DNS setup only it understands.
+const stunResolver = new dns.promises.Resolver({ timeout: 600, tries: 4 });
+async function stunLookup(host, options) {
+  try { const [address] = await stunResolver.resolve4(host); if (address) return { address }; } catch {}
+  return dns.promises.lookup(host, options);
+}
+const STUN_DNS_CACHE_MS = 30 * 60 * 1000;
+const stunAddresses = new Map();      // host -> { address, at, pending }
+
+// Starts (or refreshes) the lookups ahead of time. Cheap and safe to call as often as you like.
+function warmStunAddresses(servers = STUN_SERVERS, { lookup = stunLookup, now = Date.now } = {}) {
+  return Promise.all(servers.map(([host]) => {
+    if (ipv4Parts(host)) return Promise.resolve(host);
+    const entry = stunAddresses.get(host) || {};
+    if (entry.pending) return entry.pending;
+    if (entry.address && now() - entry.at < STUN_DNS_CACHE_MS) return Promise.resolve(entry.address);
+    const pending = Promise.resolve().then(() => lookup(host, { family: 4 })).then(found => {
+      stunAddresses.set(host, { address: found.address, at: now(), pending: null }); return found.address;
+    }, () => { const kept = stunAddresses.get(host); if (kept) { kept.pending = null; if (!kept.address) stunAddresses.delete(host); } return null; });
+    stunAddresses.set(host, { ...entry, pending });
+    return pending;
+  }));
+}
 const PUNCH_INTERVAL_MS = 80;
 // A punch that reaches the other NAT before that side has sent anything of its own makes
 // Linux-style NATs hand the sender a different external port afterwards, and both sides
@@ -27,7 +56,8 @@ const PUNCH_LINGER_MS = 3000;
 const LOW_TTLS = [2, 3];
 const PUNCH_WINDOW_MS = 6000;
 const LANE_IDLE_MS = 45000;
-const MAX_LANES = 4;                       // default; a caller that needs more lanes at once (one per viewer of a share) passes maxLanes
+const MAX_LANES = 4;                      // default; a caller that needs more lanes at once (one per viewer of a share) passes maxLanes
+const SOCKET_BUFFER_BYTES = 8 * 1024 * 1024;      // asked for each way; the kernel grants what its limits allow
 const MAX_REMOTE_ENDPOINTS = 8;
 const PUNCH_MAGIC = Buffer.from('KUDX1', 'ascii');
 const PUNCH = 1, ACK = 2;
@@ -179,6 +209,8 @@ class UdxLanes {
   constructor(options = {}) {
     this.stunServers = Array.isArray(options.stunServers) ? options.stunServers : STUN_SERVERS;
     this.stunTimeoutMs = options.stunTimeoutMs || STUN_TIMEOUT_MS;
+    this.stunDnsWaitMs = Number.isFinite(options.stunDnsWaitMs) ? options.stunDnsWaitMs : STUN_DNS_WAIT_MS;
+    this.lookup = typeof options.lookup === 'function' ? options.lookup : undefined;      // tests only
     this.punchWindowMs = options.punchWindowMs || PUNCH_WINDOW_MS;
     this.bindHost = options.bindHost || '0.0.0.0';
     this.advertiseHosts = options.advertiseHosts || null;
@@ -187,6 +219,10 @@ class UdxLanes {
     this.holdMs = Number.isFinite(options.holdMs) ? options.holdMs : PUNCH_HOLD_MS;
     this.lowTtls = Array.isArray(options.lowTtls) ? options.lowTtls : LOW_TTLS;
     this.maxLanes = Number.isInteger(options.maxLanes) && options.maxLanes > 0 ? Math.min(64, options.maxLanes) : MAX_LANES;
+    // UDP socket buffers. A picture is sent as a burst of packets (a 4K key picture is hundreds at once); the default 208 KB receive buffer holds
+    // about 17 ms of a 100 Mbit stream, so a main process that is busy for longer than that drops packets that then have to be sent again.
+    // The kernel keeps the value within net.core.rmem_max / wmem_max, so asking for more than it allows is harmless.
+    this.socketBufferBytes = Number.isFinite(options.socketBufferBytes) ? Math.max(0, Math.floor(options.socketBufferBytes)) : SOCKET_BUFFER_BYTES;
     this.lanes = new Map();
     this.nextStreamId = 1 + crypto.randomInt(1, 0x3fffffff);
   }
@@ -201,18 +237,23 @@ class UdxLanes {
   }
 
   async _stun(socket) {
+    const t0 = Date.now();
     const targets = [];
-    for (const [host, port] of this.stunServers) {
-      try {
-        const address = ipv4Parts(host) ? host : (await dns.promises.lookup(host, { family: 4 })).address;
-        targets.push([address, port]);
-      } catch {}
-    }
+    const answers = await Promise.all(this.stunServers.map(([host]) => {
+      if (ipv4Parts(host)) return host;
+      const cached = stunAddresses.get(host);
+      const looking = warmStunAddresses([[host, 0]], { lookup: this.lookup }).then(list => list[0]);
+      if (cached?.address) return cached.address;           // known: used at once (an old answer is refreshed in the background)
+      let timer; const wait = new Promise(resolve => { timer = setTimeout(() => resolve(null), this.stunDnsWaitMs); timer.unref?.(); });
+      return Promise.race([looking, wait]).finally(() => clearTimeout(timer));
+    }));
+    this.stunServers.forEach(([, port], index) => { if (answers[index]) targets.push([answers[index], port]); });
+    this.debug?.(`${Date.now() % 100000} stun: ${targets.length} servers resolved in ${Date.now() - t0} ms`);
     if (!targets.length) return null;
     const transaction = stunRequest();
     return new Promise(resolve => {
       let done = false;
-      const finish = value => { if (done) return; done = true; clearTimeout(timer); clearInterval(resend); socket.removeListener('message', onMessage); resolve(value); };
+      const finish = value => { if (done) return; done = true; clearTimeout(timer); clearInterval(resend); socket.removeListener('message', onMessage); this.debug?.(`${Date.now() % 100000} stun: ${value ? 'answered' : 'no answer'} after ${Date.now() - t0} ms`); resolve(value); };
       const onMessage = message => { const found = parseStunResponse(message, transaction.subarray(8, 20)); if (found) finish(found); };
       socket.on('message', onMessage);
       const send = () => { for (const [address, port] of targets) { try { socket.trySend(transaction, port, address); } catch {} } };
@@ -224,10 +265,12 @@ class UdxLanes {
 
   async open() {
     if (this.lanes.size >= this.maxLanes) throw new Error('too many UDP lanes');
+    this.debug?.(`${Date.now() % 100000} open() begins`);
     const UDX = loadUdx();
     const udx = new UDX();
     const socket = udx.createSocket();
     socket.bind(0, this.bindHost);
+    if (this.socketBufferBytes) { try { socket.setRecvBufferSize(this.socketBufferBytes); } catch {} try { socket.setSendBufferSize(this.socketBufferBytes); } catch {} }
     const port = socket.address().port;
     const id = crypto.randomBytes(12).toString('hex');
     const streamId = this.nextStreamId++;
@@ -237,6 +280,7 @@ class UdxLanes {
     lane.timer.unref?.();
     try {
       lane.endpoints = await this._discover(socket, port);
+      this.debug?.(`${Date.now() % 100000} open() done ${id.slice(0, 6)} endpoints ${lane.endpoints.map(item => item.kind + ':' + item.ip).join(' ')}`);
     } catch (error) { this.close(id); throw error; }
     if (lane.closed) throw new Error('UDP lane closed');
     return { id, streamId, endpoints: lane.endpoints };
@@ -281,6 +325,7 @@ class UdxLanes {
       };
       const connectTo = from => {
         if (winner) return; winner = from;
+        this.debug?.(`${Date.now() % 100000} connected ${id.slice(0, 6)} to ${from.host}:${from.port} after ${Date.now() - began} ms`);
         try { stream.connect(socket, remoteStreamId, from.port, from.host); }
         catch (error) { return finish(error); }
         lane.adapter = new UdxStreamSocket(stream, from.host, () => this.close(id));
@@ -296,6 +341,7 @@ class UdxLanes {
       socket.on('message', onMessage);
       lane.punching = { stop: () => finish(new Error('UDP lane closed')) };
       const began = Date.now(), hold = Number.isFinite(holdMs) ? Math.max(0, holdMs) : this.holdMs;
+      this.debug?.(`${Date.now() % 100000} punching ${id.slice(0, 6)}: hold ${hold} ms, ${candidates.length} candidates ${candidates.map(item => item.ip + ':' + item.port).join(' ')}`);
       const send = (item, ttl) => { try { ttl ? socket.trySend(packet(PUNCH), item.port, item.ip, ttl) : socket.trySend(packet(PUNCH), item.port, item.ip); } catch {} };
       const burst = () => {
         const holding = !lane.released && Date.now() - began < hold;
@@ -322,6 +368,7 @@ class UdxLanes {
     const lane = this.lanes.get(id);
     if (!lane || lane.closed) return false;
     lane.released = true;
+    this.debug?.(`${Date.now() % 100000} released ${id.slice(0, 6)}`);
     return true;
   }
 
@@ -339,4 +386,4 @@ class UdxLanes {
   closeAll() { for (const id of [...this.lanes.keys()]) this.close(id); }
 }
 
-module.exports = { UdxLanes, UdxStreamSocket, validEndpoint, cleanEndpoints, parseStunResponse, stunRequest, localAddresses, PUNCH_LENGTH };
+module.exports = { warmStunAddresses, stunAddresses, UdxLanes, UdxStreamSocket, validEndpoint, cleanEndpoints, parseStunResponse, stunRequest, localAddresses, PUNCH_LENGTH };

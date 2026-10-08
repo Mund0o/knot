@@ -16,14 +16,14 @@
   // A display shows at most one picture per refresh, so any speed-up above 1x necessarily skips some. That is why the speed-up
   // is small, and why a stream running at the display's own rate is shown at exactly 1x whenever it is on time.
   const DEFAULTS = {
-    startDelayMs: 250,        // how far behind the newest picture the viewer plays, to begin with
+    startDelayMs: 160,        // how far behind the newest picture the viewer plays, to begin with (sound is held back by the same amount)
     minDelayMs: 100,
     maxDelayMs: 10000,
     catchUpMaxRate: 1.15,     // fastest the clock runs when behind
     catchUpStartMs: 300,      // only run fast when this far beyond the delay (a smaller excess is not worth a visible skip), ...
     catchUpStopMs: 40,        // ... and keep going until this close to it
     jumpMs: 4000,             // lag beyond this is not worth playing through: jump to the live edge
-    settleMs: 20000,          // this long without a stall and the delay starts creeping back down
+    settleMs: 20000,          // this long without a stall and the delay starts creeping back down (faster made a jittery link stall again and again)
     relaxPerSecondMs: 20,
   };
 

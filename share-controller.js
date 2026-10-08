@@ -113,7 +113,7 @@
   }
 
   // ------------------------------------------------------------------------------------------------------------ watching
-  function createShareWatcher({ shareId, surface, getDisplaySize, lanes = null, sendControl, onState = () => {}, onEnded = () => {}, onError = () => {}, onGap = () => {}, log = () => {}, preferSoftware = false, playoutOptions = {}, now = () => performance.now(), endQuietMs = END_QUIET_MS, endPlayoutMs = END_PLAYOUT_MS, Session, Player } = {}) {
+  function createShareWatcher({ shareId, surface, getDisplaySize, lanes = null, sendControl, onState = () => {}, onEnded = () => {}, onError = () => {}, onGap = () => {}, log = () => {}, preferSoftware = false, gpuDecode = null, playoutOptions = {}, now = () => performance.now(), endQuietMs = END_QUIET_MS, endPlayoutMs = END_PLAYOUT_MS, Session, Player } = {}) {
     const engine = { ...defaults(), ...(Session ? { Session } : {}), ...(Player ? { Player } : {}) };
     let sample = null, rates = { receivedFps: 0, shownFps: 0, mbps: 0 };
     let finished = false, recordEnded = false, playerEnded = false, endTimer = null, hostEnded = false, hostEndedAt = 0, recordEndedAt = 0, stopped = false;
@@ -121,7 +121,7 @@
     // Over when the end record has arrived and the player has shown everything before it, in whichever order those two happen.
     const settle = () => { if (recordEnded && playerEnded) finish(); };
     const player = engine.Player.createSharePlayer({
-      surface, getDisplaySize, preferSoftware, playoutOptions, onError,
+      surface, getDisplaySize, preferSoftware, gpuDecode, playoutOptions, onError,
       onState: state => { try { onState(state); } catch {} if (state.state === 'ended') { playerEnded = true; settle(); } },
     });
     const viewer = new engine.Session.ShareViewer({ shareId, sendControl, player, lanes, log, onGap, onEnded: () => { recordEnded = true; recordEndedAt = now(); armEnd(); settle(); } });
@@ -148,14 +148,17 @@
       // The delay the picture is being shown behind live: the sound is held back by the same amount.
       get delayMs() { return player.stats().delayMs || 0; },
       // The status line for this share. Rates are measured over the last second or more, so call it as often as you like.
-      readout({ label = 'Friend sharing', config = null } = {}) {
+      // `hardware`: the codecs this computer really decodes on its GPU (the app's own list), when known. A player that asked for a hardware
+      // decoder is only on the GPU for a codec on that list; without one Chromium decodes on the CPU and says nothing.
+      readout({ label = 'Friend sharing', config = null, hardware = null } = {}) {
         const t = now(), p = player.stats(), v = viewer.stats(), seen = player.read();
         if (!sample || t - sample.t >= 1000) {
           if (sample) { const seconds = (t - sample.t) / 1000; rates = { receivedFps: (p.received - sample.received) / seconds, shownFps: (p.painted - sample.painted) / seconds, mbps: (v.bytes - sample.bytes) * 8 / seconds / 1e6 }; }
           sample = { t, received: p.received, painted: p.painted, bytes: v.bytes };
         }
         const lastHeard = Math.max(seen.lastPacketAt || 0, seen.lastLiveAt || 0), quietMs = lastHeard ? t - lastHeard : 0;
-        return describeShare({ label, config, ...rates, software: p.decoder === 'software', buffering: p.buffering === true, quietMs, stillScreen: (seen.lastLiveAt || 0) > (seen.lastPacketAt || 0) });
+        const key = hardwareKey(config?.codec), onCpu = p.decoder === 'software' || (p.decoder === 'hardware-preferred' && Array.isArray(hardware) && !!key && !hardware.includes(key));
+        return describeShare({ label, config, ...rates, software: onCpu, buffering: p.buffering === true, quietMs, stillScreen: (seen.lastLiveAt || 0) > (seen.lastPacketAt || 0) });
       },
       stats() { return { viewer: viewer.stats(), player: player.stats() }; },
       read() { return player.read(); },
@@ -168,6 +171,7 @@
   }
 
   // ------------------------------------------------------------------------------------------------------------ what the viewer is told
+  const hardwareKey = codec => { const text = String(codec || '').toLowerCase(); return text.startsWith('av01') ? 'AV1' : text.startsWith('avc1') ? 'H264' : text.startsWith('vp09') ? 'VP9' : text === 'vp8' ? 'VP8' : ''; };
   const codecName = codec => { const text = String(codec || '').toLowerCase(); return text.startsWith('av01') ? 'AV1' : text.startsWith('avc1') ? 'H.264' : text.startsWith('vp09') ? 'VP9' : text.startsWith('hvc1') || text.startsWith('hev1') ? 'HEVC' : String(codec || 'video'); };
   // The line under a friend's share: what arrives, what is shown, what decodes it, and, when something is wrong, whose end it is on. A still
   // screen sends no pictures, so "0 fps" with heartbeats arriving is a quiet screen, not a problem.

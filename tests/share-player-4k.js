@@ -21,9 +21,11 @@ app.whenReady().then(async () => {
     const made = spawnSync('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `testsrc2=s=3840x2160:r=60:d=${SECONDS}`, '-c:v', 'libsvtav1', '-preset', '12', '-g', '120', '-b:v', '16M', '-pix_fmt', 'yuv420p', '-f', 'ivf', clip], { encoding: 'utf8' });
     if (made.status !== 0) { console.log('SKIP 4K player test: ffmpeg with libsvtav1 is not available'); return app.exit(0); }
     fs.writeFileSync(path.join(dir, 'blank.html'), '<!doctype html><html><body style="margin:0"></body></html>');
-    const x11 = process.env.KNOT_ELECTRON_SMOKE_X11 === '1';
-    const window = new BrowserWindow({ show: x11, opacity: x11 ? 0 : 1, skipTaskbar: x11, width: 1600, height: 900,
-      webPreferences: { contextIsolation: false, nodeIntegration: true, sandbox: false, backgroundThrottling: false, offscreen: !x11 } });
+    // Offscreen on purpose: a real window that something else covers has its frames throttled by the window system (a buffer swap that takes a
+    // full second), which looks exactly like a viewer that cannot keep up and says nothing about the decoder or the player.
+    const window = new BrowserWindow({ show: false, width: 1600, height: 900,
+      webPreferences: { contextIsolation: false, nodeIntegration: true, sandbox: false, backgroundThrottling: false, offscreen: true } });
+    window.webContents.setFrameRate(60);
     await window.loadFile(path.join(dir, 'blank.html'));
     const r = await window.webContents.executeJavaScript(`(async () => {
       const fs = require('fs');
@@ -46,16 +48,23 @@ app.whenReady().then(async () => {
         const wait = t0 + i * 1000 / 60 - performance.now(); if (wait > 1) await sleep(wait);
         sender.pushFrame({ key: i % 120 === 0, pts: Math.round(i * 1e6 / 60), data: frames[i] });
       }
+      // The sharer's screen stops changing: nothing may stay stuck inside the decoder. A decoder that held pictures back is restarted from the
+      // last key picture, which at 4K takes a moment to replay, so wait for it to settle rather than for a fixed time.
+      await sleep(300);
+      let settled = 0; for (; settled < 9000; settled += 100) { if (!player.stats().pending) break; await sleep(100); }
+      const idle = player.stats(); idle.settledMs = settled;
       sender.end();
       for (let waited = 0; waited < 20000; waited += 50) { const s = player.stats(); if (player.ended && !s.decodedWaiting && !s.pending && !s.queued) break; await sleep(50); }
       clearInterval(timer);
       const s = player.stats(); player.destroy();
-      return { ...s, frames: frames.length, errorMessages: errors, cores: navigator.hardwareConcurrency };
+      return { ...s, idlePending: idle.pending, idleDecoded: idle.decoded, idleSettledMs: idle.settledMs, frames: frames.length, errorMessages: errors, cores: navigator.hardwareConcurrency };
     })()`);
     assert.deepStrictEqual(r.errorMessages, [], 'decoder errors: ' + r.errorMessages.join('; '));
-    assert.strictEqual(r.decoded, r.frames, `decoded ${r.decoded} of ${r.frames}`);
     const shown = r.painted / r.frames;
-    console.log(`4K60 on ${r.cores} cores (${r.decoder}): ${r.painted}/${r.frames} pictures shown (${(shown * 100).toFixed(1)}%), ${r.skippedShown} skipped, ${r.stalls} stalls, ${r.jumps} jumps, cadence p95 ${Math.round(r.renderCadenceP95Ms)} ms, ${r.renderFps.toFixed(1)} fps, latency p95 ${Math.round(r.latencyP95Ms)} ms, delay ${r.delayMs} ms`);
+    console.log(`4K60 on ${r.cores} cores (${r.decoder}): ${r.painted}/${r.frames} pictures shown (${(shown * 100).toFixed(1)}%), ${r.skippedShown} skipped, ${r.stalls} stalls, ${r.jumps} jumps, cadence p95 ${Math.round(r.renderCadenceP95Ms)} ms, ${r.renderFps.toFixed(1)} fps, latency p95 ${Math.round(r.latencyP95Ms)} ms, delay ${r.delayMs} ms (decode mode ${r.decodeMode}, settled ${r.idleSettledMs} ms after the stream paused, ${r.modeSwitches} switches, received ${r.received}, decoded ${r.decoded}, restarts ${r.restarts})`);
+    assert(r.decoded >= r.frames, `decoded ${r.decoded} of ${r.frames}`);      // a decoder that was restarted replays some pictures, so more is fine
+    assert.strictEqual(r.idlePending, 0, 'the decoder still held ' + r.idlePending + ' pictures ' + r.idleSettledMs + ' ms after the stream went quiet');
+    assert(r.idleDecoded >= r.frames, `${r.frames - r.idleDecoded} pictures never came out of the decoder after the stream went quiet`);
     assert(shown > 0.9, 'this machine cannot play 4K60: only ' + (shown * 100).toFixed(0) + '% of pictures were shown');
     assert(r.stalls <= 1, 'the picture stalled ' + r.stalls + ' times on a loopback stream');
     console.log('PASS 4K60 AV1 plays on this machine');

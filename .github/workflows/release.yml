@@ -91,16 +91,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends meson ninja-build libva-dev libdrm-dev libegl-dev
           scripts/build-nvidia-vaapi.sh
+      # Viewers with an NVIDIA card decode AV1 shares on the GPU through this small bundled program (resources/knot-nvdec). It needs
+      # only a C compiler and is built against pinned headers.
+      - name: Build the bundled GPU decoder helper
+        run: scripts/build-nvdec-helper.sh
       - run: npm run dist -- --publish never
         env:
           KNOT_REQUIRE_NVIDIA_VAAPI: '1'
-      - name: Check both Linux packages carry the NVIDIA driver
+          KNOT_REQUIRE_NVDEC_HELPER: '1'
+      - name: Check both Linux packages carry the NVIDIA driver and the GPU decoder helper
         run: |
           tar -tzf dist/pair-p2p-*.tar.gz | grep -q '/resources/nvidia-vaapi/nvidia_drv_video\.so$'
+          tar -tzf dist/pair-p2p-*.tar.gz | grep -q '/resources/knot-nvdec/knot-nvdec$'
           appimage=$(ls dist/Knot-*.AppImage)
           chmod +x "$appimage"
           (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null)
           test -s "$RUNNER_TEMP/squashfs-root/resources/nvidia-vaapi/nvidia_drv_video.so"
+          test -x "$RUNNER_TEMP/squashfs-root/resources/knot-nvdec/knot-nvdec"
       - uses: actions/upload-artifact@v4
         with:
           name: release-linux

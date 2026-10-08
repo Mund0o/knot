@@ -3,7 +3,7 @@
 const assert = require('assert');
 const crypto = require('crypto');
 const dgram = require('dgram');
-const { UdxLanes, validEndpoint, cleanEndpoints, parseStunResponse, stunRequest } = require('../udx-lane');
+const { UdxLanes, validEndpoint, cleanEndpoints, parseStunResponse, stunRequest, warmStunAddresses, stunAddresses } = require('../udx-lane');
 const { DirectFileHost, connect } = require('../direct-file');
 
 const COOKIE = 0x2112a442;
@@ -81,6 +81,38 @@ const until = async (predicate, message, timeout = 15000) => {
     assert.ok(a.endpoints.some(item => item.kind === 'srflx') && a.endpoints.some(item => item.kind === 'host'), 'discovery found no reflexive or host endpoint');
     assert.notStrictEqual(a.streamId, b.streamId);
     console.log('PASS lane discovery finds host and STUN-reflected endpoints');
+
+    // ---- a slow or lost DNS answer never holds a lane up (one lost packet costs the system resolver 5 s; a lane used to wait for it)
+    {
+      const slowFor = ms => host => new Promise(resolve => setTimeout(() => resolve({ address: '127.0.0.1' }), ms));
+      const named = (lookup, extra = {}) => new UdxLanes({ stunServers: [['one.stun.test', stunPort], ['two.stun.test', stunPort]], stunTimeoutMs: 1500, stunDnsWaitMs: 700, allowLoopback: true, advertiseHosts: ['198.51.100.7'], lookup, ...extra });
+      stunAddresses.clear();
+      let began = Date.now();
+      const onlyOneSlow = await named(host => new Promise(resolve => setTimeout(() => resolve({ address: '127.0.0.1' }), host === 'one.stun.test' ? 4000 : 5))).open();
+      assert(Date.now() - began < 900, 'one slow name held the lane up ' + (Date.now() - began) + ' ms');
+      assert(onlyOneSlow.endpoints.some(item => item.kind === 'srflx'), 'the quick name did not give a reflexive endpoint');
+      stunAddresses.clear(); began = Date.now();
+      const allSlow = await named(slowFor(2500)).open();
+      const took = Date.now() - began;
+      assert(took > 600 && took < 1200, 'with every name slow the lane should wait about the DNS cap, waited ' + took + ' ms');
+      assert(allSlow.endpoints.every(item => item.kind === 'host'), 'a lane with no STUN answer must still offer its host address');
+      await new Promise(resolve => setTimeout(resolve, 2200));           // the slow lookups finish in the background and fill the cache
+      began = Date.now();
+      const cached = await named(slowFor(2500)).open();
+      assert(Date.now() - began < 300 && cached.endpoints.some(item => item.kind === 'srflx'), 'the answers that arrived late were not kept for the next lane');
+      stunAddresses.clear(); let tries = 0;
+      const flaky = async () => { if (++tries === 1) throw new Error('SERVFAIL'); return { address: '127.0.0.1' }; };
+      assert.deepStrictEqual(await warmStunAddresses([['x.stun.test', 1]], { lookup: flaky }), [null], 'a failed lookup must give no address');
+      assert.deepStrictEqual(await warmStunAddresses([['x.stun.test', 1]], { lookup: flaky }), ['127.0.0.1'], 'a failed lookup must be tried again, not remembered');
+      let calls = 0; const counted = async () => { calls++; await new Promise(resolve => setTimeout(resolve, 30)); return { address: '127.0.0.2' }; };
+      stunAddresses.clear();
+      await Promise.all([warmStunAddresses([['y.stun.test', 1]], { lookup: counted }), warmStunAddresses([['y.stun.test', 1]], { lookup: counted })]); await warmStunAddresses([['y.stun.test', 1]], { lookup: counted });
+      assert.strictEqual(calls, 1, 'one name was looked up ' + calls + ' times');
+      let clock = 0; stunAddresses.clear(); await warmStunAddresses([['z.stun.test', 1]], { lookup: counted, now: () => clock }); clock = 31 * 60 * 1000;
+      await warmStunAddresses([['z.stun.test', 1]], { lookup: counted, now: () => clock }); assert.strictEqual(calls, 3, 'an old answer was not refreshed');
+      stunAddresses.clear();
+      console.log('PASS a slow or lost DNS answer never holds a lane up, late answers are kept, failed ones are retried, lookups are shared and refreshed');
+    }
 
     // ---- punch + authenticate + transfer, both directions
     const key = crypto.randomBytes(32), tok = token();

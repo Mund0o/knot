@@ -74,6 +74,38 @@ async function preloadChecks() {
   assert.strictEqual(lane.closePeer(peerId), true); assert.deepStrictEqual(sent.shift(), ['pair:shareLaneClosePeer', documentId, peerId]);
   await capture.start({ fps: 30, width: 1920, height: 1080 }); assert.deepStrictEqual(invoked.shift(), ['pair:shareCaptureStart', documentId, { fps: 30, width: 1920, height: 1080 }]);
 
+  // The GPU decoder bridge: sizes, ids and pictures are checked here, and only the four numbers of a request go on.
+  const decode = exposed.pairShareDecode;
+  assert(decode, 'the GPU decoder bridge was not exposed');
+  for (const name of ['info', 'open', 'push', 'close', 'onFrame', 'onError', 'onEnd']) assert.strictEqual(typeof decode[name], 'function', 'pairShareDecode.' + name);
+  sent.length = 0; invoked.length = 0;
+  for (const bad of [undefined, null, {}, { width: 1920, height: 1080, outWidth: 960 }, { width: 1920, height: 1080, outWidth: '960', outHeight: 540 }, { width: 100, height: 1080, outWidth: 100, outHeight: 540 }, { width: 99999, height: 1080, outWidth: 960, outHeight: 540 }, { width: 1920.5, height: 1080, outWidth: 960, outHeight: 540 }]) {
+    assert.deepStrictEqual(plain(await decode.open(bad)), { ok: false, error: 'invalid decoder request' });
+  }
+  assert.strictEqual(decode.push(0, 1, new Uint8Array(4)), false); assert.strictEqual(decode.push('1', 1, new Uint8Array(4)), false); assert.strictEqual(decode.push(1.5, 1, new Uint8Array(4)), false);
+  assert.strictEqual(decode.push(1, -1, new Uint8Array(4)), false); assert.strictEqual(decode.push(1, NaN, new Uint8Array(4)), false); assert.strictEqual(decode.push(1, 1, new Uint8Array(0)), false);
+  assert.strictEqual(decode.push(1, 1, new Uint8Array(8 * 1024 * 1024 + 1)), false); assert.strictEqual(decode.push(1, 1, 'text'), false);
+  assert.strictEqual(decode.close(0), false); assert.strictEqual(decode.close('3'), false);
+  assert.strictEqual(invoked.length + sent.length, 0, 'an invalid decoder request crossed the bridge: ' + JSON.stringify([...invoked, ...sent]));
+  await decode.info(); assert.deepStrictEqual(invoked.shift(), ['pair:shareDecodeInfo', documentId]);
+  await decode.open({ width: 1920, height: 1080, outWidth: 960, outHeight: 540, command: 'rm -rf /' });
+  assert.deepStrictEqual(plain(invoked.shift()), ['pair:shareDecodeOpen', documentId, { width: 1920, height: 1080, outWidth: 960, outHeight: 540 }]);
+  const picture = new Uint8Array(10);
+  assert.strictEqual(decode.push(3, 1234, picture), true); assert.deepStrictEqual(sent.shift(), ['pair:shareDecodePush', documentId, 3, 1234, picture]);
+  assert.strictEqual(decode.close(3), true); assert.deepStrictEqual(sent.shift(), ['pair:shareDecodeClose', documentId, 3]);
+  const decoded = { frames: [], errors: [], ends: [] };
+  decode.onFrame((id, meta, bytes) => decoded.frames.push([id, meta.width, meta.height, bytes.length])); decode.onError((id, message) => decoded.errors.push([id, message])); decode.onEnd(id => decoded.ends.push(id));
+  const meta = { pts: 5, width: 128, height: 128 }, nv12 = new Uint8Array(128 * 128 * 3 / 2), foreign = 'cd'.repeat(16);
+  events.emit('pair:shareDecodeFrame', {}, documentId, 3, meta, nv12);                                      // good
+  events.emit('pair:shareDecodeFrame', {}, foreign, 3, meta, nv12);                                         // another document
+  events.emit('pair:shareDecodeFrame', {}, documentId, 0, meta, nv12);                                      // not an id
+  events.emit('pair:shareDecodeFrame', {}, documentId, 3, meta, new Uint8Array(100));                       // a picture of the wrong size for its header
+  events.emit('pair:shareDecodeFrame', {}, documentId, 3, { pts: 5, width: 64, height: 64 }, new Uint8Array(64 * 64 * 3 / 2));   // below the decoder's limits
+  events.emit('pair:shareDecodeFrame', {}, documentId, 3, { pts: 'x', width: 128, height: 128 }, nv12);
+  events.emit('pair:shareDecodeError', {}, documentId, 3, 'the GPU is busy'); events.emit('pair:shareDecodeError', {}, documentId, 3, { message: 'x' }); events.emit('pair:shareDecodeError', {}, foreign, 3, 'no');
+  events.emit('pair:shareDecodeEnd', {}, documentId, 3); events.emit('pair:shareDecodeEnd', {}, foreign, 3);
+  assert.deepStrictEqual(decoded, { frames: [[3, 128, 128, 128 * 128 * 3 / 2]], errors: [[3, 'the GPU is busy']], ends: [3] });
+
   // Events: only from this document, only well-formed.
   const got = { open: [], frame: [], close: [], config: [], picture: [], end: 0 };
   lane.onOpen((id, t) => got.open.push([id, t])); lane.onFrame((id, bytes) => got.frame.push([id, bytes.length])); lane.onClose(id => got.close.push(id));
@@ -104,6 +136,16 @@ const bridgeSource = slice('let activeBridgeOwner = null;', 'function validSaveI
   + slice('function directKey(', '\n') + '\n'
   + slice('// Screen shares (share-session.js).', 'let lanHouse = null');
 
+class FakeDecodeRuntime {
+  constructor(options) { this.options = options; this.opens = []; this.pushes = []; this.closes = []; this.closedAll = 0; FakeDecodeRuntime.all.push(this); }
+  async availability() { return { available: true, reason: '', gpu: 'fake GPU av1 128x128..8192x8192', helper: '/secret/path/knot-nvdec' }; }
+  async open(owner, options) { this.opens.push([owner, options]); if (options.width < 0) throw new Error('boom'); return { id: this.opens.length, outWidth: options.outWidth, outHeight: options.outHeight }; }
+  push(owner, id, pts, data) { this.pushes.push([owner, id, pts, data.byteLength]); return true; }
+  async close(owner, id) { this.closes.push([owner, id]); return true; }
+  async closeAll() { this.closedAll++; }
+}
+FakeDecodeRuntime.all = [];
+
 class FakeCapture extends EventEmitter {
   constructor() { super(); this.started = null; this.stopped = 0; FakeCapture.all.push(this); }
   async info() { return { supported: true, vendor: 'test' }; }
@@ -125,7 +167,7 @@ function mainProcess(label, url = 'file:///app/index.html') {
     validBridgeDocumentId: value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value) ? value : '',
     validIpcBinary: (value, max = 8 * 1024 * 1024) => (Buffer.isBuffer(value) || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) && value.byteLength > 0 && value.byteLength <= max,
     ShareLaneRuntime: class extends ShareLaneRuntime { constructor(options) { super({ ...options, udxOptions: LOCAL }); } },
-    GsrCapture: FakeCapture, selectedPrimaryGpu: null, process: { env: {} },
+    GsrCapture: FakeCapture, ShareDecodeRuntime: FakeDecodeRuntime, selectedPrimaryGpu: null, process: { env: {} },
     pendingSource: null, pendingSources: [1, 2, 3], nativeScreenService: { stopAsync: async () => {} },
     stopLinuxShareAudio: async () => {}, stopNativeCapture: () => {}, closeDirectFileRuntime: async () => {}, closeAllSaveStreams: async () => {}, closeLanHouse: async () => {},
   });
@@ -185,6 +227,32 @@ async function mainChecks() {
   for (let waited = 0; !viewer.take('pair:shareLaneClose').length && waited < 4000; waited += 20) await sleep(20);
   assert.deepStrictEqual(viewer.take('pair:shareLaneClose').map(s => s[2]), [peerV]);
 
+  // The GPU decoder: only the owning page can ask about it, open one, feed it or close it; what comes back reaches only that page; it ends with the page.
+  assert.deepStrictEqual(plain(await sharer.handlers.get('pair:shareDecodeInfo')(stranger, sharer.documentId)), { available: false, reason: 'unauthorized' });
+  assert.deepStrictEqual(plain(await sharer.handlers.get('pair:shareDecodeOpen')(stranger, sharer.documentId, { width: 1920, height: 1080, outWidth: 960, outHeight: 540 })), { ok: false, error: 'unauthorized' });
+  assert.strictEqual(FakeDecodeRuntime.all.length, 0, 'a stranger started the GPU decoder runtime');
+  const info = await sharer.call('pair:shareDecodeInfo');
+  assert.deepStrictEqual(plain(info), { available: true, reason: '', gpu: 'fake GPU av1 128x128..8192x8192' }, 'the page must not be told where the helper program is');
+  const decoder = FakeDecodeRuntime.all.at(-1);
+  const decoderOpened = await sharer.call('pair:shareDecodeOpen', { width: 1920, height: 1080, outWidth: 960, outHeight: 540, extra: 'ignored' });
+  assert.deepStrictEqual(plain(decoderOpened), { ok: true, id: 1, outWidth: 960, outHeight: 540 });
+  assert.deepStrictEqual(plain(decoder.opens[0][1]), { width: 1920, height: 1080, outWidth: 960, outHeight: 540 });
+  assert.deepStrictEqual(plain(await sharer.call('pair:shareDecodeOpen', { width: -1, height: 1, outWidth: 1, outHeight: 1 })), { ok: false, error: 'boom' });
+  assert.deepStrictEqual(plain(await sharer.call('pair:shareDecodeOpen', null)), { ok: false, error: 'unauthorized' });
+  sharer.call('pair:shareDecodePush', 1, 100, new Uint8Array(20)); sharer.call('pair:shareDecodePush', 1.5, 100, new Uint8Array(20)); sharer.call('pair:shareDecodePush', 1, NaN, new Uint8Array(20));
+  sharer.call('pair:shareDecodePush', 1, 100, 'text'); sharer.call('pair:shareDecodePush', 1, 100, new Uint8Array(8 * 1024 * 1024 + 1));
+  sharer.listeners.get('pair:shareDecodePush')(stranger, sharer.documentId, 1, 100, new Uint8Array(20));
+  assert.deepStrictEqual(decoder.pushes.map(p => p.slice(1)), [[1, 100, 20]], 'only the one valid push from the owner may reach the decoder');
+  sharer.listeners.get('pair:shareDecodeClose')(stranger, sharer.documentId, 1); assert.strictEqual(decoder.closes.length, 0);
+  sharer.call('pair:shareDecodeClose', 1); await sleep(10); assert.strictEqual(decoder.closes.length, 1);
+  decoder.options.onFrame({ owner: decoder.opens[0][0], id: 1, picture: { pts: 7, width: 960, height: 540, data: Buffer.alloc(960 * 540 * 3 / 2) } });
+  decoder.options.onError({ owner: decoder.opens[0][0], id: 1, error: new Error('the GPU is busy') });
+  decoder.options.onEnd({ owner: decoder.opens[0][0], id: 1 });
+  assert.deepStrictEqual(sharer.take('pair:shareDecodeFrame').map(m => [m[1], m[2], plain(m[3]), m[4].length]), [[sharer.documentId, 1, { pts: 7, width: 960, height: 540 }, 960 * 540 * 3 / 2]]);
+  assert.deepStrictEqual(sharer.take('pair:shareDecodeError').map(m => [m[1], m[2], m[3]]), [[sharer.documentId, 1, 'the GPU is busy']]);
+  assert.strictEqual(sharer.take('pair:shareDecodeEnd').length, 1);
+  assert.strictEqual(viewer.take('pair:shareDecodeFrame').length, 0, 'the other page was handed the pictures');
+
   // The recorder: started for the document that asked, events reach only that page, stopped with it.
   const started = await sharer.call('pair:shareCaptureStart', { fps: 30 });
   assert.strictEqual(started.width, 1920);
@@ -211,6 +279,7 @@ async function mainChecks() {
   sharer.listeners.get('pair:bridgeReady')(sharer.event, 'ee'.repeat(16));
   for (let waited = 0; !running.stopped && waited < 2000; waited += 10) await sleep(10);
   assert.strictEqual(running.stopped, 1, 'the recorder outlived its page');
+  assert.strictEqual(decoder.closedAll, 1, 'the GPU decoders outlived their page');
   assert(live);
   await rejects(sharer.handlers.get('pair:shareLaneSend')(sharer.event, sharer.documentId, peerS, Buffer.alloc(3)), /not available|unknown/);
   console.log('PASS main: only the owning page can open, send, close or record; a record crossed two main processes over a real UDP lane; closing and navigation clean up');

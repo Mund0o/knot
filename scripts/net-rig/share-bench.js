@@ -24,7 +24,7 @@ function readIvf(file) {
 
 (async () => {
   let peerId = null, onFrame = () => {}, onClose = () => {};
-  const runtime = new ShareLaneRuntime({ sameOwner: (a, b) => a.id === b.id, udxOptions: { advertiseHosts: [localIp], stunServers: [] },
+  const runtime = new ShareLaneRuntime({ sameOwner: (a, b) => a.id === b.id, udxOptions: { advertiseHosts: [localIp], stunServers: [], ...(process.env.BUF !== undefined ? { socketBufferBytes: Number(process.env.BUF) } : {}) },
     onOpen: event => { if (role === 'recv') peerId = event.peerId; }, onFrame: event => onFrame(event.frame), onClose: () => onClose() });
 
   if (role === 'send') {
@@ -83,6 +83,8 @@ function readIvf(file) {
       onStuck: () => runtime.send(owner, peerId, Buffer.from('{"r":1}')).catch(() => {}),
     });
     receiver.start(0);
+    // A receiver that is busy now and then, as a real main process is: the socket buffer has to hold what arrives meanwhile.
+    if (Number(process.env.STALL_MS) > 0) setInterval(() => { const until = Date.now() + Number(process.env.STALL_MS); while (Date.now() < until); }, Number(process.env.STALL_EVERY_MS) || 200);
     onFrame = chunk => { receiver.pushBytes('udx', chunk); runtime.credit(owner, peerId, chunk.length); };
     const timer = setInterval(() => { receiver.tick(); runtime.send(owner, peerId, Buffer.from(JSON.stringify({ a: receiver.ackSeq }))).catch(() => {}); }, 100);
     for (let waited = 0; !done && waited < (seconds + 90) * 1000; waited += 50) await sleep(50);

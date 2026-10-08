@@ -231,6 +231,14 @@ function world({ playerOptions = {}, watcherOptions = {} } = {}) {
     const line = w.readout({ config });
     assert.strictEqual(line, 'Friend sharing · 2160p · 60 fps · 8.4 Mbps · AV1 on CPU', 'the watcher measured the wrong rates: ' + line);
     w.stop({ notify: false });
+    // "GPU" is only said for a decoder that really is one: a player that asked for hardware is on the CPU when this computer has none for the codec
+    for (const [decoder, hardware, codec, expected] of [['hardware-preferred', [], 'av01.0.13H.08', 'CPU'], ['hardware-preferred', ['H264'], 'av01.0.13H.08', 'CPU'], ['hardware-preferred', ['AV1'], 'av01.0.13H.08', 'GPU'],
+      ['hardware-preferred', null, 'av01.0.13H.08', 'GPU'], ['nvdec', [], 'av01.0.13H.08', 'GPU'], ['software', ['AV1'], 'av01.0.13H.08', 'CPU'], ['hardware-preferred', [], 'avc1.640034', 'CPU'], ['hardware-preferred', ['H264'], 'avc1.640034', 'GPU'], ['hardware-preferred', [], 'hvc1.1.6.L93.B0', 'GPU']]) {
+      const stand = { configure() {}, push() {}, skip() {}, setActive() {}, destroy() {}, read: () => ({ lastPacketAt: 9980, lastLiveAt: 9980 }), stats: () => ({ delayMs: 250, received: 0, painted: 0, decoder, buffering: false }) };
+      const watcher = Controller.createShareWatcher({ shareId: 'abcdef123459', Player: { createSharePlayer: () => stand }, Session, now: () => 10000, sendControl() {} });
+      assert(watcher.readout({ config: { codec, width: 1920, height: 1080 }, hardware }).includes(' on ' + expected), `${decoder} with hardware ${JSON.stringify(hardware)} for ${codec} should say ${expected}`);
+      watcher.stop({ notify: false });
+    }
     console.log('PASS the status line under a share says what arrives, what is shown, what decodes it, and whose end a problem is on');
   }
 
