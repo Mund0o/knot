@@ -1,11 +1,11 @@
 {
-  "version": "1.1.129",
-  "notes": "The line under a friend's share now says why fewer pictures are shown, and shares without sound are no longer reported as sound that is silent. The person sharing is told why sound could not start and when nothing is playing.",
-  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.129/pair-p2p-1.1.129.tar.gz",
-  "linuxSha256": "9987b6198cd62e75412253eaa295d57bbc9d5d1ae662c8f700b8cea986b732d8",
-  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.129/Knot-1.1.129.AppImage",
-  "linuxAppImageSha256": "f34ded1198a40578b8be1598c735d9b2072fe362510b227b360584267af9012a",
-  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.129/Knot.Setup.1.1.129.exe",
-  "winSha256": "b4fc8ce07f8d941602283b7c86fce764a2b364c4ae2b21ff9b96bd46a4dffddf",
-  "signature": "agwIDKSmJVC5Bs4fcmo2l3/CIHC9Php0JBUTAy0lXQpVuU323le6f3De7uXNPHTmXNzsbosV9jfsWnKOqWRUAA=="
+  "version": "1.1.130",
+  "notes": "A viewer on a slow link no longer watches pictures that keep getting older, a viewer that keeps falling behind tells the sharer what it really receives, and the delay after a rough patch comes back in about a minute. The speed test now works (it never produced a result before) and backs off when refused. The line under a share only says GPU when it is true, and Knot keeps a local share log for working out why a share went wrong.",
+  "linuxUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.130/pair-p2p-1.1.130.tar.gz",
+  "linuxSha256": "12183f1e02fdedf153e78c45e0b7a78d0b91513385e6c895b8470c29d402a4d8",
+  "linuxAppImageUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.130/Knot-1.1.130.AppImage",
+  "linuxAppImageSha256": "d35f3bd534d378a5d9f28f5ce156d51b006f66697a6a9a25e3f12b214c689e91",
+  "winUrl": "https://github.com/Mund0o/knot/releases/download/v1.1.130/Knot.Setup.1.1.130.exe",
+  "winSha256": "693292c7876bae96a838d998b710e23cce4be089140ea816125dab9e68fa896a",
+  "signature": "RvO5nWwyui7iMyqZ48VTgjuIl7TczSYcXY6F4G/3gB9PqOu2meVBnLz3wkCwwB2poiFG6MRE0dWtspb8r5eDBQ=="
 }
