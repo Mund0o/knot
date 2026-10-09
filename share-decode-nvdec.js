@@ -30,6 +30,7 @@ const MAX_SIDE = 8192, MIN_SIDE = 128;           // the decoder's own limits for
 const MAX_PICTURE_BYTES = 64 * 1024 * 1024;
 const STOP_TERM_WAIT_MS = 800;
 const STOP_KILL_WAIT_MS = 2000;
+const PROBE_RETRY_MS = 30000;                    // a check that failed for a reason that may pass (it timed out, it could not start) is asked again after this
 
 const even = value => Math.max(2, Math.floor(Number(value) / 2) * 2);
 
@@ -145,8 +146,8 @@ class NvdecSession extends EventEmitter {
 // Can this machine decode AV1 on its GPU? Asks the helper about the GPU, then really decodes the sample through it.
 // Never throws: a machine without it just gets { available: false, reason }.
 async function probeNvdec({ helper = findHelper(), spawnImpl = spawn, timeoutMs = 10000, platform = process.platform } = {}) {
-  if (platform !== 'linux') return { available: false, reason: 'GPU decoding through NVDEC is only used on Linux', helper: '' };
-  if (!helper) return { available: false, reason: 'the GPU decoder helper (knot-nvdec) is not installed', helper: '' };
+  if (platform !== 'linux') return { available: false, reason: 'GPU decoding through NVDEC is only used on Linux', helper: '', permanent: true };
+  if (!helper) return { available: false, reason: 'the GPU decoder helper (knot-nvdec) is not installed', helper: '', permanent: true };
   const run = (args, input) => new Promise(resolve => {
     const out = []; let err = '', done = false, child;
     const finish = result => { if (done) return; done = true; clearTimeout(timer); try { child?.kill('SIGKILL'); } catch {} resolve(result); };
@@ -161,24 +162,34 @@ async function probeNvdec({ helper = findHelper(), spawnImpl = spawn, timeoutMs 
   });
   const said = result => result.err.trim().split('\n').filter(Boolean).at(-1) || result.why || 'unknown error';
   const caps = await run(['--probe']);
-  if (caps.spawnFailed) return { available: false, reason: `the GPU decoder helper could not start (${caps.why})`, helper };
-  if (!caps.ok) return { available: false, reason: `this GPU cannot decode AV1 (${said(caps)})`, helper };
+  // Only an answer from the GPU itself ("no AV1 here") is final. A helper that could not start or did not answer in time (a machine busy with a game
+  // at launch) is asked again later: caching that for the whole run left the viewer on the CPU decoder until Knot was restarted.
+  if (caps.spawnFailed) return { available: false, reason: `the GPU decoder helper could not start (${caps.why})`, helper, permanent: false };
+  if (!caps.ok) return { available: false, reason: `this GPU cannot decode AV1 (${said(caps)})`, helper, permanent: !/did not answer in time/.test(caps.why || '') };
   const gpu = caps.out.toString().trim().replace(/^ok\s+/, '');
   const test = await run(['0', '0'], ivfPictures(PROBE_IVF).slice(0, 1));
-  if (test.out.length < FRAME_HEADER || test.out.readUInt32LE(0) !== 256 || test.out.readUInt32LE(4) !== 144) return { available: false, reason: `the GPU could not decode a test picture (${said(test)})`, helper };
+  if (test.out.length < FRAME_HEADER || test.out.readUInt32LE(0) !== 256 || test.out.readUInt32LE(4) !== 144) return { available: false, reason: `the GPU could not decode a test picture (${said(test)})`, helper, permanent: false };
   return { available: true, reason: '', helper, gpu };
 }
 
 // Sessions that belong to a document (the renderer that asked for them) and end with it, like the share lanes and the recorder.
 class ShareDecodeRuntime {
-  constructor({ sameOwner, onFrame, onError, onEnd, helper = '', spawnImpl = spawn, probe = probeNvdec, makeSession = options => new NvdecSession(options) } = {}) {
-    Object.assign(this, { sameOwner, onFrame, onError, onEnd, spawnImpl, probe, makeSession });
-    this.helper = helper; this.info = null; this.sessions = new Map(); this.nextId = 1;
+  constructor({ sameOwner, onFrame, onError, onEnd, helper = '', spawnImpl = spawn, probe = probeNvdec, makeSession = options => new NvdecSession(options), now = Date.now, retryMs = PROBE_RETRY_MS } = {}) {
+    Object.assign(this, { sameOwner, onFrame, onError, onEnd, spawnImpl, probe, makeSession, now, retryMs });
+    this.helper = helper; this.info = null; this.infoRetryAt = 0; this.sessions = new Map(); this.nextId = 1;
   }
 
-  // Cached: the answer cannot change while the app runs, and asking costs a process start.
+  // Cached, because asking costs a process start: a yes, and a no that is final (this GPU cannot decode AV1, there is no helper). A no that may pass
+  // (the helper timed out or could not start) is asked again once retryMs has gone by.
   availability() {
-    if (!this.info) this.info = this.probe({ helper: this.helper || findHelper(), spawnImpl: this.spawnImpl }).then(result => { if (result.available) this.helper = result.helper; return result; });
+    if (this.info && this.infoRetryAt && this.now() >= this.infoRetryAt) { this.info = null; this.infoRetryAt = 0; }
+    if (!this.info) {
+      this.info = this.probe({ helper: this.helper || findHelper(), spawnImpl: this.spawnImpl }).then(result => {
+        if (result.available) this.helper = result.helper;
+        else if (result.permanent !== true) this.infoRetryAt = this.now() + this.retryMs;
+        return result;
+      });
+    }
     return this.info;
   }
 

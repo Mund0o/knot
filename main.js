@@ -711,6 +711,8 @@ async function systemAccountAvatar() {
 let networkProbeTask = null;
 ipcMain.handle('pair:networkProbe', async event => {
   if (!isPairRenderer(event)) return null;
+  // Test apps never go to the real speed test: dozens of them a day got this computer refused (HTTP 429) for an hour. KNOT_TEST_ALLOW_PROBE=1 for the rare test that must.
+  if (TEST_RIG && process.env.KNOT_TEST_ALLOW_PROBE !== '1') return null;
   if (networkProbeTask) return networkProbeTask;
   networkProbeTask = measureCapacity().catch(() => null).finally(() => { networkProbeTask = null; });
   return networkProbeTask;
@@ -1132,10 +1134,29 @@ ipcMain.on('pair:shareLaneCredit', (event, documentId, peerId, count) => {
   const owner = bridgeRequestOwner(event, documentId), bytes = Number(count);
   if (owner && Number.isSafeInteger(bytes) && bytes > 0 && bytes <= MAX_IPC_CHUNK) shareLanes?.credit(owner, peerId, bytes);
 });
+// A local, second-by-second record of what a screen share is doing, for working out why one went wrong (see share-diagnostics.js). The page sends the
+// lines while a share is on; this adds how busy each of Knot's processes is, which still arrives when the page itself is stuck. It is a file in Knot's
+// folder (share-diagnostics.log) and goes nowhere else.
+let shareDiagnosticsLog = null;
+function shareDiagnostics() {
+  if (!shareDiagnosticsLog) {
+    shareDiagnosticsLog = require('./share-diagnostics').createShareDiagnostics({
+      file: path.join(app.getPath('userData'), 'share-diagnostics.log'),
+      header: `Knot ${app.getVersion()} ${process.platform} electron ${process.versions.electron}`,
+      metrics: () => app.getAppMetrics().map(item => ({ type: item.type, pid: item.pid, cpu: item.cpu?.percentCPUUsage, memoryKb: item.memory?.workingSetSize })),
+      lanes: () => (shareLanes ? shareLanes.stats() : []),
+    });
+  }
+  return shareDiagnosticsLog;
+}
+ipcMain.on('pair:shareDiag', (event, documentId, text) => {
+  if (!bridgeRequestOwner(event, documentId) || typeof text !== 'string') return;
+  shareDiagnostics().record(text);
+});
 ipcMain.handle('pair:shareDecodeInfo', async (event, documentId) => {
   if (!bridgeRequestOwner(event, documentId)) return { available: false, reason: 'unauthorized' };
   if (TEST_RIG && process.env.KNOT_TEST_NO_NVDEC === '1') return { available: false, reason: 'GPU decoding is switched off for this test' };
-  try { const { available, reason, gpu } = await shareDecodeRuntime().availability(); return { available: !!available, reason: String(reason || ''), gpu: String(gpu || '') }; }
+  try { const { available, reason, gpu, permanent } = await shareDecodeRuntime().availability(); return { available: !!available, reason: String(reason || ''), gpu: String(gpu || ''), permanent: permanent === true }; }
   catch (error) { return { available: false, reason: error?.message || 'the GPU decoder could not be checked' }; }
 });
 ipcMain.handle('pair:shareDecodeOpen', async (event, documentId, options) => {

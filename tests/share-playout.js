@@ -133,6 +133,37 @@ function run({ fps = 60, hz = 60, seconds = 10, arrival = i => i * (1000 / fps) 
 }
 
 {
+  // A delay built up by a rough patch must not outlive it by minutes, and must not come down while the link keeps using it.
+  const FPS = 60;
+  // 40 s of overload (pictures arrive at 70% of real time, the sender moves the viewer up every ~8 s), then a perfect link: it used to take 232 s to get back under 250 ms
+  const overload = new Playout(); let produced = 0, nextArrive = 0, peak = 0, back = -1;
+  for (let now = 0; now < 600 * 1000; now += 1000 / 120) {
+    const slow = now < 40000, live = Math.floor(now * FPS / 1000);
+    while (nextArrive <= now) {
+      if (slow) { if (produced < live - 8 * FPS) produced = live - 1; if (produced < live) { overload.addFrame(Math.round(produced * 1e6 / FPS), {}); produced++; } nextArrive += 1000 / (FPS * 0.7); }
+      else { if (produced < live) { overload.addFrame(Math.round(produced * 1e6 / FPS), {}); produced++; } else produced = live; nextArrive += 1000 / FPS; }
+    }
+    overload.tick(now); peak = Math.max(peak, overload.delayMs); if (now > 40000 && back < 0 && overload.delayMs < 250) back = (now - 40000) / 1000;
+  }
+  assert(peak > 3000, 'the overload never built up a delay (peak ' + Math.round(peak) + ' ms)');
+  assert(back > 0 && back < 70, `the delay took ${Math.round(back)} s to come back under 250 ms on a perfect link (a minute is plenty)`);
+  // a link that keeps breaking up keeps its delay: random outages of 0.3-1.4 s about every 8 s for 10 minutes stall about once or twice a minute, as they always did
+  const stalls = [1, 2, 3].map(seed => {
+    let a = seed; const rnd = () => (a = (a * 1664525 + 1013904223) >>> 0) / 4294967296;
+    const outages = []; for (let t = 5000; t < 600000; t += 3000 + rnd() * 10000) outages.push([t, t + 300 + rnd() * 1100]);
+    const p = new Playout(); let made = 0, next = 0, held = [];
+    for (let now = 0; now < 600000; now += 1000 / 120) {
+      const live = Math.floor(now * FPS / 1000), down = outages.some(([x, y]) => now >= x && now < y);
+      while (next <= now) { if (made < live) { const f = { pts: Math.round(made * 1e6 / FPS) }; made++; if (down) held.push(f); else { while (held.length) { const h = held.shift(); p.addFrame(h.pts, h); } p.addFrame(f.pts, f); } } next += 1000 / FPS; }
+      p.tick(now);
+    }
+    return p.stalls / 10;
+  });
+  assert(stalls.every(perMinute => perMinute <= 2.2), 'a link that keeps breaking up stalled ' + stalls.join(', ') + ' times a minute (it was 1.7 to 2.2 before the delay came down faster)');
+  console.log(`PASS a delay built up by overload (${Math.round(peak)} ms) is back under 250 ms ${Math.round(back)} s after the link recovers, and a link that keeps breaking up stalls ${stalls.join(', ')} times a minute`);
+}
+
+{
   // The delay creeps back down once the link has stayed calm for a while, but not below the floor, and costs few pictures.
   const p = new Playout({ startDelayMs: 1200, minDelayMs: 150, settleMs: 5000 });
   for (let now = 0, i = 0; now < 120000; now += 1000 / 60) {

@@ -30,7 +30,7 @@ async function waitFor(check, ms, what) { for (let waited = 0; waited < ms; wait
   console.log(`PASS the probe finds the helper and really decodes a test picture on the GPU (${info.gpu})`);
 
   // ---- a probe on a machine without it says why
-  assert.deepStrictEqual(await probeNvdec({ helper: '' }), { available: false, reason: 'the GPU decoder helper (knot-nvdec) is not installed', helper: '' });
+  assert.deepStrictEqual(await probeNvdec({ helper: '' }), { available: false, reason: 'the GPU decoder helper (knot-nvdec) is not installed', helper: '', permanent: true });
   assert.match((await probeNvdec({ helper: '/nonexistent/knot-nvdec' })).reason, /could not start/);
   assert.strictEqual((await probeNvdec({ platform: 'win32' })).available, false);
   const noGpu = await probeNvdec({ helper: '/bin/false' });
@@ -159,6 +159,32 @@ async function waitFor(check, ms, what) { for (let waited = 0; waited < ms; wait
       const none = new ShareDecodeRuntime({ sameOwner: () => true, probe: async () => ({ available: false, reason: 'this GPU cannot decode AV1 (test)' }), onFrame() {}, onError() {}, onEnd() {} });
       await assert.rejects(none.open(owner, { width: 1920, height: 1080, outWidth: 1920, outHeight: 1080 }), /cannot decode AV1/);
       console.log('PASS sessions belong to the document that opened them, sizes are checked, and a machine without GPU decoding refuses to open one');
+    }
+
+    // A check that failed for a reason that may pass (it timed out while the machine was busy) is asked again later, here and in the page; a final answer never is.
+    {
+      let clock = 1000, probes = 0; const answers = [{ available: false, reason: 'this GPU cannot decode AV1 (it did not answer in time)', helper: '/h' }, { available: true, helper: '/h', gpu: 'fake GPU' }];
+      const runtime = new ShareDecodeRuntime({ sameOwner: () => true, now: () => clock, retryMs: 30000, probe: async () => answers[Math.min(probes++, 1)], onFrame() {}, onError() {}, onEnd() {} });
+      assert.strictEqual((await runtime.availability()).available, false);
+      assert.strictEqual((await runtime.availability()).available, false); assert.strictEqual(probes, 1, 'a failed check was asked again at once');
+      clock += 29000; await runtime.availability(); assert.strictEqual(probes, 1, 'a failed check was asked again before its time');
+      clock += 2000; assert.strictEqual((await runtime.availability()).available, true, 'a check that failed once was never asked again'); assert.strictEqual(probes, 2);
+      clock += 3600000; await runtime.availability(); assert.strictEqual(probes, 2, 'a good answer was asked for again');
+      let finals = 0; const final = new ShareDecodeRuntime({ sameOwner: () => true, now: () => clock, probe: async () => (finals++, { available: false, reason: 'this GPU cannot decode AV1 (no AV1 here)', helper: '/h', permanent: true }), onFrame() {}, onError() {}, onEnd() {} });
+      await final.availability(); clock += 3600000; await final.availability(); assert.strictEqual(finals, 1, 'a final answer was asked for again');
+      const timedOut = await probeNvdec({ helper: '/bin/true', spawnImpl: (command, args, options) => spawn('/bin/sh', ['-c', 'sleep 5'], options), timeoutMs: 300 });
+      assert.strictEqual(timedOut.available, false); assert.notStrictEqual(timedOut.permanent, true, 'a helper that did not answer in time was called final');
+      assert.strictEqual((await probeNvdec({ helper: '/bin/false' })).permanent, true, 'a GPU that said no was not called final');
+      // the page's side asks again in the background, once, when the time has come
+      const { createGpuDecode } = require('../share-gpu-decoder');
+      let asked = 0, now = 5000; const replies = [{ available: false, reason: 'it did not answer in time' }, { available: true, gpu: 'fake GPU' }];
+      const gpu = createGpuDecode({ bridge: { info: async () => replies[Math.min(asked++, 1)] }, enabled: () => true, now: () => now, retryMs: 30000 });
+      await gpu.check(); assert.strictEqual(gpu.usable(), false); now += 10000; assert.strictEqual(gpu.usable(), false); assert.strictEqual(asked, 1, 'the page asked again too soon');
+      now += 21000; assert.strictEqual(gpu.usable(), false, 'it is usable only after the answer comes back'); assert.strictEqual(asked, 2); gpu.usable(); assert.strictEqual(asked, 2, 'a second question was asked while one was out');
+      await new Promise(resolve => setTimeout(resolve, 20)); assert.strictEqual(gpu.usable(), true, 'the page never moved to the GPU decoder that turned out to be there'); assert.strictEqual(asked, 2);
+      let finalAsked = 0; const never = createGpuDecode({ bridge: { info: async () => (finalAsked++, { available: false, reason: 'no AV1 here', permanent: true }) }, enabled: () => true, now: () => now, retryMs: 30000 });
+      await never.check(); now += 3600000; never.usable(); never.usable(); await new Promise(resolve => setTimeout(resolve, 20)); assert.strictEqual(finalAsked, 1, 'a final no was asked for again');
+      console.log('PASS a GPU decoder check that failed for a passing reason is asked again (in main and in the page); a final answer, and a yes, are not');
     }
 
     assert.strictEqual(packetHeader(5, 3).length, 12);

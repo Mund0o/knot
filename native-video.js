@@ -13,6 +13,12 @@
     while (length <= 8 && !(first & mask)) { mask >>= 1;length++; }
     if (length > 8 || offset+length > bytes.length) return null;
     let value = keepMarker ? first : first & (mask-1);
+    // A size with every value bit set is "unknown" (a live Cluster, written by FFmpeg in eight bytes, more than a safe integer holds). It is returned as
+    // such: a cluster handed over by the segmenter is complete, so its elements are simply read to the end of it.
+    if (!keepMarker && value === mask-1) {
+      let allOnes = true;for (let index=1;index<length&&allOnes;index++) allOnes = bytes[offset+index] === 0xff;
+      if (allOnes) return { length, value: 0, unknown: true };
+    }
     for (let index=1;index<length;index++){value=value*256+bytes[offset+index];if(!Number.isSafeInteger(value))return null}
     return { length, value };
   }

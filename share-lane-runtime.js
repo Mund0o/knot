@@ -90,6 +90,21 @@ class ShareLaneRuntime {
     return record.peer.sendAsync(bytes);
   }
 
+  // What each UDP stream thinks of the path it runs over, for the share log: congestion window (packets), round trip (ms), bytes in flight, packets sent
+  // again, fast recoveries and timeouts since it started, and the bandwidth it has measured (Mbit/s). A stream that keeps sending packets again while
+  // little is lost is reading reordering as loss: the window and the measured bandwidth fall, and the share slows to a crawl (reproduced under netem).
+  stats() {
+    const out = [];
+    for (const [id, record] of this.peers) {
+      try {
+        const stream = record.peer?.socket?.stream;
+        if (!stream) continue;
+        out.push({ id: id.slice(0, 6), cwnd: stream.cwnd, rttMs: stream.rtt, inflight: stream.inflight, retransmits: stream.retransmits, fastRecoveries: stream.fastRecoveries, timeouts: stream.rtoCount, bandwidthMbps: Math.round((Number(stream.bbrBandwidth) || 0) * 8 / 1e5) / 10 });
+      } catch {}
+    }
+    return out;
+  }
+
   // Bytes the renderer has finished with: lets the receive side keep reading.
   credit(owner, peerId, count) { this._ownsPeer(owner, peerId)?.peer.credit(count); }
 

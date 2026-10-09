@@ -16,6 +16,24 @@
   const PROBE_MAX_BYTES = 96 * 1024 * 1024;
   const PROBE_STREAMS = 8;
   const PROBE_STREAM_BYTES = 50 * 1024 * 1024;
+  // The speed test goes to speed.cloudflare.com, which refuses a computer that asks too often (HTTP 429, "retry in 54 minutes"; seen on the machine this
+  // was written on after many launches, and after every share was stopped while no result had been kept). A refused or failed test is not repeated for a
+  // while, so it neither hammers the endpoint nor spends time and bandwidth on a test that cannot work.
+  const REFUSED_BACKOFF_MS = 10 * 60 * 1000;     // refused without being told when to come back
+  const MAX_BACKOFF_MS = 60 * 60 * 1000;          // however long the endpoint asks to be left alone for
+  const FAILURE_BACKOFF_MS = 2 * 60 * 1000;       // no answer at all (offline, a timeout)
+  let probeUrls = { down: DOWN_URL, up: UP_URL };
+  let blockedUntil = 0, refusal = null;
+  const wallMs = () => Date.now();
+  const transportFor = url => (String(url).startsWith('http://') ? require('http') : require('https'));
+  // An answer that says "not now": remembered, with how long the endpoint asked for.
+  function noteRefusal(response) {
+    const status = Number(response?.statusCode) || 0;
+    if (status < 400) return false;
+    const retry = Number(response.headers?.['retry-after']);
+    refusal = { status, retryAfterMs: Number.isFinite(retry) && retry > 0 ? Math.min(MAX_BACKOFF_MS, retry * 1000) : REFUSED_BACKOFF_MS };
+    return true;
+  }
 
   function clamp(value, min, max) {
     const number = Number(value);
@@ -160,8 +178,8 @@
   }
 
   function nodeAgent() {
-    const https = require('https');
-    return new https.Agent({ keepAlive: true, maxSockets: PROBE_STREAMS, maxFreeSockets: PROBE_STREAMS });
+    const lib = transportFor(probeUrls.down);
+    return new lib.Agent({ keepAlive: true, maxSockets: PROBE_STREAMS, maxFreeSockets: PROBE_STREAMS });
   }
 
   function probeHeaders() {
@@ -169,9 +187,10 @@
   }
 
   async function warmup(agent) {
-    const https = require('https');
+    const https = transportFor(probeUrls.down);
     await new Promise(resolve => {
-      const request = https.get(DOWN_URL + 262144, { agent, headers: probeHeaders() }, response => {
+      const request = https.get(probeUrls.down + 262144, { agent, headers: probeHeaders() }, response => {
+        noteRefusal(response);
         response.resume();
         response.on('end', resolve);
       });
@@ -181,14 +200,15 @@
   }
 
   async function warmupUpload(agent) {
-    const https = require('https');
+    const https = transportFor(probeUrls.up);
     await new Promise(resolve => {
       const body = Buffer.alloc(65536, 7);
-      const request = https.request(UP_URL, {
+      const request = https.request(probeUrls.up, {
         method: 'POST',
         agent,
         headers: { ...probeHeaders(), 'content-type': 'application/octet-stream', 'content-length': String(body.length) },
       }, response => {
+        noteRefusal(response);
         response.resume();
         response.on('end', resolve);
       });
@@ -199,7 +219,7 @@
   }
 
   async function measureDownloadWindow(agent) {
-    const https = require('https');
+    const https = transportFor(probeUrls.down);
     const requests = [];
     let bytes = 0, origin = 0, bytesAtOrigin = 0, stopped = false;
     const windowBytes = () => Math.max(0, bytes - bytesAtOrigin);
@@ -209,8 +229,8 @@
       for (const request of requests) try { request.destroy(); } catch {}
     };
     const jobs = Array.from({ length: PROBE_STREAMS }, () => new Promise(resolve => {
-      const request = https.get(DOWN_URL + PROBE_STREAM_BYTES, { agent, headers: probeHeaders() }, response => {
-        if ((response.statusCode || 0) >= 400) { response.resume(); resolve(); return; }
+      const request = https.get(probeUrls.down + PROBE_STREAM_BYTES, { agent, headers: probeHeaders() }, response => {
+        if (noteRefusal(response)) { response.resume(); resolve(); return; }
         response.on('data', chunk => {
           bytes += chunk.length;
           if (!origin && bytes >= 256 * 1024) { origin = nowMs(); bytesAtOrigin = bytes; }
@@ -230,7 +250,7 @@
   }
 
   async function measureUploadWindow(agent) {
-    const https = require('https');
+    const https = transportFor(probeUrls.up);
     const chunk = Buffer.alloc(256 * 1024, 7);
     const requests = [];
     let origin = 0, bytesAtOrigin = 0, stopped = false, captured = 0;
@@ -243,7 +263,7 @@
       for (const request of requests) try { request.destroy(); } catch {}
     };
     const jobs = Array.from({ length: PROBE_STREAMS }, () => new Promise(resolve => {
-      const request = https.request(UP_URL, {
+      const request = https.request(probeUrls.up, {
         method: 'POST',
         agent,
         headers: {
@@ -252,6 +272,7 @@
           'content-length': String(PROBE_STREAM_BYTES),
         },
       }, response => {
+        noteRefusal(response);
         response.resume();
         response.on('end', resolve);
         response.on('error', () => resolve());
@@ -260,15 +281,20 @@
       requests.push(request);
       const write = () => {
         if (stopped) return;
-        while (!stopped) {
-          if (!request.write(chunk)) {
-            request.once('drain', write);
-            return;
-          }
+        // A few chunks, then back to the event loop (a loop that never yields never sees the socket's byte count move: it is only updated between turns).
+        // Progress is looked at after EVERY write, not only after one that reports room: a 256 KB chunk is bigger than a stream's buffer, so write() answers
+        // "full" every time, and a window that opened only on "room" never opened. The speed test then measured nothing, on any link.
+        for (let batch = 0; !stopped; batch++) {
+          if (batch >= 8) { setImmediate(write); return; }
+          const room = request.write(chunk);
           const sent = sentBytes();
           if (!origin && sent >= 256 * 1024) { origin = nowMs(); bytesAtOrigin = sent; }
           if (origin && shouldStopProbe(nowMs() - origin, windowBytes())) {
             stop();
+            return;
+          }
+          if (!room) {
+            request.once('drain', write);
             return;
           }
         }
@@ -296,9 +322,12 @@
     if (typeof abort === 'function') abort();
   }
 
-  async function measureCapacity() {
+  // `downUrl` / `upUrl` are for tests (a local server); a result is { uploadMbps, downloadMbps, ... } or null, and a null is remembered for a while.
+  async function measureCapacity({ downUrl = DOWN_URL, upUrl = UP_URL } = {}) {
     if (typeof require !== 'function') return null;
+    if (wallMs() < blockedUntil) return null;
     abortCapacityProbe();
+    probeUrls = { down: downUrl, up: upUrl }; refusal = null;
     const downAgent = nodeAgent(), upAgent = nodeAgent();
     let aborted = false;
     const abort = () => {
@@ -307,13 +336,18 @@
       try { upAgent.destroy(); } catch {}
     };
     activeProbeAbort = abort;
+    const refused = () => { blockedUntil = wallMs() + refusal.retryAfterMs; return null; };
     try {
       await Promise.all([warmup(downAgent), warmupUpload(upAgent)]);
       if (aborted) return null;
+      if (refusal) return refused();                 // told to go away: do not open eight more connections
       const downloadMbps = await measureDirection('down', downAgent);
       if (aborted) return null;
+      if (refusal) return refused();
       const uploadMbps = await measureDirection('up', upAgent);
-      if (aborted || !(downloadMbps > 0) || !(uploadMbps > 0)) return null;
+      if (aborted) return null;
+      if (!(downloadMbps > 0) || !(uploadMbps > 0)) { if (refusal) return refused(); blockedUntil = wallMs() + FAILURE_BACKOFF_MS; return null; }
+      blockedUntil = 0;
       return {
         uploadMbps: Math.round(uploadMbps * 100) / 100,
         downloadMbps: Math.round(downloadMbps * 100) / 100,
@@ -321,6 +355,7 @@
         at: Date.now(),
       };
     } catch {
+      blockedUntil = wallMs() + FAILURE_BACKOFF_MS;
       return null;
     } finally {
       if (activeProbeAbort === abort) activeProbeAbort = null;
@@ -358,5 +393,7 @@
     PROBE_MIN_BYTES,
     PROBE_MAX_BYTES,
     measureCapacity,
+    probeBlockedUntil: () => blockedUntil,
+    resetProbeBackoff: () => { blockedUntil = 0; refusal = null; },
   };
 });

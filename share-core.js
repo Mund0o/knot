@@ -15,7 +15,12 @@
   const { TYPE, FLAG, HEADER, encodeRecord, RecordParser } = Wire;
 
   const DEFAULT_MAX_LOG_BYTES = 384 * 1024 * 1024;   // everything not yet acknowledged by the slowest viewer, shared by all viewers
-  const DEFAULT_MAX_BACKLOG_MS = 45000;               // how far behind the live picture a viewer may fall before it is moved up
+  // How far behind the live picture a viewer may fall before it is moved up to the latest key picture. Nobody wants to watch the past, and only the
+  // sender can act on this: pictures still waiting here have not reached the viewer, so its player cannot jump over them. A link slower than the stream
+  // (measured: 25 Mbit/s carrying 42) makes the lag grow by about half a second every second, so with a long limit (it was 45 s) the viewer watched
+  // pictures 19 s old and climbing. Now it falls back to live every few seconds; the picture itself is never made worse. An outage is the same:
+  // what came after the first seconds of it is not worth sending.
+  const DEFAULT_MAX_BACKLOG_MS = 6000;
   const DEFAULT_VIEWER_TIMEOUT_MS = 30000;            // no acknowledgement for this long: the viewer is gone
   const RESEND_AFTER_MS = 10000;                      // outstanding records, no progress at all for this long: send them again
   const KEEP_CONFIGS = 8;
@@ -160,9 +165,11 @@
     }
 
     stats() {
+      const now = this.now();
       return {
         records: this.records.length, logBytes: this.logBytes, nextSeq: this.nextSeq, keySeq: this.keySeq, discardedBeforeKey: this.discardedBeforeKey,
-        viewers: [...this.viewers.values()].map(v => ({ id: v.id, acked: v.acked, cursor: v.cursor, behind: this.nextSeq - 1 - v.acked, lane: v.active?.kind || null, sentBytes: v.sentBytes, resent: v.resent, skips: v.skips })),
+        // lagMs: how old the oldest picture this viewer has not yet confirmed is (a few hundred milliseconds on a healthy link)
+        viewers: [...this.viewers.values()].map(v => ({ id: v.id, acked: v.acked, cursor: v.cursor, behind: this.nextSeq - 1 - v.acked, lagMs: Math.max(0, now - (this._record(v.acked + 1)?.at ?? now)), lane: v.active?.kind || null, sentBytes: v.sentBytes, resent: v.resent, skips: v.skips })),
       };
     }
 

@@ -193,6 +193,10 @@ const shareDecodeHook = (channel, valid) => cb => {
   const listener = (_event, documentId, id, ...rest) => { if (documentId === bridgeDocumentId && validDecodeId(id) && valid(...rest)) cb(id, ...rest); };
   ipcRenderer.on(channel, listener); return () => ipcRenderer.removeListener(channel, listener);
 };
+// One short line a second about a running share, for Knot's local share log (share-diagnostics.js). Text only, and short.
+contextBridge.exposeInMainWorld('pairShareDiag', {
+  record: text => typeof text === 'string' && text.length > 0 && text.length <= 1500 ? (ipcRenderer.send('pair:shareDiag', bridgeDocumentId, text), true) : false,
+});
 contextBridge.exposeInMainWorld('pairShareDecode', {
   info: () => ipcRenderer.invoke('pair:shareDecodeInfo', bridgeDocumentId),
   open: options => options && typeof options === 'object' && [options.width, options.height, options.outWidth, options.outHeight].every(validDecodeSide)

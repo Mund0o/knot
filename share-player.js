@@ -39,6 +39,10 @@
   const BACKEND_REVIEW_MS = 500;
   const BACKEND_SWITCH_GAP_MS = 3000;
   const NO_OUTPUT_MS = 1200;               // a decoder that has been fed this long without a picture coming out is not working
+  // A software decoder can fail on one bad picture (a corrupt reference, a stream that moved up into the middle of a group). A live stream goes on: a new
+  // decoder starts and waits for the next key picture. Only a decoder that keeps failing is given up on.
+  const SOFTWARE_RESTARTS = 4, SOFTWARE_RESTART_WINDOW_MS = 30000;
+  const ERROR_REPEAT_MS = 5000;            // the same error is reported once, not once per picture
   const DEFAULT_FPS = 60;
   // A hardware decoder can "work" (every picture decodes, nothing throws) and still hand back garbage: a black or white picture from a bad
   // driver. The first picture it produces is checked once against a software decode of the same key picture, on small thumbnails. If the
@@ -69,12 +73,14 @@
     let config = null, decoder = null, generation = 0, destroyed = false, active = true, ended = false, loopOn = false;
     let software = !!preferSoftware, softwareReason = '', needKey = true, pending = 0, lastSubmitAt = 0, lastOutputAt = 0, verified = !!preferSoftware, verification = preferSoftware ? 'not needed' : 'waiting';
     let encoded = [], replay = [];
+    const softwareFailures = [];         // when the software decoder failed lately
+    let lastErrorText = '', lastErrorAt = -Infinity;
     let lowLatency = true, decodeBoundMs = 0, lastTickAt = 0, modeSwitchAt = -Infinity, modeSince = 0, sparseSince = 0, flushed = false;
     const recentArrivals = [];           // when the last second's pictures arrived: how busy the stream is
     let gpuOn = false, gpuFailed = false, gpuReason = '', gpuSize = null, backendWantedSince = 0, lastBackendReviewAt = 0, lastBackendSwitchAt = -Infinity;
     const arrivals = new Map();            // picture time -> when it arrived, for latency
     const latencies = [];
-    const stats = { received: 0, decoded: 0, painted: 0, ticks: 0, decodeSkips: 0, restarts: 0, modeSwitches: 0, backendSwitches: 0, errors: 0, width: 0, height: 0, firstPaintAt: 0, lastPaintAt: 0, lastPacketAt: 0, lastLiveAt: 0, lastState: '' };
+    const stats = { received: 0, decoded: 0, painted: 0, ticks: 0, decodeSkips: 0, restarts: 0, modeSwitches: 0, backendSwitches: 0, errors: 0, width: 0, height: 0, frameFormat: '', firstPaintAt: 0, lastPaintAt: 0, lastPacketAt: 0, lastLiveAt: 0, lastState: '' };
     const renderIntervals = [];
     const drawTimes = [];                  // how long each picture took to draw (ms): a graphics card that is busy elsewhere makes this grow
 
@@ -84,7 +90,8 @@
     function closeFrame(frame) { try { frame.close(); } catch {} }
     // A decoder restarted mid-stream replays pictures from its last key picture, some of which were already shown: those are let go.
     let shownThrough = -Infinity;
-    function resetPlayout() { playout.reset(); shownThrough = -Infinity; }
+    // The pictures waiting to be shown are let go of first: a decoded 4K picture is 12 MB (or a slot in a hardware decoder's small pool) until it is closed.
+    function resetPlayout() { for (const entry of playout.frames) closeFrame(entry.handle); playout.reset(); shownThrough = -Infinity; }
 
     function stopDecoder() {
       generation++;
@@ -153,6 +160,14 @@
         encoded = [...resume, ...encoded]; replay = [];
         return true;
       }
+      // Already the software decoder: start another and wait for the next key picture (a replay from the last one would meet the same bad picture).
+      const t = now(); while (softwareFailures.length && t - softwareFailures[0] > SOFTWARE_RESTART_WINDOW_MS) softwareFailures.shift();
+      softwareFailures.push(t);
+      if (softwareFailures.length <= SOFTWARE_RESTARTS) {
+        softwareReason = String(error?.message || error || 'the decoder failed'); stats.restarts++;
+        replay = [];
+        return startDecoder();
+      }
       stats.errors++; destroyedWith(error); return false;
     }
     // Moves the software decoder between its two modes and replays the pictures since the last key picture, as the hardware fallback does.
@@ -202,7 +217,13 @@
       encoded = [...resume, ...encoded]; replay = [];
     }
 
-    function destroyedWith(error) { if (destroyed) return; try { onError(error instanceof Error ? error : new Error(String(error))); } catch {} }
+    function destroyedWith(error) {
+      if (destroyed) return;
+      const text = String(error?.message || error), t = now();
+      if (text === lastErrorText && t - lastErrorAt < ERROR_REPEAT_MS) return;
+      lastErrorText = text; lastErrorAt = t;
+      try { onError(error instanceof Error ? error : new Error(String(error))); } catch {}
+    }
 
     function verifyAgainstSoftware(first, reference, mine) {
       let reference2 = reference, soft = null, done = false;
@@ -229,6 +250,7 @@
       pending = Math.max(0, pending - 1); stats.decoded++; lastOutputAt = now();
       if (frame.timestamp <= shownThrough) { closeFrame(frame); arrivals.delete(frame.timestamp); return; }
       stats.width = frame.displayWidth || frame.codedWidth; stats.height = frame.displayHeight || frame.codedHeight;
+      stats.frameFormat = String(frame.format || '');       // what the decoder handed over: software decoders make I420, hardware ones NV12
       // The first picture a hardware decoder produces is the key picture that began the replay: check it against a software decode of it.
       if (!verified && (gpuOn || !software) && replay.length && replay[0].key && replay[0].pts === frame.timestamp) { verified = true; verification = 'checking'; verifyAgainstSoftware(replay[0], thumbnail(frame), mine); }
       if (onFrameDecoded) { try { onFrameDecoded(frame); } catch {} }

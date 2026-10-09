@@ -163,6 +163,9 @@ class UdxStreamSocket extends EventEmitter {
     // A lane that is reset after its owners stopped listening must never become an
     // uncaught exception in the main process.
     this.on('error', () => {});
+    // A share writes a picture at a time without waiting for the last to drain, so dozens of writes can be waiting on one 'drain' (each adds three listeners
+    // and removes them when it resolves). That is normal, and Node's warning for more than ten of them is noise in the log.
+    this.setMaxListeners(512);
     stream.on('data', chunk => { this._touch(); this.emit('data', chunk); });
     stream.on('drain', () => this.emit('drain'));
     stream.on('error', error => { this.emit('error', error); });

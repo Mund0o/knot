@@ -116,6 +116,7 @@
   function createShareWatcher({ shareId, surface, getDisplaySize, lanes = null, sendControl, onState = () => {}, onEnded = () => {}, onError = () => {}, onGap = () => {}, log = () => {}, preferSoftware = false, gpuDecode = null, playoutOptions = {}, now = () => performance.now(), endQuietMs = END_QUIET_MS, endPlayoutMs = END_PLAYOUT_MS, Session, Player } = {}) {
     const engine = { ...defaults(), ...(Session ? { Session } : {}), ...(Player ? { Player } : {}) };
     let sample = null, rates = { receivedFps: 0, shownFps: 0, mbps: 0, tickFps: null, decodedFps: null };
+    const startedAt = now();
     let finished = false, recordEnded = false, playerEnded = false, endTimer = null, hostEnded = false, hostEndedAt = 0, recordEndedAt = 0, stopped = false;
     const finish = () => { if (finished) return; finished = true; clearInterval(endTimer); endTimer = null; try { onEnded(); } catch {} };
     // Over when the end record has arrived and the player has shown everything before it, in whichever order those two happen.
@@ -147,9 +148,13 @@
       setActive(value) { player.setActive(value); },
       // The delay the picture is being shown behind live: the sound is held back by the same amount.
       get delayMs() { return player.stats().delayMs || 0; },
+      // The rates the last readout measured (pictures arriving, shown, redraws and decodes a second, Mbps): the share log records them.
+      get rates() { return { ...rates }; },
       // The status line for this share. Rates are measured over the last second or more, so call it as often as you like.
       // `hardware`: the codecs this computer really decodes on its GPU (the app's own list), when known. A player that asked for a hardware
-      // decoder is only on the GPU for a codec on that list; without one Chromium decodes on the CPU and says nothing.
+      // decoder is only on the GPU for a codec on that list; without one Chromium decodes on the CPU and says nothing. Even on the list it can be
+      // on the CPU (the list says what Chromium accepts, and it accepts a hardware request it then serves in software): software decoders hand
+      // over planar I420 pictures, so a picture in that format settles it.
       readout({ label = 'Friend sharing', config = null, hardware = null } = {}) {
         const t = now(), p = player.stats(), v = viewer.stats(), seen = player.read();
         if (!sample || t - sample.t >= 1000) {
@@ -158,8 +163,12 @@
           sample = { t, received: p.received, painted: p.painted, ticks: p.ticks, decoded: p.decoded, bytes: v.bytes };
         }
         const lastHeard = Math.max(seen.lastPacketAt || 0, seen.lastLiveAt || 0), quietMs = lastHeard ? t - lastHeard : 0;
-        const key = hardwareKey(config?.codec), onCpu = p.decoder === 'software' || (p.decoder === 'hardware-preferred' && Array.isArray(hardware) && !!key && !hardware.includes(key));
-        return describeShare({ label, config, ...rates, software: onCpu, buffering: p.buffering === true, quietMs, stillScreen: (seen.lastLiveAt || 0) > (seen.lastPacketAt || 0) });
+        const key = hardwareKey(config?.codec), format = String(p.frameFormat || '');
+        // The pictures settle it when there are any: planar means a software decoder, anything else (NV12 and the like) a GPU. Before the first one, the app's list.
+        const onCpu = p.decoder === 'software' || (p.decoder === 'hardware-preferred' && (format ? /^I4\d\d/.test(format) : Array.isArray(hardware) && !!key && !hardware.includes(key)));
+        // The fast UDP connection takes a few seconds to come up; a viewer that can use one and is still on the data channel after that is on the slow route.
+        const route = !lanes ? 'unknown' : v.udx ? 'udp' : t - startedAt > ROUTE_SETTLE_MS ? 'data-channel' : 'unknown';
+        return describeShare({ label, config, ...rates, software: onCpu, buffering: p.buffering === true, delayMs: p.delayMs, route, quietMs, stillScreen: (seen.lastLiveAt || 0) > (seen.lastPacketAt || 0) });
       },
       stats() { return { viewer: viewer.stats(), player: player.stats() }; },
       read() { return player.read(); },
@@ -172,6 +181,8 @@
   }
 
   // ------------------------------------------------------------------------------------------------------------ what the viewer is told
+  const ROUTE_SETTLE_MS = 12000;                             // the UDP lane needs a few seconds (and up to 12 s) to be offered, punched and attached
+  const LAG_NOTE_MS = 1500;                                  // a playout delay this long is worth telling the viewer about
   const hardwareKey = codec => { const text = String(codec || '').toLowerCase(); return text.startsWith('av01') ? 'AV1' : text.startsWith('avc1') ? 'H264' : text.startsWith('vp09') ? 'VP9' : text === 'vp8' ? 'VP8' : ''; };
   const codecName = codec => { const text = String(codec || '').toLowerCase(); return text.startsWith('av01') ? 'AV1' : text.startsWith('avc1') ? 'H.264' : text.startsWith('vp09') ? 'VP9' : text.startsWith('hvc1') || text.startsWith('hev1') ? 'HEVC' : String(codec || 'video'); };
   // Why fewer pictures are shown than arrive, from what was measured. A picture is shown on a window redraw, one at a time, so a window that is
@@ -184,7 +195,7 @@
   }
   // The line under a friend's share: what arrives, what is shown, what decodes it, and, when something is wrong, whose end it is on. A still
   // screen sends no pictures, so "0 fps" with heartbeats arriving is a quiet screen, not a problem.
-  function describeShare({ label = 'Friend sharing', config = null, receivedFps = 0, shownFps = 0, mbps = 0, software = false, buffering = false, quietMs = 0, stillScreen = false, tickFps = null, decodedFps = null } = {}) {
+  function describeShare({ label = 'Friend sharing', config = null, receivedFps = 0, shownFps = 0, mbps = 0, software = false, buffering = false, delayMs = 0, route = 'unknown', quietMs = 0, stillScreen = false, tickFps = null, decodedFps = null } = {}) {
     const parts = [label], height = Number(config?.height) || 0;
     if (height) parts.push(height + 'p');
     parts.push(stillScreen && receivedFps < 1 ? 'still screen' : Math.round(receivedFps) + ' fps');
@@ -193,6 +204,11 @@
     if (quietMs > 1500) parts.push('nothing arriving from your friend’s connection');
     else if (buffering) parts.push('buffering');
     else if (receivedFps >= 5 && shownFps < receivedFps * 0.6) parts.push('only ' + Math.round(shownFps) + ' fps shown · ' + slowReason({ receivedFps, tickFps, decodedFps }));
+    // Without the UDP lane a share rides the browser's data channel, which carries a 4K share badly (measured at 40 ms round trip it takes seconds to reach
+    // 40 Mbit/s, at 100 ms it stops near 10, and half a percent of loss leaves it near 3), so a viewer on it is told, whatever else the line says.
+    if (route === 'data-channel') parts.push('on the slower data-channel route (the fast UDP connection could not be made)');
+    // Each stall makes the player wait longer behind the newest picture (and the sound is held back with it): say so while it is a noticeable lag.
+    if (delayMs >= LAG_NOTE_MS) parts.push('playing ' + (delayMs / 1000).toFixed(1) + ' s behind live (the connection is not keeping up)');
     return parts.join(' · ');
   }
 

@@ -197,6 +197,20 @@ function assertExact(delivered, from, to, label) {
 }
 
 {
+  // With the default limits, a link slower than the stream never leaves the viewer more than a few seconds behind: it is moved up each time the lag
+  // reaches the limit (it was 45 s, and the lag grew without a bound a viewer could do anything about).
+  const world = new World(31), s = session(world, {});
+  s.join();
+  new SimLane(world, s.receiver, 'dc', { latencyMs: 40, bytesPerMs: 200 }).attachTo(s.sender, 'v', 'dc');      // ~1.6 Mbit/s against ~2.5 Mbit/s produced
+  let worst = 0; const trail = [];
+  for (let second = 0; second < 70; second++) { s.runFor(1000); const lag = s.sender.stats().viewers[0].lagMs; trail.push(lag); worst = Math.max(worst, lag); }
+  assert(worst <= 6000 + 1500, `the viewer was ${worst} ms behind; the limit is 6000`);
+  assert(s.events.filter(event => event.type === 'gap').length >= 2, 'a link that cannot carry the stream should have moved the viewer up more than once in 70 s');
+  assert(worst >= 3000, 'the test never made the viewer fall behind (' + worst + ' ms)');
+  console.log(`PASS a link slower than the stream leaves the viewer at most ${worst} ms behind (limit 6000), moved up each time`);
+}
+
+{
   // The viewer is hopelessly behind: it is moved to the live picture, told exactly what it missed, and then receives everything after.
   const world = new World(16), s = session(world, { senderOptions: { maxBacklogMs: 3000 } });
   s.join();

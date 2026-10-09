@@ -73,6 +73,8 @@ app.whenReady().then(async () => {
     console.log(`${SOFTWARE ? 'software' : 'default'} decoder, ${FPS} fps, ${MBPS} Mbps${JITTER_MS ? ', arrival jitter ' + JITTER_MS + ' ms' : ''}: ${stats.painted}/${count} pictures shown (${stats.received} received), decoder ${stats.decoder}, decode mode ${stats.decodeMode}, latency p50 ${Math.round(stats.latencyP50Ms)} ms p95 ${Math.round(stats.latencyP95Ms)} ms, delay ${Math.round(stats.delayMs)} ms`);
     console.log('per second  received/shown/delay: ' + samples.map(s => `${Math.round(s.received)}/${Math.round(s.shown)}/${s.delay}`).join('  '));
     assert(stats.ticks > stats.painted * 0.9 && stats.drawMsP95 > 0, `the player does not report how often the window was redrawn (${stats.ticks}) or how long a picture took to draw (${stats.drawMsP95})`);
+    if (stats.decoder === 'software') assert(/^I4/.test(stats.frameFormat), 'a software decoder\'s pictures should be planar (I420), these are ' + stats.frameFormat);      // the status line tells CPU from GPU by this
+    console.log('pictures from the decoder are ' + stats.frameFormat);
     const steady = samples.slice(2, -1);
     const shown = steady.reduce((sum, s) => sum + s.shown, 0) / Math.max(1, steady.length), received = steady.reduce((sum, s) => sum + s.received, 0) / Math.max(1, steady.length);
     console.log(`steady state: ${Math.round(received)} received, ${Math.round(shown)} shown a second`);

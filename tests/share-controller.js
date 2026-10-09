@@ -239,6 +239,22 @@ function world({ playerOptions = {}, watcherOptions = {} } = {}) {
       assert(watcher.readout({ config: { codec, width: 1920, height: 1080 }, hardware }).includes(' on ' + expected), `${decoder} with hardware ${JSON.stringify(hardware)} for ${codec} should say ${expected}`);
       watcher.stop({ notify: false });
     }
+    // a codec on the app's hardware list is still on the CPU when Chromium served the request in software: its pictures are planar (I420), a GPU's are NV12
+    for (const [format, expected] of [['I420', 'CPU'], ['I420P10', 'CPU'], ['NV12', 'GPU'], ['', 'GPU']]) {      // (no picture yet: the list's word)
+      const stand = { configure() {}, push() {}, skip() {}, setActive() {}, destroy() {}, read: () => ({ lastPacketAt: 9980, lastLiveAt: 9980 }), stats: () => ({ delayMs: 250, received: 0, painted: 0, decoder: 'hardware-preferred', frameFormat: format, buffering: false }) };
+      const watcher = Controller.createShareWatcher({ shareId: 'abcdef12345b', Player: { createSharePlayer: () => stand }, Session, now: () => 10000, sendControl() {} });
+      const said = watcher.readout({ config: { codec: 'av01.0.13H.08', width: 3840, height: 2160 }, hardware: ['AV1'] });
+      assert(said.includes(' on ' + expected), `AV1 on the app's hardware list with ${format || 'no'} pictures should say ${expected}: ${said}`);
+      watcher.stop({ notify: false });
+    }
+    // pictures that came out of a GPU settle it even for a codec missing from the app's list, and planar ones settle it the other way
+    for (const [format, hardware, expected] of [['NV12', [], 'GPU'], ['NV12', null, 'GPU'], ['I420', ['AV1'], 'CPU'], ['I420', null, 'CPU']]) {
+      const stand = { configure() {}, push() {}, skip() {}, setActive() {}, destroy() {}, read: () => ({ lastPacketAt: 9980, lastLiveAt: 9980 }), stats: () => ({ delayMs: 250, received: 0, painted: 0, decoder: 'hardware-preferred', frameFormat: format, buffering: false }) };
+      const watcher = Controller.createShareWatcher({ shareId: 'abcdef12345c', Player: { createSharePlayer: () => stand }, Session, now: () => 10000, sendControl() {} });
+      const said = watcher.readout({ config: { codec: 'vp09.00.51.08', width: 1920, height: 1080 }, hardware });
+      assert(said.includes(' on ' + expected), `VP9 ${format} pictures with hardware ${JSON.stringify(hardware)} should say ${expected}: ${said}`);
+      watcher.stop({ notify: false });
+    }
     // fewer pictures shown than arrive: the line says what was measured, not only that this computer is "falling behind"
     {
       const slow = o => Controller.describeShare({ config: { codec: 'avc1.64002a', width: 1920, height: 1080 }, receivedFps: 58, shownFps: 19, mbps: 19, software: true, ...o });
@@ -256,6 +272,22 @@ function world({ playerOptions = {}, watcherOptions = {} } = {}) {
       const shown = watcher.readout({ config: { codec: 'avc1.64002a', width: 1920, height: 1080 } });
       assert(/only 19 fps shown · this window is redrawn only 20 times a second/.test(shown), 'the watcher did not measure the redraw rate: ' + shown);
       watcher.stop({ notify: false });
+    }
+    // a player that has fallen well behind live says so (and how far), once it is more than a moment
+    assert(!/behind live/.test(say({ receivedFps: 60, shownFps: 60, mbps: 16, delayMs: 160 })) && !/behind live/.test(say({ receivedFps: 60, shownFps: 60, mbps: 16, delayMs: 1400 })));
+    assert(/ · playing 2\.5 s behind live \(the connection is not keeping up\)$/.test(say({ receivedFps: 60, shownFps: 60, mbps: 16, delayMs: 2500 })), 'a viewer playing 2.5 s behind is not told: ' + say({ receivedFps: 60, shownFps: 60, mbps: 16, delayMs: 2500 }));
+    // the route: a viewer that could use the UDP lane and is still on the data channel after the lane's setup time is told it is on the slow route
+    {
+      let at = 80000; const mk = lanes => { const stand = { configure() {}, push() {}, skip() {}, setActive() {}, destroy() {}, read: () => ({ lastPacketAt: at - 20, lastLiveAt: at - 20 }), stats: () => ({ delayMs: 160, received: 0, painted: 0, decoder: 'software', buffering: false }) };
+        return Controller.createShareWatcher({ shareId: 'abcdef12345d', Player: { createSharePlayer: () => stand }, Session, now: () => at, sendControl() {}, lanes }); };
+      const lanesApi = { onOpen() {}, onFrame() {}, onClose() {} }, cfg = { codec: 'av01.0.13H.08', width: 3840, height: 2160 };
+      const withLanes = mk(lanesApi), without = mk(null);
+      assert(!/data-channel/.test(withLanes.readout({ config: cfg })), 'the slow route was claimed before the UDP lane had time to come up');
+      at += 13000;
+      assert(/ · on the slower data-channel route \(the fast UDP connection could not be made\)/.test(withLanes.readout({ config: cfg })), 'a viewer stuck on the data channel is not told: ' + withLanes.readout({ config: cfg }));
+      assert(!/data-channel/.test(without.readout({ config: cfg })), 'a viewer that cannot use UDP lanes at all was told it missed one');
+      withLanes.viewer.udx.peerId = 'peer'; assert(!/data-channel/.test(withLanes.readout({ config: cfg })), 'a viewer on the UDP lane was told it was on the slow route');
+      withLanes.stop({ notify: false }); without.stop({ notify: false });
     }
     // the sound line: packets alone do not prove sound (a share without sound sends silent ones), so it follows what the sharer said and what was heard
     assert.strictEqual(Controller.describeShareSound({ announced: true, loud: true }), ' · sound playing');

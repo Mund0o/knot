@@ -3,7 +3,8 @@ const PAIR_SIGNAL_SERVER=window.pairEnv?.signalServer||'wss://pair.pair-private-
 const $=s=>document.querySelector(s);const signalOut=$('#signalOut'),signalIn=$('#signalIn'),copySignal=$('#copySignal'),processSignal=$('#processSignal'),pairCodeMeta=$('#pairCodeMeta'),statusText=$('#statusText'),messages=$('#messages'),messageForm=$('#messageForm'),messageInput=$('#messageInput'),fileInput=$('#fileInput'),chooseFiles=$('#chooseFiles'),transfers=$('#transfers'),pairHint=$('#pairHint'),participantYou=$('#participantYou'),participantFriend=$('#participantFriend'),voiceLog=$('#voiceLog'),screenBtn=$('#screenBtn'),screenStatus=$('#screenStatus'),screenPreview=$('#screenPreview'),remoteScreen=$('#remoteScreen');
 const recordMetric=(name,value,tags)=>{try{window.pairMetrics?.record?.(name,Number(value),tags||{})}catch{}};
 recordMetric('app.renderer_ready_ms',performance.now());
-try{const longTaskObserver=new PerformanceObserver(list=>{for(const entry of list.getEntries())if(entry.duration>=50)recordMetric('renderer.long_task_ms',entry.duration)});longTaskObserver.observe({entryTypes:['longtask']})}catch{}
+const longTaskStats={count:0,ms:0,max:0};       // stretches of 50 ms or more when this page did nothing else; the share log reports them
+try{const longTaskObserver=new PerformanceObserver(list=>{for(const entry of list.getEntries())if(entry.duration>=50){recordMetric('renderer.long_task_ms',entry.duration);longTaskStats.count++;longTaskStats.ms+=entry.duration;longTaskStats.max=Math.max(longTaskStats.max,entry.duration)}});longTaskObserver.observe({entryTypes:['longtask']})}catch{}
 const updateBanner=$('#updateBanner'),updateTitle=$('#updateTitle'),updateDetails=$('#updateDetails'),updateChanges=$('#updateChanges'),updateChangesList=$('#updateChangesList'),updateActions=$('#updateActions'),acceptUpdate=$('#acceptUpdate');let updateHideTimer=null;
 function renderUpdateStatus(status){if(!updateBanner||!status)return;clearTimeout(updateHideTimer);const state=String(status.state||'idle'),canAccept=state==='available'&&status.canInstall!==false,showNotes=state==='available',notes=Array.isArray(status.notes)?status.notes.filter(note=>typeof note==='string'&&note.trim()).slice(0,8):[];updateBanner.className='update-banner update-'+state;updateTitle.textContent=status.message||'Checking for updates…';updateDetails.textContent=status.version?'Knot '+status.version:'';updateBanner.hidden=state==='idle'||state==='current';if(updateChanges&&updateChangesList){updateChangesList.replaceChildren(...notes.map(note=>{const item=document.createElement('li');item.textContent=note;return item}));updateChanges.hidden=!showNotes||!notes.length}if(updateActions)updateActions.hidden=!canAccept;if(acceptUpdate)acceptUpdate.disabled=!canAccept;if(state==='current')updateHideTimer=setTimeout(()=>{updateBanner.hidden=true},1200)}
 if(window.pairUpdates){window.pairUpdates.getStatus().then(renderUpdateStatus).catch(()=>{});window.pairUpdates.onStatus(renderUpdateStatus)}
@@ -1058,11 +1059,13 @@ function effectiveScreenBitrateCeiling(){const math=networkMath();if(lanSharePat
 function sliderBitrateMaxMbps(){if(lanSharePath())return networkMath()?.MAX_SLIDER_MBPS||200;return networkMath()?.sliderBitrateMaxMbps?.(probedUploadMbps(),probedDownloadMbps())||networkMath()?.MAX_SLIDER_MBPS||200}
 function syncScreenBitrateSlider(){
   const bitrate=$('#screenBitrateSetting'),bitrateValue=$('#screenBitrateValue'),hint=$('#screenBitrateCapHint');if(!bitrate)return;
-  const max=sliderBitrateMaxMbps(),next=Math.max(2,Math.min(max,Number(bitrate.value)||screenBitrateMbps||AUTO_SHARE_4K60_MBPS));
-  bitrate.max=String(max);bitrate.value=String(next);
-  if(next!==screenBitrateMbps){screenBitrateMbps=next;ssSet('screenBitrate',String(next))}
-  if(bitrateValue)bitrateValue.textContent=screenBitrateMbps+' Mbps';
-  bitrate.style.setProperty('--range-fill',((screenBitrateMbps-2)/Math.max(1,max-2)*100)+'%');
+  // What the slider shows is held to what the measured path can carry; what the person chose is left alone, in memory and in their settings. This used to
+  // write the lower number back, so one low reading of the connection (something else using it at the time) would have replaced a saved 200 Mbps for good.
+  // The bitrate a share really gets is held to the same ceiling when it starts (targetNativeAv1BitrateKbps), so nothing is lost by leaving it.
+  const max=sliderBitrateMaxMbps(),chosen=Math.max(2,Number(screenBitrateMbps)||Number(bitrate.value)||AUTO_SHARE_4K60_MBPS),shown=Math.min(max,chosen);
+  bitrate.max=String(max);bitrate.value=String(shown);
+  if(bitrateValue)bitrateValue.textContent=shown+' Mbps'+(shown<chosen?' (you chose '+chosen+')':'');
+  bitrate.style.setProperty('--range-fill',((shown-2)/Math.max(1,max-2)*100)+'%');
   if(hint)hint.textContent=screenShareHasProbe()?'This slider tops out at '+max+' Mbps, the safe rate for your measured connection. Fast links can still use up to 200 Mbps.':'After Knot measures your connection, this slider only goes as high as that path can carry (up to 200 Mbps).';
 }
 function encoderShareCapMbps(options){return networkMath()?.encoderShareCapMbps(options)||(options?.native?200:options?.hardware?80:20)}
@@ -1095,10 +1098,22 @@ function currentViewerReceiveCapMbps({allowLive=true}={}){
 // NVIDIA Linux decodes received video on the CPU; a sharer that keeps raising
 // its bitrate toward the GPU ceiling leaves that viewer seconds behind.
 let localHardwareDecode=null,gpuDecodeTooSlow=false;
+// Which codecs this computer really decodes on its GPU. Chromium answers "supported" to a hardware request it then serves in software (measured on an RTX
+// 4090 under Linux: AV1 "supported", every picture decoded by dav1d on the CPU), so the answer alone says nothing. Each codec is therefore decoded for real
+// from a short test clip with a hardware preference, and counts only if the pictures come out as a GPU hands them over (NV12 and the like): a software
+// decoder's pictures are planar (I420). A codec the browser will not decode at all is left out.
 async function probeHardwareDecode(){
   if(typeof VideoDecoder!=='function'||typeof VideoDecoder.isConfigSupported!=='function')return;
-  const codecs={AV1:'av01.0.13M.08',H264:'avc1.640033',VP9:'vp09.00.51.08',VP8:'vp8'},supported=[];
-  for(const [name,codec] of Object.entries(codecs)){try{const result=await VideoDecoder.isConfigSupported({codec,codedWidth:3840,codedHeight:2160,hardwareAcceleration:'prefer-hardware'});if(result?.supported)supported.push(name)}catch{}}
+  const codecs={AV1:'av01.0.13M.08',H264:'avc1.640033',VP9:'vp09.00.51.08'},clipKeys={AV1:'av1',H264:'h264',VP9:'vp9'},supported=[];
+  let clips=null;try{clips=await loadGpuDecodeProbe()}catch{}
+  for(const [name,codec] of Object.entries(codecs)){
+    let claimed=false;try{const result=await VideoDecoder.isConfigSupported({codec,codedWidth:3840,codedHeight:2160,hardwareAcceleration:'prefer-hardware'});claimed=!!result?.supported}catch{}
+    if(!claimed)continue;
+    const clip=clips?.[clipKeys[name]];let format='';
+    if(clip){try{format=(await decodeProbeClip(clip,'prefer-hardware',{timeoutMs:6000}))?.format||''}catch{}}
+    if(!clip||!format||!/^I4\d\d/.test(format))supported.push(name);       // a GPU's pictures, or no way to tell (the old answer stands)
+    else console.log('[gpu] '+name+' is accepted for hardware decode but decoded in software ('+format+')');
+  }
   localHardwareDecode=supported;announceNetBudget();renderVideoDecodeStatus();
 }
 // The NVIDIA decode check decodes a short clip on the GPU and on the CPU and
@@ -1120,17 +1135,17 @@ async function decodeProbeClip(clip,hardwareAcceleration,{frames=clip.frames,tim
   const config={codec:clip.codec,codedWidth:clip.width,codedHeight:clip.height,hardwareAcceleration};
   try{if(!(await VideoDecoder.isConfigSupported(config))?.supported)return null}catch{return null}
   const canvas=document.createElement('canvas');canvas.width=clip.width;canvas.height=clip.height;const context=canvas.getContext('2d',{willReadFrequently:true});
-  const pictures=[];let decoded=0,decoder=null;
+  const pictures=[];let decoded=0,decoder=null,format='';
   try{
     await new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>reject(new Error('decode timed out')),timeoutMs),fail=error=>{clearTimeout(timer);reject(error)};
-      decoder=new VideoDecoder({output:frame=>{try{decoded++;if(decoded>frames.length-GPU_DECODE_COMPARE_LAST){context.drawImage(frame,0,0,clip.width,clip.height);pictures.push(context.getImageData(0,0,clip.width,clip.height).data)}}catch(error){fail(error)}finally{frame.close()}},error:fail});
+      decoder=new VideoDecoder({output:frame=>{try{decoded++;format=String(frame.format||'');if(decoded>frames.length-GPU_DECODE_COMPARE_LAST){context.drawImage(frame,0,0,clip.width,clip.height);pictures.push(context.getImageData(0,0,clip.width,clip.height).data)}}catch(error){fail(error)}finally{frame.close()}},error:fail});
       decoder.configure(config);
       frames.forEach((data,index)=>decoder.decode(new EncodedVideoChunk({type:index===0?'key':'delta',timestamp:index*33333,data:Uint8Array.from(atob(data),character=>character.charCodeAt(0))})));
       decoder.flush().then(()=>{clearTimeout(timer);resolve()},fail);
     });
   }finally{try{decoder?.close()}catch{}}
-  return {decoded,pictures};
+  return {decoded,pictures,format};
 }
 function probeLuma(picture){const luma=new Float64Array(picture.length/4);for(let i=0,j=0;i<picture.length;i+=4,j++)luma[j]=.299*picture[i]+.587*picture[i+1]+.114*picture[i+2];return luma}
 // The lowest brightness correlation over the compared pictures (1 = same
@@ -1190,6 +1205,15 @@ function renderVideoDecodeStatus(){
 function noteSoftwareDecode(codec){
   if(!Array.isArray(localHardwareDecode)||!localHardwareDecode.includes(codec))return;
   localHardwareDecode=localHardwareDecode.filter(value=>value!==codec);announceNetBudget();renderVideoDecodeStatus();
+}
+// A watcher whose player had to give up its hardware decoder (it refused the stream, produced nothing, or showed a different picture than the CPU) has shown
+// that this computer does not decode this codec on its GPU, whatever the test clip said: Settings and what friends are told follow. (Leaving Knot's own GPU
+// decoder for the CPU at a size it does not handle is not that, and is not a failure of the hardware.)
+function noteDecoderFallback(watcher,config){
+  try{
+    const p=watcher?.stats?.().player,codec=String(config?.codec||'').toLowerCase(),key=codec.startsWith('av01')?'AV1':codec.startsWith('avc1')?'H264':codec.startsWith('vp09')?'VP9':'';
+    if(key&&p?.decoder==='software'&&p.softwareReason&&!/^decoded on the CPU/.test(p.softwareReason))noteSoftwareDecode(key);
+  }catch{}
 }
 function localNetBudgetMessage(){
   const parsed=networkMath()?.normalizeNetBudget?.({
@@ -3852,7 +3876,7 @@ async function testScreenAudioIsolation(button,status){
 }
 async function linuxShareAudioTrack(){
   if(!window.pairEnv?.startLinuxShareAudio||!window.pairEnv?.onLinuxShareAudio)return null;
-  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubData,unsubError,unsubDebug,received=false,captureError='',outputTrack=null;const captureOwner={};
+  if(screenCaptureOwner||screenCaptureCleanup)cleanupNativeScreenCapture();const attempt=++screenCaptureAttempt,isCurrent=()=>attempt===screenCaptureAttempt;let ctx,dest,op,unsubData,unsubError,unsubDebug,received=false,loudAt=0,captureError='',outputTrack=null;const captureOwner={};
   const dispose=(stopCapture=isCurrent())=>{try{unsubDebug?.()}catch{};if(unsubData)unsubData();if(unsubError)unsubError();if(stopCapture)window.pairEnv.stopLinuxShareAudio?.();try{op?.port.close()}catch{}try{op?.disconnect()}catch{}};
   try{
     ctx=takeScreenAudioContext();
@@ -3871,7 +3895,7 @@ async function linuxShareAudioTrack(){
       const capturedAt=Number(metadata?.capturedAt);if(Number.isFinite(capturedAt)&&Date.now()-capturedAt>2500)return;
       const arr=softenSharePcm(resampleStereoToRate(new Float32Array(buf),48000,ctx.sampleRate||48000));if(!arr.length)return;
       let peak=0;for(let i=0;i<arr.length;i++){const sample=Math.abs(arr[i]);if(sample>peak)peak=sample}
-      if(peak>=1e-4){const first=received===false;received=true;if(first){logShareAudio('pcm live peak='+peak.toFixed(4)+' seq='+(metadata?.sequence||'?')+' n='+arr.length);try{shareAudioFadeIn?.()}catch{}}}
+      if(peak>=1e-4){loudAt=Date.now();const first=received===false;received=true;if(first){logShareAudio('pcm live peak='+peak.toFixed(4)+' seq='+(metadata?.sequence||'?')+' n='+arr.length);try{shareAudioFadeIn?.()}catch{}}}
       try{op.port.postMessage(arr,[arr.buffer])}catch{op.port.postMessage(arr)}
     });
     let attached=false;
@@ -3881,7 +3905,7 @@ async function linuxShareAudioTrack(){
     // route, so an app/game that starts producing audio later reaches the peer
     // instead of being rejected by an arbitrary first-PCM timeout.
     op.connect(dest);const monitor=ctx.createDynamicsCompressor();monitor.threshold.value=-8;monitor.knee.value=12;monitor.ratio.value=4;monitor.attack.value=0.005;monitor.release.value=0.25;const keepAlive=ctx.createGain();keepAlive.gain.value=0;op.connect(monitor);monitor.connect(keepAlive);keepAlive.connect(ctx.destination);applyLocalMonitor=seconds=>{const now=ctx.currentTime;keepAlive.gain.cancelScheduledValues(now);keepAlive.gain.setValueAtTime(keepAlive.gain.value,now);keepAlive.gain.linearRampToValueAtTime(returnCarries||!monitorArmed?0:.62,now+seconds)};outputTrack=dest.stream.getAudioTracks()[0]||null;if(!outputTrack)throw new Error('PipeWire output track could not be created');
-    outputTrack._knotCaptureOwner=captureOwner;outputTrack._knotShareAudioHeard=()=>received===true;try{outputTrack.contentHint='music'}catch{}
+    outputTrack._knotCaptureOwner=captureOwner;outputTrack._knotShareAudioHeard=()=>received===true;outputTrack._knotShareAudioLoudAt=()=>loudAt;try{outputTrack.contentHint='music'}catch{}
     // Open from silence and stop below unity. Ramping whatever gain was already
     // scheduled up to 1 played the PipeWire negotiation click at full scale.
     shareAudioFadeIn=()=>{try{op.port.postMessage({type:'fade'})}catch{};try{monitorArmed=true;if(!returnCarries){keepAlive.gain.cancelScheduledValues(ctx.currentTime);keepAlive.gain.setValueAtTime(0,ctx.currentTime);applyLocalMonitor(.6);logShareAudio('local monitor fading in')}}catch{}};
@@ -4429,9 +4453,16 @@ window.pairEnv?.onGpuProcessGone?.(recoverFromGpuProcessLoss);
 const shareLanes=()=>window.pairShareLane||null;
 function shareCodecLabel(codec){const text=String(codec||'').toLowerCase();return text.startsWith('av01')?'AV1':text.startsWith('avc1')?'H.264':text.startsWith('vp09')?'VP9':text.startsWith('hvc1')||text.startsWith('hev1')?'HEVC':String(codec||'video')}
 function shareDescription(config){if(!config)return'';return[shareCodecLabel(config.codec),config.width&&config.height?config.width+'×'+config.height:'',config.fps?config.fps+'fps':''].filter(Boolean).join(' · ')}
+// A viewer that is seconds behind is on a link that cannot carry the bitrate chosen: only the sharer can do anything about that, so the sharer is told.
+let shareLagNote='';
+function updateShareLagNote(){
+  let note='';
+  if(dmShare&&screenActive){try{const viewer=dmShare.stats().viewers?.[0],lag=Number(viewer?.lagMs)||0;if(lag>=2500)note=' · your friend is '+(lag/1000).toFixed(1)+' s behind: the connection cannot carry this bitrate'+(viewer?.lane==='dc'?' (they are on the slow data-channel route: the UDP connection could not be made)':'');const budget=lookupPeerBudget(directBudgetKey());if(note&&budget?.congested&&Number(budget.liveMbps)>0)note+=' · they are receiving about '+Number(budget.liveMbps).toFixed(Number(budget.liveMbps)<10?1:0)+' Mbps; the next share you start is sized to that'}catch{}}
+  if(note!==shareLagNote){shareLagNote=note;if(screenActive&&dmShare)screenStatus.textContent=shareSenderStatus()}
+}
 function shareSenderStatus(){
   const info=dmShareInfo||{},config=info.config||null,slow=info.keepsUp===false&&info.sustainedFps?' · this computer sustains about '+Math.round(info.sustainedFps)+' fps':'';
-  return 'Sharing · '+(info.encoder||'encoder')+(config?' · '+shareDescription(config):'')+slow+screenAudioDebug;
+  return 'Sharing · '+(info.encoder||'encoder')+(config?' · '+shareDescription(config):'')+slow+screenAudioDebug+shareLagNote;
 }
 // GPU Screen Recorder encodes AV1 on the GPU for the whole share, which suits a discrete NVIDIA/AMD GPU on Linux. Everything else (Windows,
 // other Linux machines, or a codec the sharer asked for) captures through the browser and encodes in the page.
@@ -4475,7 +4506,7 @@ function ensureRemoteShareWatcher(){
       onState:()=>paintRemoteShareReadout(),
       onEnded:()=>{if(dmWatch!==watcher)return;logCallEvent('Friend stopped screen sharing');clearRemoteScreenShare()},
       onError:error=>{if(dmWatch!==watcher)return;screenStatus.textContent='This computer cannot show the stream: '+(error?.message||error);logCallEvent('Share decode error: '+(error?.message||error))},
-      onGap:gap=>logCallEvent('Diag: share moved up ('+gap.reason+')'),
+      onGap:gap=>{noteShareGap(gap);logCallEvent('Diag: share moved up ('+gap.reason+')')},
       log:line=>logCallEvent('Diag: watch '+line)});
   }catch(error){surface.destroy();screenStatus.textContent='This computer cannot show the stream: '+(error?.message||error);return}
   dmWatch=watcher;
@@ -4486,13 +4517,65 @@ function ensureRemoteShareWatcher(){
   dmAudioAlign=ShareKit.createAudioAlign({getReceivers:()=>{const sender=screenAudioTransceiver?.sender||screenAudioTransceiver,transceiver=pc?.getTransceivers?.().find(item=>item.sender===sender);return transceiver?.receiver?[transceiver.receiver]:[]},getDelayMs:()=>watcher.delayMs});dmAudioAlign.start();
   watcher.watch();
 }
+let shareDiagLast={at:0,tasks:0,taskMs:0},shareDiagEncoded=new Map();
+function shareDiagViewerLine(role,watcher,config,sound){
+  const st=watcher.stats(),p=st.player||{},v=st.viewer||{},r=watcher.rates||{},n=value=>Number.isFinite(value)?Math.round(value):'?';
+  return `${role} ${shareCodecLabel(config?.codec)} ${p.width||0}x${p.height||0} recv=${n(r.receivedFps)} shown=${n(r.shownFps)} redraw=${n(r.tickFps)} decoded=${n(r.decodedFps)} mbps=${Number.isFinite(r.mbps)?r.mbps.toFixed(1):'?'} delay=${p.delayMs} depth=${p.depthMs} pending=${p.pending} stalls=${p.stalls} jumps=${p.jumps} skipped=${p.skippedShown||0} state=${p.lastState} decoder=${p.decoder}/${p.decodeMode}/${p.frameFormat||'?'} draw95=${Number(p.drawMsP95||0).toFixed(1)}ms udx=${v.udx?1:0} dup=${v.duplicates||0} wait=${v.pending||0}${sound?` sound=${sound}`:''}`;
+}
+function shareDiagSharerLine(role,sender,sound,seconds){
+  const st=sender.stats(),cap=st.capture||{},n=value=>Number.isFinite(value)?Math.round(value):'?',encoded=Number(cap.encoded)||0;
+  const viewers=(st.viewers||[]).map(item=>`${item.lane||'?'}:behind${item.behind}:lag${Math.round(item.lagMs||0)}ms:resent${item.resent||0}:skips${item.skips||0}:${Math.round((item.sentBytes||0)/1048576)}MB`).join(',');
+  const known=shareDiagEncoded.has(sender),before=shareDiagEncoded.get(sender)||0;shareDiagEncoded.set(sender,encoded);
+  return `${role} src=${st.source||'?'} ${cap.codec||''} ${cap.width||0}x${cap.height||0} encoded=${known?n((encoded-before)/seconds):'?'}/s kbps=${cap.kbps||'?'} dropped=${cap.dropped||0} queued=${cap.queued||0} viewers=[${viewers}]${sound?` sound=${sound}`:''}`;
+}
+// One line a second into Knot's local share log (share-diagnostics.js) while this computer shows or shares a screen, in a DM or a group: what arrives, what is
+// shown, what decodes it, which lane carries it, how long the page was blocked. Numbers and names of codecs and decoders only.
+function recordShareDiagnostics(){
+  if(!window.pairShareDiag)return;
+  const groupWatchers=[...serverPeers.values()].filter(state=>state.shareWatch);
+  if(!dmWatch&&!dmShare&&!serverShare&&!groupWatchers.length)return;
+  const at=performance.now(),seconds=Math.max(.001,(at-(shareDiagLast.at||at-1000))/1000);
+  const tasks=longTaskStats.count-shareDiagLast.tasks,taskMs=Math.round(longTaskStats.ms-shareDiagLast.taskMs),parts=[],sound=(screenAudioDebug||'').trim().replace(/^· /,'');
+  try{
+    if(dmWatch)parts.push(shareDiagViewerLine('viewer',dmWatch,dmShareOffer?.config,sound));
+    if(dmShare)parts.push(shareDiagSharerLine('sharer',dmShare,sound,seconds));
+    for(const state of groupWatchers)parts.push(shareDiagViewerLine('group-viewer',state.shareWatch,state.shareOffer?.config,''));
+    if(serverShare)parts.push(shareDiagSharerLine('group-sharer',serverShare.sender,'',seconds));
+  }catch(error){parts.push('log error '+String(error?.message||error).slice(0,80))}
+  shareDiagLast.at=at;shareDiagLast.tasks=longTaskStats.count;shareDiagLast.taskMs=longTaskStats.ms;
+  for(const part of parts)window.pairShareDiag.record(part+` blocked=${tasks}x/${taskMs}ms hidden=${document.visibilityState!=='visible'?1:0}`);
+}
+setInterval(()=>{recordShareDiagnostics();updateShareLagNote()},1000);
+// What this viewer's link really delivers, told to the sharer. A viewer that keeps falling behind knows something the sharer cannot: the rate it actually
+// receives. (The sharer sizes a share from speed tests, which measure the two computers' connections, not the path between them.) Falling behind is the
+// sender moving this viewer up because it was 6 seconds behind, or the playout sitting 1.5 s behind live for 5 s. While that lasts the viewer's
+// median receive rate is announced as `liveMbps` with `congested`, and the sharer's cap on its bitrate (currentViewerReceiveCapMbps) uses it the next time
+// a share starts. Nothing is lowered during a share. It stops being announced after 20 calm seconds.
+const receiveCongestion={samples:[],since:0,calm:0,lastGapAt:0};
+function noteShareGap(gap){if(gap?.reason==='behind'||gap?.reason==='memory')receiveCongestion.lastGapAt=Date.now()}
+function resetReceiveCongestion(){Object.assign(receiveCongestion,{samples:[],since:0,calm:0,lastGapAt:0})}
+function updateReceiveCongestion(watcher,now=Date.now()){
+  const c=receiveCongestion,mbps=Number(watcher?.rates?.mbps),delay=Number(watcher?.delayMs)||0;
+  if(!Number.isFinite(mbps))return;
+  c.samples.push({at:now,mbps});if(c.samples.length>20)c.samples.shift();
+  const recentGap=now-c.lastGapAt<20000,behind=delay>=1500||recentGap;
+  if(behind){c.since=c.since||now;c.calm=0}else{c.since=0;c.calm++}
+  // Only readings from the time the viewer was behind say what the link delivers: the last 10 s after a move up, otherwise since the lag began.
+  const from=recentGap?now-10000:c.since,received=c.samples.filter(sample=>sample.at>=from&&sample.mbps>.3).map(sample=>sample.mbps).sort((a,b)=>a-b),median=received.length?received[received.length>>1]:NaN;
+  if(!networkReceiveCongested){
+    if(behind&&(recentGap||now-c.since>=5000)&&received.length>=4){networkLiveReceiveMbps=Math.round(median*10)/10;networkReceiveCongested=true;announceNetBudget()}
+  }else if(behind){
+    if(Number.isFinite(median)&&Math.abs(median-networkLiveReceiveMbps)>networkLiveReceiveMbps*.25){networkLiveReceiveMbps=Math.round(median*10)/10;announceNetBudget()}
+  }else if(c.calm>=20){networkReceiveCongested=false;networkLiveReceiveMbps=NaN;announceNetBudget()}
+}
 // Under a friend's share: size, fps arriving, bitrate, codec and who decodes it, and whose end a problem is on. (Not while this computer shares: that line is ours.)
 function paintRemoteShareReadout(){
   const watcher=dmWatch;if(!watcher||!remoteScreenExpected||remoteScreenSuppressed||screenActive||screenStarting)return;
+  updateReceiveCongestion(watcher);noteDecoderFallback(watcher,dmShareOffer?.config);
   screenStatus.textContent=watcher.readout({label:'Friend sharing',config:dmShareOffer?.config,hardware:Array.isArray(localHardwareDecode)?localHardwareDecode:null})+screenAudioDebug;
 }
 function stopRemoteShareWatcher({notify=true}={}){
-  clearInterval(dmReadoutTimer);dmReadoutTimer=null;
+  clearInterval(dmReadoutTimer);dmReadoutTimer=null;resetReceiveCongestion();
   try{dmAudioAlign?.stop()}catch{}dmAudioAlign=null;try{nativeBufferingStop?.()}catch{}nativeBufferingStop=null;
   const watcher=dmWatch;dmWatch=null;try{watcher?.stop({notify})}catch{}
   try{nativeRemotePlayer?.destroy()}catch{}nativeRemotePlayer=null;

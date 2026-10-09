@@ -24,7 +24,11 @@
     catchUpStopMs: 40,        // ... and keep going until this close to it
     jumpMs: 4000,             // lag beyond this is not worth playing through: jump to the live edge
     settleMs: 20000,          // this long without a stall and the delay starts creeping back down (faster made a jittery link stall again and again)
-    relaxPerSecondMs: 20,
+    relaxPerSecondMs: 20,     // ... at least this fast, and ...
+    relaxFraction: 0.10,      // ... this fraction of the delay a second, whichever is more, so a delay built up by a rough patch does not outlive it by minutes (a fixed
+                              // 20 ms a second took four minutes to bring 4.4 s back down; measured with the sweep in tests/share-playout.js: 51 s now, and fewer stalls on a jittery link), but only ...
+    relaxHeadroom: 0.7,       // ... while the buffer has not dipped below this fraction of the delay lately: a link that keeps using the delay keeps it
+    headroomWindowMs: 10000,  // (lately: the last 10 to 20 seconds)
   };
 
   class Playout {
@@ -44,6 +48,9 @@
       this.lastStallAt = -Infinity;
       this.catchingUp = false;
       this.jumpUntil = 0;
+      this.depthLowCur = Infinity;      // the lowest the buffer has been in this window and in the one before it: how much of the delay was ever used
+      this.depthLowPrev = Infinity;
+      this.depthWindowAt = 0;
       this.ended = false;
       this.rate = 1;
       this.stalls = 0;
@@ -103,14 +110,22 @@
       if (due.length === 1 || due.length === 2) { present = due[0]; if (due.length === 2) this.frames.unshift(due[1]); }
       else if (due.length > 2) { present = due.pop(); dropped = due; this.skipped += dropped.length; }
       if (present) this.presented++;
+      if (now - this.depthWindowAt >= this.headroomWindowMs) { this.depthLowPrev = this.depthLowCur; this.depthLowCur = Infinity; this.depthWindowAt = now; }
+      this.depthLowCur = Math.min(this.depthLowCur, this.depthMs);
       if (!present && !this.frames.length && pending === 0 && this.playhead >= this.newest && !this.ended) {
         // Everything that had arrived has been shown and nothing is on its way: a stall. Wait for a fuller buffer next time.
         this.state = 'buffering'; this.stalls++; this.lastStallAt = now;
         this.delayMs = Math.min(this.maxDelayMs, Math.max(this.delayMs * 1.5, this.delayMs + 100));
-      } else if (now - Math.max(this.lastStallAt, this.playingSince ?? now) > this.settleMs && this.delayMs > this.minDelayMs) {
-        this.delayMs = Math.max(this.minDelayMs, this.delayMs - this.relaxPerSecondMs * dt / 1000);
+      } else if (this._calm(now) && this.delayMs > this.minDelayMs) {
+        this.delayMs = Math.max(this.minDelayMs, this.delayMs - Math.max(this.relaxPerSecondMs, this.delayMs * this.relaxFraction) * dt / 1000);
       }
       return { present: present ? present.handle : null, dropped: [...none.dropped, ...dropped.map(frame => frame.handle)], ...this._view() };
+    }
+
+    // May the delay come down? The link has been calm for settleMs, and the buffer has not been drawn on: it stayed above relaxHeadroom of the delay.
+    _calm(now) {
+      if (!(now - Math.max(this.lastStallAt, this.playingSince ?? now) > this.settleMs)) return false;
+      return Math.min(this.depthLowCur, this.depthLowPrev) >= this.delayMs * this.relaxHeadroom;
     }
 
     _view() { return { state: this.state, rate: this.rate, depthMs: this.depthMs, delayMs: this.delayMs }; }

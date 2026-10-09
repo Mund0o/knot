@@ -141,6 +141,19 @@ const scenarios = {
     if (process.env.E2E_TRACE_UDX === '1') for (const [who, app] of [['sharer', a], ['viewer', b]]) for (const line of (app.console || []).filter(entry => /\[share\]|UDP|udx/i.test(String(entry.text || entry)))) console.log('   ' + who + ' +' + String((line.at || 0) - started) + ' ms: ' + String(line.text || line).slice(0, 200));
     // How long the fast UDP lane takes to come up: until then the share rides the slower data channel.
     let udxAfterMs = -1; for (const t0 = Date.now(); Date.now() - started < 30000;) { const lane = await a.eval('dmShare.stats().viewers[0]?.lane'); if (lane === 'udx') { udxAfterMs = Date.now() - started; break; } await sleep(250); }
+    // The share log, end to end: the page's lines went through the preload and the main process into a file in each app's own folder, with the main
+    // process's own lines (how busy each process is, and the UDP stream's numbers) beside them.
+    {
+      const fs = require('fs'), path = require('path');
+      const read = app => { try { return fs.readFileSync(path.join(app.dataDir, 'Knot', 'share-diagnostics.log'), 'utf8'); } catch { return ''; } };
+      for (let waited = 0; waited < 4000 && !(/ page sharer /.test(read(a)) && / page viewer /.test(read(b)) && / main lanes /.test(read(b))); waited += 200) await sleep(200);
+      const sharerLog = read(a), viewerLog = read(b);
+      expect(/ page sharer src=page .*encoded=\S+ kbps=\S+ .*viewers=\[\w+:behind\d+:lag\d+ms:/.test(sharerLog), 'the sharer\'s share log has no sharer line: ' + sharerLog.slice(-600));
+      expect(/ page viewer \S+ \d+x\d+ recv=\S+ shown=\S+ redraw=\S+ decoded=\S+ mbps=\S+ delay=\d+ /.test(viewerLog), 'the viewer\'s share log has no viewer line: ' + viewerLog.slice(-600));
+      expect(/ main cpu\/ram \S+#\d+:\d+%\/\d+MB/.test(viewerLog), 'the main process added no cpu/ram line: ' + viewerLog.slice(-400));
+      if (h.viewers[0].lane === 'udx') expect(/ main lanes udx#\w+:cwnd=\d+ rtt=\d+ms inflight=\d+KB rexmit=\d+ fastRec=\d+ rto=\d+ bw=[\d.]+Mbps/.test(viewerLog), 'no UDP stream numbers in the viewer\'s share log: ' + viewerLog.slice(-400));
+      expect(!/(\d{1,3}\.){3}\d{1,3}/.test(sharerLog.replace(/\d+\.\d+(?=Mbps| Mbit)/g, '')), 'an address-like string is in the share log');
+    }
     return { udxAfterMs, sharerLongTasks: sharerBusy, viewerLongTasks: viewerBusy, firstPictureMs: firstPicture, medianBehindLiveMs: Math.round(median), lane: h.viewers[0].lane, sharerSource: h.source, viewerStalls: p.stalls, painted: p.painted, delayMs: p.delayMs, decoder: p.decoder, size: shown.at(-1).w + 'x' + shown.at(-1).h };
   },
 

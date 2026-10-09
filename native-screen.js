@@ -171,13 +171,18 @@ class WebmClusterSegmenter {
     const first=this.queue.byteAt(offset);let mask=0x80,length=1;
     while(length<=8&&!(first&mask)){mask>>=1;length++}
     if(length>8||offset+length>this.queue.length)return null;
-    let value=keepMarker?first:first&(mask-1),unknown=!keepMarker&&value===mask-1;
+    let value=keepMarker?first:first&(mask-1);
+    // A size with every value bit set means "unknown" (a live stream's Segment or Cluster). FFmpeg writes it in eight bytes, which does not fit a safe
+    // integer, so it is recognised before any arithmetic is done on it.
+    if(!keepMarker&&value===mask-1){
+      let allOnes=true;for(let index=1;index<length&&allOnes;index++)allOnes=this.queue.byteAt(offset+index)===0xff;
+      if(allOnes)return{length,value:0,unknown:true};
+    }
     for(let index=1;index<length;index++){
       const byte=this.queue.byteAt(offset+index);value=value*256+byte;
       if(!Number.isSafeInteger(value))throw new Error('Invalid WebM element value');
-      if(!keepMarker)unknown=unknown&&byte===0xff;
     }
-    return{length,value,unknown};
+    return{length,value,unknown:false};
   }
   clusterLength() {
     if (this.queue.length < CLUSTER.length+1 || !this.queue.startsWith(CLUSTER)) return 0;

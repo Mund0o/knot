@@ -51,6 +51,11 @@ async function connectPair({ key = crypto.randomBytes(32), viewerKey = key, maxP
     for (let i = 0; i < 20; i++) await p.viewer.rt.send(p.ownerV, p.peerV, Buffer.from('ack' + i));
     for (let waited = 0; p.sharer.events.frames.length < 20 && waited < 3000; waited += 20) await sleep(20);
     assert.deepStrictEqual(p.sharer.events.frames.map(e => Buffer.from(e.frame).toString()), Array.from({ length: 20 }, (_, i) => 'ack' + i));
+    // the stream's own numbers, as the share log records them
+    const stats = p.sharer.rt.stats();
+    assert.strictEqual(stats.length, 1, 'one lane, one line of numbers');
+    for (const key of ['cwnd', 'rttMs', 'inflight', 'retransmits', 'fastRecoveries', 'timeouts', 'bandwidthMbps']) assert(Number.isFinite(stats[0][key]) && stats[0][key] >= 0, `lane stat ${key} is ${stats[0][key]}`);
+    assert(stats[0].cwnd > 0 && stats[0].bandwidthMbps >= 0 && /^[0-9a-f]{6}$/.test(stats[0].id), 'lane stats are not sensible: ' + JSON.stringify(stats[0]));
     console.log(`PASS 24 MiB crossed a real UDP lane intact and in order (${Math.round(24 * 8 / ((Date.now() - started) / 1000))} Mbit/s on loopback), acknowledgements came back`);
     p.sharer.rt.close(); p.viewer.rt.close();
   }

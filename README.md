@@ -194,6 +194,40 @@ Computer sound never uses Chromium's whole-render-mix loopback:
 This process isolation prevents Knot's incoming voice audio from entering the
 screen share, so the viewer does not hear their own voice.
 
+### How a share behaves on a bad link
+
+Knot never lowers the picture to suit a link (codec, size and bitrate are what the sharer chose); what changes is how far behind live the viewer is.
+Measured with `unshare -rn` and `tc netem` on loopback (no root needed), the real sender, viewer and UDP lane in one process:
+
+- The UDP lane (UDX, BBR) carries 100 Mbit/s and 7.5 MB key pictures over 150 ms round trips, 1% loss, correlated jitter and 3 to 8 second outages.
+  It is weak in one place: packets arriving many packets out of order (a tenth of a percent arriving 20 ms early at 42 Mbit/s) are taken for loss and
+  the stream slows to a few Mbit/s. The UDP connection's own numbers are in the share log to show whether a real link does this.
+- Without the UDP lane a share rides the browser's data channel, which stops near 10 Mbit/s at 100 ms round trip and near 3 Mbit/s with half a percent
+  loss. The viewer and the sharer are told when a viewer is on it.
+- A link slower than the stream makes the viewer fall behind; the sharer moves it up to the latest key picture when it is 6 seconds behind
+  (`DEFAULT_MAX_BACKLOG_MS` in `share-core.js`), and says so on both sides. The viewer also reports the rate it really receives (`updateReceiveCongestion`
+  in `app.js`, sent as `liveMbps` with `congested` in `net-budget`), which caps the bitrate of the next share the sharer starts.
+
+### The share log
+
+While a screen share is on (watching or sharing), Knot writes one line a second
+to `share-diagnostics.log` in its own folder (`~/.config/Knot/` on Linux,
+`%APPDATA%\Knot\` on Windows) and keeps about the last hour or two
+(`share-diagnostics.log.1` is the previous file). Each line from the page says
+what arrives and what is shown (pictures and Mbps a second, window redraws a
+second, decoded a second), the delay and stalls, what decodes it and the format
+of its pictures (`I420` is the CPU, `NV12` a GPU), which lane carries it, how
+long the page was blocked, and the sound line. Sharing adds what the encoder
+produced and dropped and each viewer's lane, backlog, lag and resends (group shares too). The main
+process adds a `cpu/ram` line a second with how busy each Knot process is, which
+still arrives when the page is the thing that is stuck, and a `lanes` line with the UDP
+connection's own numbers (window, round trip, packets sent again, recoveries, measured bandwidth). The file holds numbers
+and the names of codecs and decoders only (no addresses, names or messages), is
+readable only by its owner, and is never sent anywhere. `share-diagnostics.js`
+holds the logic; its tests are `tests/share-diagnostics.js` (the file, limits
+and rotation), `tests/share-diagnostics-page.js` (the page's lines) and the
+bridge checks in `tests/share-bridge-ipc.js`.
+
 ## Run in a browser (optional)
 
 The browser version remains available for testing. Serve this folder over localhost or HTTPS; Web Crypto and WebRTC are restricted in insecure contexts in many browsers.

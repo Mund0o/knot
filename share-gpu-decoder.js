@@ -69,17 +69,23 @@
 
   // What the player is given. `usable()` is true once the main process has said this machine can decode on its GPU and the user has not
   // switched it off; until then (or without a bridge at all) the player decodes the way it always did.
-  function createGpuDecode({ bridge = root && root.pairShareDecode, enabled = () => true } = {}) {
-    const state = { info: null, checking: null };
+  function createGpuDecode({ bridge = root && root.pairShareDecode, enabled = () => true, now = () => Date.now(), retryMs = 30000 } = {}) {
+    const state = { info: null, checking: null, checkedAt: 0, retrying: false };
     const check = () => {
-      if (!bridge || typeof bridge.info !== 'function') return Promise.resolve({ available: false, reason: 'not available in this build' });
-      if (!state.checking) state.checking = Promise.resolve(bridge.info()).then(info => (state.info = info || { available: false, reason: 'no answer' }), () => (state.info = { available: false, reason: 'the GPU decoder could not be checked' }));
+      if (!bridge || typeof bridge.info !== 'function') return Promise.resolve({ available: false, reason: 'not available in this build', permanent: true });
+      if (!state.checking) state.checking = Promise.resolve(bridge.info()).then(info => (state.info = info || { available: false, reason: 'no answer' }), () => (state.info = { available: false, reason: 'the GPU decoder could not be asked' })).then(info => { state.checkedAt = now(); return info; });
       return state.checking;
     };
+    // A "no" that may pass (the check timed out while the machine was busy) is asked again in the background once retryMs has gone by, so the player, which
+    // looks at usable() every half second, can move to the GPU decoder when it turns out to be there. A final "no" is never asked again.
+    const retryDue = () => !!state.info && !state.info.available && state.info.permanent !== true && !state.retrying && now() - state.checkedAt >= retryMs;
     return {
       check,
       get info() { return state.info; },
-      usable() { return !!state.info?.available && !!enabled(); },
+      usable() {
+        if (enabled() && retryDue()) { state.retrying = true; state.checking = null; check().then(() => { state.retrying = false; }, () => { state.retrying = false; }); }
+        return !!state.info?.available && !!enabled();
+      },
       create(handlers) { return new GpuDecoder(bridge, handlers); },
     };
   }

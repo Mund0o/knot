@@ -8,6 +8,7 @@ const assert = require('assert');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const vm = require('vm');
 const { EventEmitter } = require('events');
 const { ShareLaneRuntime } = require('../share-lane-runtime');
@@ -90,6 +91,11 @@ async function preloadChecks() {
   await decode.info(); assert.deepStrictEqual(invoked.shift(), ['pair:shareDecodeInfo', documentId]);
   await decode.open({ width: 1920, height: 1080, outWidth: 960, outHeight: 540, command: 'rm -rf /' });
   assert.deepStrictEqual(plain(invoked.shift()), ['pair:shareDecodeOpen', documentId, { width: 1920, height: 1080, outWidth: 960, outHeight: 540 }]);
+  // The share log bridge: short text only, carrying this document's id.
+  const diag = exposed.pairShareDiag;
+  for (const bad of [42, null, undefined, {}, [], '', Buffer.from('x'), 'x'.repeat(1501)]) assert.strictEqual(diag.record(bad), false);
+  assert.strictEqual(invoked.length + sent.length, 0, 'an invalid share log line crossed the bridge');
+  assert.strictEqual(diag.record('viewer AV1 recv=60'), true); assert.deepStrictEqual(sent.pop(), ['pair:shareDiag', documentId, 'viewer AV1 recv=60']);
   const picture = new Uint8Array(10);
   assert.strictEqual(decode.push(3, 1234, picture), true); assert.deepStrictEqual(sent.shift(), ['pair:shareDecodePush', documentId, 3, 1234, picture]);
   assert.strictEqual(decode.close(3), true); assert.deepStrictEqual(sent.shift(), ['pair:shareDecodeClose', documentId, 3]);
@@ -154,6 +160,7 @@ class FakeCapture extends EventEmitter {
 }
 FakeCapture.all = [];
 
+const diagnosticsFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'knot-bridge-diag-'));
 function mainProcess(label, url = 'file:///app/index.html') {
   const handlers = new Map(), listeners = new Map(), sends = [];
   const mainFrame = { url };
@@ -167,7 +174,9 @@ function mainProcess(label, url = 'file:///app/index.html') {
     validBridgeDocumentId: value => typeof value === 'string' && /^[a-f0-9]{32}$/.test(value) ? value : '',
     validIpcBinary: (value, max = 8 * 1024 * 1024) => (Buffer.isBuffer(value) || value instanceof ArrayBuffer || ArrayBuffer.isView(value)) && value.byteLength > 0 && value.byteLength <= max,
     ShareLaneRuntime: class extends ShareLaneRuntime { constructor(options) { super({ ...options, udxOptions: LOCAL }); } },
-    GsrCapture: FakeCapture, ShareDecodeRuntime: FakeDecodeRuntime, selectedPrimaryGpu: null, process: { env: {} },
+    GsrCapture: FakeCapture, ShareDecodeRuntime: FakeDecodeRuntime, selectedPrimaryGpu: null, process: { env: {}, platform: 'linux', versions: { electron: '43.0.0' } },
+    path, require: request => require(request.startsWith('./') ? path.join(root, request) : request),
+    app: { getPath: () => diagnosticsFolder, getVersion: () => '1.1.130', getAppMetrics: () => [{ type: 'Tab', pid: 5, cpu: { percentCPUUsage: 12.5 }, memory: { workingSetSize: 204800 } }] },
     pendingSource: null, pendingSources: [1, 2, 3], nativeScreenService: { stopAsync: async () => {} },
     stopLinuxShareAudio: async () => {}, stopNativeCapture: () => {}, closeDirectFileRuntime: async () => {}, closeAllSaveStreams: async () => {}, closeLanHouse: async () => {},
   });
@@ -232,7 +241,7 @@ async function mainChecks() {
   assert.deepStrictEqual(plain(await sharer.handlers.get('pair:shareDecodeOpen')(stranger, sharer.documentId, { width: 1920, height: 1080, outWidth: 960, outHeight: 540 })), { ok: false, error: 'unauthorized' });
   assert.strictEqual(FakeDecodeRuntime.all.length, 0, 'a stranger started the GPU decoder runtime');
   const info = await sharer.call('pair:shareDecodeInfo');
-  assert.deepStrictEqual(plain(info), { available: true, reason: '', gpu: 'fake GPU av1 128x128..8192x8192' }, 'the page must not be told where the helper program is');
+  assert.deepStrictEqual(plain(info), { available: true, reason: '', gpu: 'fake GPU av1 128x128..8192x8192', permanent: false }, 'the page must not be told where the helper program is');
   const decoder = FakeDecodeRuntime.all.at(-1);
   const decoderOpened = await sharer.call('pair:shareDecodeOpen', { width: 1920, height: 1080, outWidth: 960, outHeight: 540, extra: 'ignored' });
   assert.deepStrictEqual(plain(decoderOpened), { ok: true, id: 1, outWidth: 960, outHeight: 540 });
@@ -252,6 +261,22 @@ async function mainChecks() {
   assert.deepStrictEqual(sharer.take('pair:shareDecodeError').map(m => [m[1], m[2], m[3]]), [[sharer.documentId, 1, 'the GPU is busy']]);
   assert.strictEqual(sharer.take('pair:shareDecodeEnd').length, 1);
   assert.strictEqual(viewer.take('pair:shareDecodeFrame').length, 0, 'the other page was handed the pictures');
+
+  // The share log (share-diagnostics.js): only the owning page writes to it, only text, and what is written is the page's line in a file in Knot's folder.
+  {
+    const logFile = path.join(diagnosticsFolder, 'share-diagnostics.log');
+    sharer.listeners.get('pair:shareDiag')(stranger, sharer.documentId, 'viewer from a stranger');
+    sharer.call('pair:shareDiag', 42); sharer.call('pair:shareDiag', { text: 'x' }); sharer.call('pair:shareDiag', Buffer.from('bytes'));
+    assert(!fs.existsSync(logFile), 'the share log was written for a stranger or for something that is not text');
+    assert.strictEqual(sharer.listeners.get('pair:shareDiag')({ sender: sharer.webContents, senderFrame: sharer.event.senderFrame }, 'f'.repeat(32), 'wrong document'), undefined);
+    assert(!fs.existsSync(logFile), 'the share log was written for a page with another document id');
+    sharer.call('pair:shareDiag', 'viewer AV1 3840x2160 recv=60 shown=19');
+    const text = fs.readFileSync(logFile, 'utf8');
+    assert(/---- share log .* Knot 1\.1\.130 linux electron 43\.0\.0/.test(text) && /page viewer AV1 3840x2160 recv=60 shown=19\n/.test(text), 'the owner\'s line is not in the log: ' + text);
+    assert(!/stranger|wrong document/.test(text), 'a refused line reached the log');
+    assert.strictEqual(fs.statSync(logFile).mode & 0o077, 0, 'the share log is readable by other users');
+    sharer.context.shareDiagnostics().stop();
+  }
 
   // The recorder: started for the document that asked, events reach only that page, stopped with it.
   const started = await sharer.call('pair:shareCaptureStart', { fps: 30 });
